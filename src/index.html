@@ -1,0 +1,1354 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Dino Launcher</title>
+<script>
+(function(){
+  function ping(m){ try{ window.__TAURI__.core.invoke("boot_ping",{msg:m}); }catch(e){} }
+  window.addEventListener("error", function(e){
+    ping("JS ERROR: "+e.message+" @ "+(e.filename||"?")+":"+e.lineno);
+  });
+  ping("html cargado");
+  document.addEventListener("DOMContentLoaded", function(){
+    ping("DOM listo, nodos="+document.querySelectorAll("*").length);
+  });
+})();
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+<style>
+:root{
+  /* ground — near-black with a green bias, darker than before */
+  --ink:#03060A;
+  --ink-2:#050A0C;
+
+  /* glass material */
+  --glass-0:rgba(255,255,255,.030);
+  --glass-1:rgba(255,255,255,.052);
+  --glass-2:rgba(255,255,255,.080);
+  --glass-3:rgba(255,255,255,.115);
+  --hairline:rgba(255,255,255,.070);
+  --hairline-strong:rgba(255,255,255,.115);
+  --specular:rgba(255,255,255,.18);
+
+  /* type — neutrals biased toward the accent */
+  --text:#E6F1E8;
+  --text-dim:#8B9C90;
+  --text-faint:#56685C;
+
+  /* accent — from the logo */
+  --green:#73BF69;
+  --green-hot:#4A9A44;
+  --green-deep:#0B4623;
+  --green-glow:rgba(115,191,105,.50);
+
+  /* dino sprite tones */
+  --dino-dark:#053C1E;
+  --dino-mid:#73BF69;
+  --dino-light:#99D984;
+
+  --rose:#FF6B7A;
+
+  --r-window:26px;
+  --r-panel:20px;
+  --r-card:14px;
+  --r-chip:9px;
+
+  --font-display:"Bricolage Grotesque","Helvetica Neue",sans-serif;
+  --font-body:"Instrument Sans","Helvetica Neue",Arial,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+
+*{box-sizing:border-box}
+/* Sin esto, un display:flex propio le gana al display:none del navegador
+   y el atributo `hidden` deja de ocultar nada. */
+[hidden]{display:none!important}
+
+body{
+  background:transparent;   /* la ventana es transparente: las esquinas dejan ver el escritorio */
+  color:var(--text);
+  font-family:var(--font-body);
+  font-size:14px;
+  line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+  height:100vh;
+  overflow:hidden;
+  margin:0;
+}
+
+/* ---------- ambient mesh: what the glass refracts ---------- */
+.mesh{
+  position:absolute;inset:-20%;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(46% 40% at 22% 24%, rgba(115,191,105,.24), transparent 62%),
+    radial-gradient(42% 44% at 80% 20%, rgba(11,70,35,.34), transparent 64%),
+    radial-gradient(50% 46% at 70% 82%, rgba(115,191,105,.14), transparent 62%),
+    radial-gradient(58% 52% at 28% 80%, rgba(12,58,40,.55), transparent 66%);
+  filter:blur(34px);
+  animation:drift 42s ease-in-out infinite alternate;
+}
+.grain{
+  position:absolute;inset:0;z-index:1;pointer-events:none;opacity:.45;
+  background-image:radial-gradient(rgba(255,255,255,.030) 1px, transparent 1px);
+  background-size:3px 3px;
+}
+@keyframes drift{
+  0%{transform:translate3d(0,0,0) scale(1)}
+  50%{transform:translate3d(2.5%,-2%,0) scale(1.06)}
+  100%{transform:translate3d(-2%,2.5%,0) scale(1.02)}
+}
+@media (prefers-reduced-motion:reduce){
+  .mesh{animation:none}
+  *{animation-duration:.01ms!important;transition-duration:.01ms!important}
+}
+
+/* ---------- the app icon, glass-cased ---------- */
+.app-icon{
+  --s:56px;
+  position:relative;flex:none;
+  width:var(--s);height:var(--s);
+  border-radius:calc(var(--s) * .27);
+  display:flex;align-items:center;justify-content:center;
+  overflow:hidden;
+  background:
+    linear-gradient(155deg, rgba(255,255,255,.17), rgba(115,191,105,.07) 48%, rgba(115,191,105,.20));
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.55),
+    inset 0 0 0 1px rgba(153,217,132,.34),
+    inset 0 calc(var(--s) * -.16) calc(var(--s) * .30) calc(var(--s) * -.18) rgba(115,191,105,.65),
+    0 0 calc(var(--s) * .42) calc(var(--s) * -.10) var(--green-glow),
+    0 calc(var(--s) * .16) calc(var(--s) * .36) calc(var(--s) * -.20) rgba(0,0,0,.9);
+}
+.app-icon::before{
+  content:"";position:absolute;top:6%;left:8%;width:40%;height:27%;
+  border-radius:50%;
+  background:linear-gradient(160deg, rgba(255,255,255,.80), rgba(255,255,255,0));
+  filter:blur(calc(var(--s) * .045));
+}
+.app-icon canvas{
+  position:relative;z-index:1;
+  width:70%;height:auto;image-rendering:pixelated;
+  filter:drop-shadow(0 0 calc(var(--s) * .10) rgba(115,191,105,.8));
+}
+
+/* ---------- app window ---------- */
+.app{
+  position:relative;
+  width:100%;max-width:none;
+  height:100vh;
+  border-radius:var(--r-window);
+  overflow:hidden;
+  display:flex;flex-direction:column;
+  /* .app ES la ventana: base opaca. Lo que va detrás es el escritorio, no un fondo propio.
+     La profundidad la dan el mesh interior y el vidrio de los paneles encima. */
+  background:var(--ink);
+  box-shadow:
+    inset 0 1px 0 var(--specular),
+    inset 0 0 0 1px var(--hairline),
+    0 46px 92px -22px rgba(0,0,0,.85),
+    0 10px 30px -12px rgba(0,0,0,.6);
+}
+
+.titlebar{
+  position:relative;z-index:2;
+  height:48px;flex:none;
+  display:flex;align-items:center;gap:12px;
+  padding:0 16px;
+  border-bottom:1px solid rgba(255,255,255,.05);
+}
+.lights{display:flex;gap:8px}
+.lights button{width:11px;height:11px;border-radius:50%;display:block;border:0;padding:0;
+  cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.35);
+  transition:filter .15s ease}
+.lights button:hover{filter:brightness(1.25)}
+.lights button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.lights button[data-win="close"]{background:#FF5F57}
+.lights button[data-win="minimize"]{background:#FEBC2E}
+.lights button[data-win="maximize"]{background:#28C840}
+/* la barra arrastra la ventana, pero no cuando el gesto empieza en un control */
+.titlebar button,.titlebar .sync{-webkit-app-region:no-drag}
+
+.wordmark{
+  display:flex;align-items:center;gap:9px;margin-left:6px;
+  font-family:var(--font-display);font-weight:800;
+  font-size:13px;letter-spacing:.13em;text-transform:uppercase;
+}
+.tb-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.sync{
+  font-family:var(--font-mono);font-size:10.5px;letter-spacing:.03em;
+  color:var(--text-faint);display:flex;align-items:center;gap:6px;
+}
+.sync .pulse{width:6px;height:6px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 9px var(--green-glow);animation:blink 2.8s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+.tb-btn{
+  border:0;cursor:pointer;border-radius:8px;padding:6px 11px;
+  font-family:var(--font-body);font-size:11.5px;font-weight:500;color:var(--text-dim);
+  background:var(--glass-1);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+  transition:color .16s ease,background .16s ease;
+}
+.tb-btn:hover{color:var(--text);background:var(--glass-2)}
+.tb-btn:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+
+/* ---------- rail + stage ---------- */
+.shell{position:relative;z-index:2;flex:1;display:flex;min-height:0}
+
+.rail{
+  width:198px;flex:none;
+  padding:14px 12px;
+  display:flex;flex-direction:column;gap:18px;
+  border-right:1px solid rgba(255,255,255,.05);
+  min-height:0;
+}
+.nav{display:flex;flex-direction:column;gap:2px}
+.nav-label{
+  font-family:var(--font-mono);font-size:9.5px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--text-faint);
+  padding:0 10px;margin-bottom:7px;
+}
+.nav button{
+  display:flex;align-items:center;gap:11px;
+  width:100%;padding:9px 10px;
+  border:0;border-radius:11px;
+  background:transparent;color:var(--text-dim);
+  font-family:var(--font-body);font-size:13.5px;font-weight:500;
+  cursor:pointer;text-align:left;
+  transition:background .18s ease,color .18s ease;
+}
+.nav button svg{width:16px;height:16px;flex:none;stroke-width:1.7}
+.nav button:hover{background:var(--glass-1);color:var(--text)}
+.nav button[aria-selected="true"]{
+  background:var(--glass-2);color:var(--text);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+}
+.nav button[aria-selected="true"] svg{color:var(--green)}
+.nav button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+
+.rail-spacer{flex:1}
+
+.account{
+  border-radius:var(--r-card);padding:10px;
+  display:flex;flex-direction:column;gap:9px;
+  background:var(--glass-0);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+}
+.account-row{display:flex;align-items:center;gap:9px}
+.account canvas{width:30px;height:30px;border-radius:7px;image-rendering:pixelated;flex:none}
+.account-name{font-weight:600;font-size:13px;line-height:1.15}
+.account-kind{font-family:var(--font-mono);font-size:9.5px;color:var(--text-faint);letter-spacing:.04em}
+
+.toggle-row{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding-top:9px;border-top:1px solid rgba(255,255,255,.055);
+}
+.toggle-row span{font-size:11.5px;color:var(--text-dim)}
+.switch{
+  width:34px;height:19px;border-radius:99px;border:0;cursor:pointer;padding:2px;
+  background:var(--glass-2);box-shadow:inset 0 0 0 1px var(--hairline);
+  display:flex;align-items:center;transition:background .2s ease;
+}
+.switch b{width:15px;height:15px;border-radius:50%;background:#C3CEC6;display:block;
+  transition:transform .2s cubic-bezier(.32,.72,0,1),background .2s ease}
+.switch[aria-checked="true"]{background:linear-gradient(160deg,var(--green),var(--green-deep))}
+.switch[aria-checked="true"] b{transform:translateX(15px);background:#04170A}
+.switch:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+
+/* ---------- stage ---------- */
+.stage{flex:1;min-width:0;overflow-y:auto;padding:24px 26px 28px}
+.stage::-webkit-scrollbar{width:9px}
+.stage::-webkit-scrollbar-thumb{background:rgba(255,255,255,.09);border-radius:99px;
+  border:2px solid transparent;background-clip:padding-box}
+
+.view{display:none;animation:rise .34s cubic-bezier(.22,.68,0,1) both}
+.view.on{display:block}
+@keyframes rise{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+
+.eyebrow{
+  font-family:var(--font-mono);font-size:10px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--text-faint);margin-bottom:9px;
+}
+h1{
+  font-family:var(--font-display);font-weight:700;
+  font-size:27px;line-height:1.1;letter-spacing:-.022em;
+  margin:0 0 4px;text-wrap:balance;
+}
+h2{font-family:var(--font-display);font-weight:700;font-size:16px;letter-spacing:-.012em;margin:0}
+.sub{color:var(--text-dim);font-size:13.5px;margin:0}
+
+/* ---------- hero ---------- */
+.hero{
+  border-radius:var(--r-panel);
+  padding:26px;
+  display:grid;grid-template-columns:1fr auto;gap:28px;align-items:center;
+  position:relative;overflow:hidden;
+  background:
+    linear-gradient(118deg, rgba(115,191,105,.13), rgba(11,70,35,.10) 54%, transparent 80%),
+    var(--glass-1);
+  backdrop-filter:blur(28px) saturate(175%);
+  -webkit-backdrop-filter:blur(28px) saturate(175%);
+  box-shadow:
+    inset 0 1px 0 var(--specular),
+    inset 0 0 0 1px var(--hairline),
+    0 18px 42px -24px rgba(0,0,0,.85);
+}
+.hero::after{
+  content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:linear-gradient(180deg,rgba(255,255,255,.09),transparent 22%);
+  mix-blend-mode:overlay;
+}
+.hero-left{min-width:0;position:relative;z-index:1;display:flex;gap:18px;align-items:center}
+.pack-title{
+  font-family:var(--font-display);font-weight:800;
+  font-size:33px;line-height:1.02;letter-spacing:-.032em;margin:0 0 9px;
+}
+.metaline{
+  font-family:var(--font-mono);font-size:11.5px;color:var(--text-dim);
+  display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:15px;
+}
+.metaline i{width:3px;height:3px;border-radius:50%;background:var(--text-faint);display:block;flex:none}
+
+.chips{display:flex;flex-wrap:wrap;gap:7px}
+.chip{
+  border-radius:var(--r-chip);padding:5px 9px;
+  font-family:var(--font-mono);font-size:10.5px;letter-spacing:.02em;color:var(--text-dim);
+  background:var(--glass-1);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+  white-space:nowrap;
+}
+.chip b{color:var(--text);font-weight:500}
+
+.hero-right{display:flex;flex-direction:column;gap:11px;position:relative;z-index:1}
+
+.play{
+  border:0;cursor:pointer;border-radius:16px;
+  padding:16px 38px;
+  font-family:var(--font-display);font-weight:700;font-size:16px;
+  color:#04170A;
+  background:linear-gradient(165deg,#99D984,var(--green) 48%,var(--green-hot) 78%,var(--green-deep));
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.5),
+    inset 0 -1px 0 rgba(0,0,0,.2),
+    0 12px 30px -10px var(--green-glow),
+    0 2px 6px rgba(0,0,0,.4);
+  transition:transform .16s cubic-bezier(.32,.72,0,1),box-shadow .16s ease;
+  display:flex;align-items:center;justify-content:center;gap:9px;
+}
+.play:hover{transform:translateY(-1.5px);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 18px 40px -10px rgba(115,191,105,.6),0 2px 6px rgba(0,0,0,.4)}
+.play:active{transform:translateY(0)}
+.play:focus-visible{outline:2px solid #fff;outline-offset:3px}
+.play svg{width:15px;height:15px;fill:currentColor}
+
+.server{
+  border-radius:var(--r-card);padding:12px 14px;
+  background:var(--glass-0);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+  display:flex;flex-direction:column;gap:7px;min-width:222px;
+}
+.server-top{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600}
+.dot-live{width:7px;height:7px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 10px var(--green-glow);flex:none}
+.server-stats{
+  font-family:var(--font-mono);font-size:10.5px;color:var(--text-faint);
+  display:flex;gap:10px;align-items:center;font-variant-numeric:tabular-nums;
+}
+
+/* ---------- panels / ajustes / admin ---------- */
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:880px){.two{grid-template-columns:1fr}}
+
+.panel{
+  border-radius:var(--r-panel);padding:18px;
+  background:var(--glass-0);
+  backdrop-filter:blur(22px) saturate(165%);
+  -webkit-backdrop-filter:blur(22px) saturate(165%);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+}
+.panel h2{margin-bottom:3px}
+.panel .sub{font-size:12.5px;margin-bottom:15px}
+
+.ram-top{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:9px}
+.ram-val{font-family:var(--font-mono);font-size:19px;font-weight:700;color:var(--green);
+  font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.ram-val small{font-size:11px;color:var(--text-faint);font-weight:400;margin-left:3px}
+input[type=range]{
+  -webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:99px;
+  background:linear-gradient(90deg,var(--green-hot) var(--fill,45%),rgba(255,255,255,.09) var(--fill,45%));
+  box-shadow:inset 0 0 0 1px var(--hairline);cursor:pointer;
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:17px;height:17px;border-radius:50%;
+  background:#EEF6EF;border:0;cursor:grab;
+  box-shadow:0 2px 8px rgba(0,0,0,.6),inset 0 -1px 0 rgba(0,0,0,.2);
+}
+input[type=range]::-moz-range-thumb{
+  width:17px;height:17px;border-radius:50%;background:#EEF6EF;border:0;cursor:grab;
+  box-shadow:0 2px 8px rgba(0,0,0,.6);
+}
+input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4px}
+.ram-scale{display:flex;justify-content:space-between;margin-top:6px;
+  font-family:var(--font-mono);font-size:9.5px;color:var(--text-faint)}
+
+.field{display:flex;flex-direction:column;gap:5px;margin-top:14px}
+.field label{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--text-faint)}
+.field input,.field select{
+  width:100%;border:0;border-radius:10px;padding:9px 11px;
+  background:var(--glass-1);color:var(--text);
+  font-family:var(--font-body);font-size:13px;
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+}
+.field input:focus,.field select:focus{outline:2px solid var(--green);outline-offset:1px}
+
+.args{
+  border-radius:10px;padding:10px 12px;
+  background:rgba(0,0,0,.32);
+  box-shadow:inset 0 0 0 1px var(--hairline);
+  font-family:var(--font-mono);font-size:11px;line-height:1.7;
+  color:var(--text-dim);word-break:break-all;
+}
+.args b{color:var(--green);font-weight:400}
+
+.kv{display:flex;flex-direction:column}
+.kv-row{display:flex;align-items:center;gap:12px;padding:10px 0;
+  border-bottom:1px solid rgba(255,255,255,.05)}
+.kv-row:last-child{border-bottom:0}
+.kv-row .k{font-size:12.5px;color:var(--text-dim);flex:none;width:112px}
+.kv-row .v{font-family:var(--font-mono);font-size:11.5px;color:var(--text);
+  flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.field-switch{
+  display:flex;align-items:center;gap:12px;margin-top:14px;
+  border-radius:var(--r-card);padding:11px 13px;
+  background:var(--glass-0);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+}
+.field-switch>div{flex:1;min-width:0}
+.field-switch .fs-t{font-size:12.5px;font-weight:600;line-height:1.25}
+.field-switch .fs-s{font-family:var(--font-mono);font-size:9.5px;color:var(--text-faint);margin-top:3px}
+
+.drop{
+  border-radius:var(--r-card);
+  border:1.5px dashed rgba(255,255,255,.15);
+  padding:28px 16px;text-align:center;
+  display:flex;flex-direction:column;align-items:center;gap:7px;
+  transition:border-color .2s ease,background .2s ease;cursor:pointer;
+}
+.drop:hover{border-color:rgba(115,191,105,.5);background:rgba(115,191,105,.045)}
+.drop svg{width:22px;height:22px;color:var(--green);stroke-width:1.6}
+.drop .t{font-size:13px;font-weight:600}
+.drop .h{font-family:var(--font-mono);font-size:10px;color:var(--text-faint)}
+
+
+.note{
+  margin-top:15px;border-radius:var(--r-card);padding:11px 13px;
+  background:rgba(115,191,105,.055);
+  box-shadow:inset 0 0 0 1px rgba(115,191,105,.18);
+  font-size:12.5px;color:#CDE6C2;line-height:1.5;
+}
+.note b{color:var(--green);font-weight:600}
+.mono-i{font-family:var(--font-mono);font-size:11.5px;color:var(--text)}
+
+
+.alert{
+  margin-top:16px;border-radius:var(--r-card);padding:12px 14px;
+  background:rgba(255,107,122,.09);
+  box-shadow:inset 0 0 0 1px rgba(255,107,122,.28);
+  font-size:12.5px;color:#F5C9CE;line-height:1.5;
+}
+.alert b{color:var(--rose);font-weight:600}
+
+/* el botón Jugar lleva su propio progreso: no hace falta tapar la pantalla */
+.play{position:relative;overflow:hidden}
+.play::after{
+  content:"";position:absolute;left:0;top:0;bottom:0;
+  width:var(--p,0%);
+  background:rgba(255,255,255,.24);
+  transition:width .25s ease;pointer-events:none;
+}
+.play > *{position:relative;z-index:1}
+.play[disabled]{cursor:progress;filter:saturate(.75)}
+
+.drop.over{border-color:var(--green);background:rgba(115,191,105,.10)}
+
+/* ---------- primer arranque ---------- */
+.onboard{
+  position:absolute;inset:0;z-index:20;
+  background:rgba(3,6,10,.74);
+  backdrop-filter:blur(34px) saturate(150%);
+  -webkit-backdrop-filter:blur(34px) saturate(150%);
+  display:flex;align-items:center;justify-content:center;
+  padding:32px 24px;animation:fade .3s ease both;
+}
+.onboard[hidden]{display:none}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+
+.ob-card{
+  width:100%;max-width:450px;
+  border-radius:var(--r-panel);padding:28px;
+  background:linear-gradient(165deg,rgba(115,191,105,.10),transparent 58%),var(--glass-2);
+  backdrop-filter:blur(30px) saturate(180%);
+  -webkit-backdrop-filter:blur(30px) saturate(180%);
+  box-shadow:
+    inset 0 1px 0 var(--specular),
+    inset 0 0 0 1px var(--hairline-strong),
+    0 42px 82px -24px rgba(0,0,0,.9);
+  display:flex;flex-direction:column;
+}
+.ob-dots{display:flex;gap:5px;margin-bottom:22px}
+.ob-dots i{height:3px;flex:1;border-radius:99px;background:rgba(255,255,255,.10);
+  transition:background .3s ease}
+.ob-dots i.done{background:var(--green)}
+
+.ob-step{display:none;flex-direction:column;gap:15px;
+  animation:rise .3s cubic-bezier(.22,.68,0,1) both}
+.ob-step.on{display:flex}
+.ob-from{font-size:13px;color:var(--text-dim)}
+.ob-from b{color:var(--text);font-weight:600}
+.ob-title{font-family:var(--font-display);font-weight:800;
+  font-size:26px;line-height:1.06;letter-spacing:-.03em;margin:0}
+.ob-body{font-size:13.5px;color:var(--text-dim);line-height:1.55;margin:0}
+
+.ob-foot{display:flex;gap:9px;align-items:center;margin-top:22px;
+  padding-top:17px;border-top:1px solid rgba(255,255,255,.065)}
+.ob-foot .btn{flex:none;padding:10px 18px}
+.ob-foot .grow{flex:1}
+.ob-skip{background:none;border:0;color:var(--text-faint);cursor:pointer;
+  font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+  padding:6px 8px;border-radius:6px}
+.ob-skip:hover{color:var(--text-dim)}
+.ob-skip:focus-visible{outline:2px solid var(--green);outline-offset:1px}
+
+.code{display:flex;gap:7px;justify-content:center;padding:4px 0 0}
+.code span{
+  font-family:var(--font-mono);font-weight:700;font-size:23px;letter-spacing:.04em;
+  width:36px;height:46px;border-radius:10px;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--glass-1);color:var(--text);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+}
+.code span.sep{width:12px;background:none;box-shadow:none;color:var(--text-faint)}
+
+.bar{height:7px;border-radius:99px;background:rgba(255,255,255,.08);
+  box-shadow:inset 0 0 0 1px var(--hairline);overflow:hidden}
+.bar b{display:block;height:100%;width:68%;border-radius:99px;
+  background:linear-gradient(90deg,var(--green-deep),var(--green));
+  box-shadow:0 0 14px var(--green-glow)}
+.bar-meta{display:flex;justify-content:space-between;margin-top:7px;
+  font-family:var(--font-mono);font-size:10.5px;color:var(--text-faint);
+  font-variant-numeric:tabular-nums}
+
+.steps-list{display:flex;flex-direction:column;margin-top:2px}
+.sl{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:13px}
+.sl .ico{width:16px;height:16px;flex:none;display:flex;align-items:center;justify-content:center}
+.sl .ico svg{width:14px;height:14px;stroke-width:2.4}
+.sl.done{color:var(--text-dim)} .sl.done .ico{color:var(--green)}
+.sl.now{color:var(--text);font-weight:600}
+.sl.wait{color:var(--text-faint)}
+.sl .amt{margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--text-faint);
+  font-variant-numeric:tabular-nums}
+.spin{width:13px;height:13px;border-radius:50%;border:2px solid rgba(115,191,105,.22);
+  border-top-color:var(--green);animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+@media (max-width:760px){
+  body{padding:0}
+  .app{height:100vh;border-radius:0;max-width:none}
+  .rail{width:62px;padding:14px 8px}
+  .nav button span,.nav-label,.account-name,.account-kind,.toggle-row span{display:none}
+  .nav button{justify-content:center;padding:11px}
+  .account{align-items:center}
+  .hero{grid-template-columns:1fr}
+  .hero-left{flex-direction:column;align-items:flex-start}
+}
+</style>
+
+<div class="app">
+  <div class="mesh"></div>
+  <div class="grain"></div>
+  <div class="titlebar" data-tauri-drag-region>
+    <div class="lights">
+      <button type="button" data-win="close" aria-label="Cerrar"></button>
+      <button type="button" data-win="minimize" aria-label="Minimizar"></button>
+      <button type="button" data-win="maximize" aria-label="Maximizar"></button>
+    </div>
+    <div class="wordmark">
+      <span class="app-icon" style="--s:24px"><canvas data-dino width="22" height="21"></canvas></span>
+      Dino Launcher
+    </div>
+    <div class="tb-right">
+      <div class="sync"><span class="pulse" id="syncDot"></span><span id="syncText">comprobando…</span></div>
+      <button class="tb-btn" id="guest">Ver lo que verá un amigo</button>
+    </div>
+  </div>
+
+  <div class="shell">
+    <nav class="rail">
+      <div class="nav" role="tablist">
+        <div class="nav-label">Biblioteca</div>
+        <button role="tab" aria-selected="true" data-go="jugar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 3.5v17l14-8.5z" stroke-linejoin="round"/></svg>
+          <span>Jugar</span>
+        </button>
+        <button role="tab" aria-selected="false" data-go="ajustes">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.4M12 18.8v2.4M21.2 12h-2.4M5.2 12H2.8M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7M18.5 18.5l-1.7-1.7M7.2 7.2 5.5 5.5" stroke-linecap="round"/></svg>
+          <span>Ajustes</span>
+        </button>
+        <div class="nav-label" style="margin-top:16px">Modpack</div>
+        <button role="tab" aria-selected="false" data-go="admin">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01" stroke-linecap="round"/></svg>
+          <span>Importar</span>
+        </button>
+      </div>
+
+      <div class="rail-spacer"></div>
+
+      <div class="account">
+        <div class="account-row">
+          <canvas data-head="?" width="8" height="8"></canvas>
+          <div>
+            <div class="account-name">…</div>
+            <div class="account-kind"></div>
+          </div>
+        </div>
+        <div class="toggle-row">
+          <span>Modo offline</span>
+          <button class="switch" data-toggle role="switch" aria-checked="false" aria-label="Modo offline"><b></b></button>
+        </div>
+      </div>
+    </nav>
+
+    <div class="stage">
+
+      <!-- ============ JUGAR ============ -->
+      <section class="view on" data-view="jugar">
+        <div class="eyebrow">Instancia activa</div>
+
+        <div class="hero">
+          <div class="hero-left">
+            <span class="app-icon" style="--s:76px" id="packIcon"><canvas data-dino width="22" height="21"></canvas></span>
+            <div style="min-width:0">
+              <div class="pack-title" id="packName">Sin modpack</div>
+              <div class="metaline" id="packMeta"><span>nada instalado todavía</span></div>
+              <div class="chips" id="packChips"></div>
+            </div>
+          </div>
+
+          <div class="hero-right">
+            <div class="server" id="server" hidden>
+              <div class="server-top"><span class="dot-live" id="srvDot"></span><span id="srvName"></span></div>
+              <div class="server-stats" id="srvStats"><span>consultando…</span></div>
+            </div>
+            <button class="play">
+              <svg viewBox="0 0 24 24"><path d="M6 4v16l13-8z"/></svg>
+              <span id="playLabel">Jugar</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="alert" id="alert" hidden></div>
+
+      </section>
+
+
+
+      <!-- ============ AJUSTES ============ -->
+      <section class="view" data-view="ajustes">
+        <div class="eyebrow" id="setEyebrow">Instancia</div>
+        <h1>Ajustes</h1>
+        <p class="sub">Vienen configurados desde el pack. Puedes cambiarlos y se conservan entre actualizaciones.</p>
+
+        <div class="two" style="margin-top:18px">
+          <div class="panel">
+            <h2>Memoria y Java</h2>
+            <p class="sub" id="ramHint">Se reparte según la RAM de esta máquina.</p>
+
+            <div class="ram-top">
+              <label for="ram" style="font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-faint)">RAM asignada</label>
+              <div class="ram-val" id="ramv">6<small>GB</small></div>
+            </div>
+            <input type="range" id="ram" min="2" max="16" step="1" value="6" style="--fill:28.6%">
+            <div class="ram-scale"><span>2 GB</span><span>16 GB disponibles</span></div>
+
+            <div class="field">
+              <label>Runtime</label>
+              <select id="javaSelect"><option>lo administra el motor</option></select>
+            </div>
+
+            <div class="field">
+              <label>Argumentos de la JVM</label>
+              <div class="args">Los define <b>Minecraft 26.2</b>: Shenandoah generacional. El pack no los sobrescribe.</div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>Instalación</h2>
+            <p class="sub">Dino administra Prism por debajo. No necesitas abrirlo nunca.</p>
+
+            <div class="kv">
+              <div class="kv-row"><div class="k">Instancia</div><div class="v" id="kvPath">—</div></div>
+              <div class="kv-row"><div class="k">Motor</div><div class="v" id="kvEngine">—</div></div>
+              <div class="kv-row"><div class="k">Loader</div><div class="v" id="kvLoader">—</div></div>
+              <div class="kv-row"><div class="k">En disco</div><div class="v" id="kvSize">—</div></div>
+              <div class="kv-row"><div class="k">Mundos</div><div class="v" id="kvWorlds">—</div></div>
+            </div>
+
+            <div class="skin-actions" style="margin-top:15px">
+              <button class="btn" id="btnFolder">Abrir carpeta</button>
+              <button class="btn" id="btnVerify">Verificar archivos</button>
+            </div>
+
+            <div class="note">
+              <b>Tus controles están a salvo.</b> Los keybinds y las opciones de video se copian
+              una sola vez al instalar. Después son tuyos — ninguna actualización los toca.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ PUBLICAR ============ -->
+      <section class="view" data-view="admin">
+        <div class="eyebrow">Modpack</div>
+        <h1>Importar un modpack</h1>
+        <p class="sub">Arrastra un <span class="mono-i">.mrpack</span> a la zona de abajo. Se instala con su icono, sus mods y sus configs.</p>
+
+        <div class="two" style="margin-top:18px">
+          <div class="panel">
+            <h2>Archivo</h2>
+            <p class="sub">Expórtalo desde Modrinth o Prism.</p>
+
+            <div class="drop" id="dropZone">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.5 15v3.5a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2V15" stroke-linecap="round"/></svg>
+              <div class="t">Arrastra tu .mrpack aquí</div>
+              <div class="h" id="dropHint">solo archivos .mrpack</div>
+            </div>
+
+            <div class="field">
+              <label>Servidor del pack</label>
+              <input type="text" id="srvInput" value="mcpvp.club" placeholder="ejemplo.servidor.com" spellcheck="false">
+            </div>
+
+            <div class="field-switch">
+              <div>
+                <div class="fs-t">Entrar directo al servidor</div>
+                <div class="fs-s">va en la instancia, no en la lista de servidores</div>
+              </div>
+              <button class="switch" data-toggle role="switch" aria-checked="true" aria-label="Entrar directo al servidor"><b></b></button>
+            </div>
+          </div>
+
+          <div class="panel" id="previewPanel">
+            <h2>Qué contiene</h2>
+            <p class="sub" id="previewSub">Suelta un archivo para verlo antes de instalar.</p>
+            <div id="previewBody" hidden>
+              <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+                <span class="app-icon" style="--s:52px" id="previewIcon"><canvas data-dino width="22" height="21"></canvas></span>
+                <div style="min-width:0">
+                  <div class="pack-title" style="font-size:19px;margin:0" id="previewName"></div>
+                  <div class="metaline" style="margin:6px 0 0" id="previewMeta"></div>
+                </div>
+              </div>
+              <button class="btn green" id="btnInstall" style="width:100%">Instalar este modpack</button>
+            </div>
+            <div class="note">
+              <b>Se sobrescribe:</b> los mods y las configs del pack.<br>
+              <b>Se respeta:</b> tus controles, tus opciones de video y tus mundos.
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- ============ PRIMER ARRANQUE ============ -->
+  <div class="onboard" id="onboard" hidden>
+    <div class="ob-card">
+      <div class="ob-dots"><i class="done"></i><i></i><i></i><i></i></div>
+
+      <div class="ob-step on" data-ob="1">
+        <span class="app-icon" style="--s:62px"><canvas data-dino width="22" height="21"></canvas></span>
+        <div class="ob-from">Te invitaron a jugar</div>
+        <h2 class="ob-title">Dino SMP</h2>
+        <p class="ob-body">Todo viene listo: los mods, los shaders, los controles y el servidor.
+          No tienes que instalar nada por tu cuenta.</p>
+        <div class="chips">
+          <span class="chip">Minecraft <b>1.21.4</b></span>
+          <span class="chip">Fabric <b>142 mods</b></span>
+          <span class="chip">Descarga <b>1.24 GB</b></span>
+        </div>
+      </div>
+
+      <div class="ob-step" data-ob="2">
+        <h2 class="ob-title">Conecta tu cuenta</h2>
+        <p class="ob-body">Abre <span class="mono-i">microsoft.com/link</span> en tu navegador
+          y escribe este código:</p>
+        <div class="code">
+          <span>K</span><span>D</span><span>Q</span><span>P</span>
+          <span class="sep">–</span>
+          <span>J</span><span>X</span><span>B</span><span>M</span>
+        </div>
+        <div class="hint">expira en 14:52</div>
+        <div class="note">
+          <b>Solo se pide una vez.</b> Después puedes entrar en modo offline cuando quieras —
+          sin internet, en LAN, o si los servicios de Mojang se caen.
+        </div>
+      </div>
+
+      <div class="ob-step" data-ob="3">
+        <h2 class="ob-title">Preparando todo</h2>
+        <div class="bar"><b></b></div>
+        <div class="bar-meta"><span>68 %</span><span>842 MB / 1.24 GB · 11.4 MB/s</span></div>
+        <div class="steps-list">
+          <div class="sl done"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg></span>Java 21 (Temurin)<span class="amt">46 MB</span></div>
+          <div class="sl done"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg></span>Fabric 0.16.9<span class="amt">3 MB</span></div>
+          <div class="sl now"><span class="ico"><span class="spin"></span></span>Descargando mods<span class="amt">96 / 142</span></div>
+          <div class="sl wait"><span class="ico">·</span>Configs, controles y shaders<span class="amt">18 MB</span></div>
+          <div class="sl wait"><span class="ico">·</span>Añadiendo mcpvp.club</div>
+        </div>
+      </div>
+
+      <div class="ob-step" data-ob="4">
+        <span class="app-icon" style="--s:62px"><canvas data-dino width="22" height="21"></canvas></span>
+        <h2 class="ob-title">Listo para jugar</h2>
+        <p class="ob-body">El servidor ya está en tu lista. Dale a Jugar y entras directo —
+          sin buscar la IP ni configurar nada.</p>
+        <div class="server">
+          <div class="server-top"><span class="dot-live"></span>mcpvp.club</div>
+          <div class="server-stats"><span>24 ms</span><span>4 274 / 14 000</span></div>
+        </div>
+      </div>
+
+      <div class="ob-foot">
+        <button class="ob-skip" id="ob-exit">Salir de la vista</button>
+        <span class="grow"></span>
+        <button class="btn" id="ob-back">Atrás</button>
+        <button class="btn green" id="ob-next">Comenzar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ================= the logo, as a sprite ================= */
+  /* traced off the source PNG: 22x21 lattice, colours sampled from the file itself */
+  var DINO = [
+    ".................DDDD.",
+    "................DMLLDD",
+    "...............DMLDLLD",
+    "...............DMLLDDD",
+    "...............DMLDDD.",
+    "...............DMLD...",
+    "...............DMLD...",
+    "...............DMLD...",
+    "...............DMMD...",
+    "...............DMMD...",
+    "..........DDDD.DMMD...",
+    "........DDLLLLDDMMD...",
+    ".......DLLMMMMLLMMD...",
+    "......DLMMMMMMMMMMD...",
+    ".....DLMMMMMMMMMMDD...",
+    "....DLMDMMMMMMMMMD....",
+    "DDDDLMMDMMMMMMMMDD....",
+    ".DLLMMDDMMDMMDMMD.....",
+    "..DDDDDDMMDDDDMLD.....",
+    ".......DMLD..DMLLD....",
+    ".......DDDD..DDDDD...."
+  ];
+  var DINO_COLORS = { D:"#053C1E", M:"#73BF69", L:"#99D984" };
+
+  function paintDino(cv){
+    var ctx = cv.getContext("2d");
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    for (var y = 0; y < DINO.length; y++){
+      for (var x = 0; x < DINO[y].length; x++){
+        var c = DINO[y][x];
+        if (c === ".") continue;
+        ctx.fillStyle = DINO_COLORS[c];
+        ctx.fillRect(x, y, 1, 1);
+      }
+    }
+  }
+  document.querySelectorAll("canvas[data-dino]").forEach(paintDino);
+
+  /* ================= deterministic pixel skins ================= */
+  function hash(s){
+    var h = 2166136261;
+    for (var i = 0; i < s.length; i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return h >>> 0;
+  }
+  var SKINTONES = ["#F0C08A","#E0A870","#C68642","#8D5524","#5C3A1E","#F5D9B8"];
+  var HAIRS     = ["#2B1B12","#4A2C17","#7A4A21","#1A1A1F","#134E4A","#7F1D1D","#3F2A55"];
+  var SHIRTS    = ["#2F6FEA","#16A34A","#DC2626","#0891B2","#D97706","#DB2777","#334155"];
+
+  function palette(name){
+    var h = hash(name);
+    return {
+      skin:  SKINTONES[h % SKINTONES.length],
+      hair:  HAIRS[(h >>> 5) % HAIRS.length],
+      shirt: SHIRTS[(h >>> 11) % SHIRTS.length],
+      pants: "#2B3550"
+    };
+  }
+  function shade(hex, amt){
+    var n = parseInt(hex.slice(1), 16);
+    var r = Math.max(0, Math.min(255, (n >> 16) + amt));
+    var g = Math.max(0, Math.min(255, ((n >> 8) & 255) + amt));
+    var b = Math.max(0, Math.min(255, (n & 255) + amt));
+    return "rgb(" + r + "," + g + "," + b + ")";
+  }
+
+  var FACE = [
+    "hhhhhhhh","hhhhhhhh","hssssssh","ssssssss",
+    "seessees","ssssssss","ssmmmmss","ssssssss"
+  ];
+  function drawHead(ctx, p, ox, oy, px){
+    for (var y = 0; y < 8; y++){
+      for (var x = 0; x < 8; x++){
+        var c = FACE[y][x], fill;
+        if (c === "h") fill = p.hair;
+        else if (c === "e") fill = "#1B2430";
+        else if (c === "m") fill = shade(p.skin, -46);
+        else fill = p.skin;
+        ctx.fillStyle = fill;
+        ctx.fillRect(ox + x * px, oy + y * px, px, px);
+      }
+    }
+  }
+
+  function paintHead(cv){
+    var ctx = cv.getContext("2d");
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    drawHead(ctx, palette(cv.dataset.head || "?"), 0, 0, 1);
+  }
+  document.querySelectorAll("canvas[data-head]").forEach(paintHead);
+
+  /* ================= view switching ================= */
+  var tabs  = Array.prototype.slice.call(document.querySelectorAll("[data-go]"));
+  var views = Array.prototype.slice.call(document.querySelectorAll(".view"));
+  var stage = document.querySelector(".stage");
+
+  tabs.forEach(function(tab){
+    tab.addEventListener("click", function(){
+      tabs.forEach(function(t){ t.setAttribute("aria-selected", String(t === tab)); });
+      views.forEach(function(v){ v.classList.toggle("on", v.dataset.view === tab.dataset.go); });
+      stage.scrollTop = 0;
+    });
+  });
+
+  /* ================= controles de ventana (Tauri) ================= */
+  var tauri = window.__TAURI__;
+  document.querySelectorAll("[data-win]").forEach(function(b){
+    b.addEventListener("click", function(){
+      if(!tauri) return;                      // abierto en el navegador: no hay ventana que mover
+      var cmd = { close:"window_close", minimize:"window_minimize",
+                  maximize:"window_toggle_maximize" }[b.dataset.win];
+      tauri.core.invoke(cmd).catch(function(e){ console.error(cmd, e); });
+    });
+  });
+
+  /* ================= offline toggle ================= */
+  document.querySelectorAll(".switch[data-toggle]").forEach(function(sw){
+    sw.addEventListener("click", function(){
+      sw.setAttribute("aria-checked", sw.getAttribute("aria-checked") === "true" ? "false" : "true");
+    });
+  });
+
+  /* ================= RAM slider ================= */
+  var ram  = document.getElementById("ram");
+  var ramv = document.getElementById("ramv");
+  function ramUpdate(){
+    var v = Number(ram.value);
+    ramv.innerHTML = v + "<small>GB</small>";
+    ram.style.setProperty("--fill", ((v - 2) / 14 * 100).toFixed(1) + "%");
+  }
+  ram.addEventListener("input", ramUpdate);
+  ramUpdate();
+
+  /* ================= first-run walkthrough ================= */
+  var ob      = document.getElementById("onboard");
+  var obSteps = Array.prototype.slice.call(ob.querySelectorAll("[data-ob]"));
+  var obDots  = Array.prototype.slice.call(ob.querySelectorAll(".ob-dots i"));
+  var obNext  = document.getElementById("ob-next");
+  var obBack  = document.getElementById("ob-back");
+  var LABELS  = { 1:"Comenzar", 2:"Ya lo escribí", 3:"Continuar", 4:"Jugar" };
+  var cur = 1;
+
+  function renderOb(){
+    obSteps.forEach(function(s){ s.classList.toggle("on", Number(s.dataset.ob) === cur); });
+    obDots.forEach(function(d, i){ d.classList.toggle("done", i < cur); });
+    obBack.style.visibility = cur === 1 ? "hidden" : "visible";
+    obNext.textContent = LABELS[cur];
+  }
+  function closeOb(){ ob.hidden = true; }
+
+  document.getElementById("guest").addEventListener("click", function(){
+    cur = 1; renderOb();
+    document.querySelector(".ob-foot").hidden = false;
+    var sl = document.querySelector('[data-ob="3"] .steps-list');
+    if (sl) sl.hidden = false;
+    ob.hidden = false; obNext.focus();
+  });
+  document.getElementById("ob-exit").addEventListener("click", closeOb);
+  obNext.addEventListener("click", function(){
+    if (cur < 4){ cur++; renderOb(); } else { closeOb(); }
+  });
+  obBack.addEventListener("click", function(){ if (cur > 1){ cur--; renderOb(); } });
+  document.addEventListener("keydown", function(e){
+    if (e.key === "Escape" && !ob.hidden) closeOb();
+  });
+  renderOb();
+
+  /* ================= estado real: pack, cuenta, servidor, instancia ================= */
+  var call = function(cmd, args){
+    return tauri ? tauri.core.invoke(cmd, args || {}) : Promise.reject("sin backend");
+  };
+  var $ = function(id){ return document.getElementById(id); };
+
+  function humanBytes(n){
+    if (!n) return "0 MB";
+    var mb = n / 1048576;
+    return mb >= 1024 ? (mb/1024).toFixed(2) + " GB" : Math.round(mb) + " MB";
+  }
+  function slug(name){
+    return name.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+               .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "modpack";
+  }
+  function showAlert(html){
+    var el = $("alert");
+    if (!el) return;
+    if (!html) { el.hidden = true; return; }
+    el.innerHTML = html; el.hidden = false;
+  }
+  /* Pinta un icono: el del pack si lo trajo, si no el dino de siempre. */
+  function setIcon(host, dataUrl){
+    if (!host) return;
+    if (dataUrl) {
+      host.innerHTML = '<img src="' + dataUrl + '" alt="" style="width:70%;height:auto;border-radius:14%;image-rendering:auto">';
+    } else if (!host.querySelector("canvas")) {
+      var c = document.createElement("canvas");
+      c.width = 22; c.height = 21; c.dataset.dino = "";
+      host.innerHTML = ""; host.appendChild(c);
+      paintDino(c);
+    }
+  }
+
+  var PACK = null;   /* lo que hay instalado, leído del disco */
+
+  function renderPack(info){
+    var name = PACK ? PACK.name : "Sin modpack";
+    $("packName").textContent = name;
+    setIcon($("packIcon"), info && info.icon);
+
+    var meta = [], chips = [];
+    if (info && info.installed) {
+      if (info.loader) meta.push(info.loader);
+      if (info.minecraft) meta.push("MC " + info.minecraft);
+      meta.push(info.mods + " mods");
+      meta.push(humanBytes(info.bytes));
+    } else {
+      meta.push(PACK ? "no instalado todavía" : "importa un .mrpack para empezar");
+    }
+    $("packMeta").innerHTML = meta.map(function(t, i){
+      return (i ? "<i></i>" : "") + "<span>" + t + "</span>";
+    }).join("");
+    $("packChips").innerHTML = chips.join("");
+
+    var play = document.querySelector(".play");
+    if (play) play.disabled = !PACK;
+  }
+
+  function renderMemory(){
+    return call("memory_info").then(function(m){
+      if (!m || !m.total) return;
+      var gb = Math.round(m.total / 1024), rec = Math.round(m.max / 1024);
+      var slider = $("ram");
+      if (slider) {
+        slider.max = String(gb);
+        slider.value = String(rec);
+        slider.dispatchEvent(new Event("input"));
+      }
+      var scale = document.querySelector(".ram-scale");
+      if (scale) scale.lastElementChild.textContent = gb + " GB en esta máquina";
+      var hint = $("ramHint");
+      if (hint) hint.textContent = "De " + gb + " GB, le tocan " + rec + " al juego; el resto es para el sistema.";
+      var chips = $("packChips");
+      if (chips && PACK) chips.innerHTML = '<span class="chip">RAM <b>' + rec + ' GB</b></span>';
+    });
+  }
+
+  function renderInstance(){
+    if (!PACK) { renderPack(null); return Promise.resolve(); }
+    return call("instance_info", { id: PACK.id }).then(function(info){
+      renderPack(info);
+      if (!info || !info.installed) return;
+      $("kvPath").textContent = String(info.path).replace(/^\/Users\/[^/]+/, "~");
+      $("kvPath").title = info.path;
+      $("kvLoader").textContent = info.loader || "—";
+      $("kvSize").textContent = humanBytes(info.bytes) + " · " + info.mods + " mods";
+      $("kvWorlds").textContent = info.worlds + (info.worlds === 1 ? " mundo · intocable" : " mundos · intocables");
+      $("setEyebrow").textContent = PACK.name + (info.minecraft ? " · " + info.minecraft : "");
+    });
+  }
+
+  function renderAccount(){
+    return call("active_account").then(function(a){
+      var nameEl = document.querySelector(".account-name");
+      var kindEl = document.querySelector(".account-kind");
+      if (!a) {
+        if (nameEl) nameEl.textContent = "Sin cuenta";
+        if (kindEl) kindEl.textContent = "inicia sesión al jugar";
+        return;
+      }
+      if (nameEl) nameEl.textContent = a.name || "—";
+      if (kindEl) {
+        var kinds = { MSA: "Microsoft", Ely: "Ely.by", Offline: "sin conexión" };
+        kindEl.textContent = kinds[a.kind] || a.kind || "";
+      }
+      var head = document.querySelector(".account canvas[data-head]");
+      if (head && a.name) { head.dataset.head = a.name; paintHead(head); }
+    });
+  }
+
+  function renderServer(){
+    var box = $("server");
+    var addr = PACK && PACK.server;
+    if (!addr) { if (box) box.hidden = true; return Promise.resolve(); }
+    box.hidden = false;
+    $("srvName").textContent = addr;
+    return call("server_status", { addr: addr }).then(function(st){
+      var dot = $("srvDot");
+      if (!st || !st.online) {
+        dot.style.background = "var(--text-faint)";
+        dot.style.boxShadow = "none";
+        $("srvStats").innerHTML = "<span>no responde</span>";
+        return;
+      }
+      dot.style.background = "var(--green)";
+      dot.style.boxShadow = "0 0 10px var(--green-glow)";
+      var players = st.players != null
+        ? st.players.toLocaleString("es-MX") + " / " + (st.max_players || 0).toLocaleString("es-MX")
+        : "";
+      $("srvStats").innerHTML = "<span>" + (st.ping_ms != null ? st.ping_ms + " ms" : "") + "</span><span>" + players + "</span>";
+      if (st.motd) $("srvName").title = st.motd;
+    });
+  }
+
+  function renderJava(){
+    return call("java_runtimes").then(function(list){
+      var sel = $("javaSelect");
+      if (!sel) return;
+      sel.innerHTML = (list && list.length)
+        ? list.map(function(r){ return "<option>" + r + "</option>"; }).join("")
+        : "<option>lo descarga el motor al jugar</option>";
+    });
+  }
+
+  function setSync(text, ok){
+    var t = $("syncText"), d = $("syncDot");
+    if (t) t.textContent = text;
+    if (d) {
+      d.style.background = ok ? "var(--green)" : "var(--text-faint)";
+      d.style.boxShadow = ok ? "0 0 9px var(--green-glow)" : "none";
+    }
+  }
+
+  function refreshAll(){
+    return call("get_pack").then(function(p){
+      PACK = p && p.id ? p : null;
+      $("kvEngine").textContent = "ElyPrism 11.1.0 · administrado";
+      setSync(PACK ? "listo para jugar" : "sin modpack", !!PACK);
+      return Promise.all([renderInstance(), renderAccount(), renderServer(), renderMemory(), renderJava()]);
+    }).catch(function(){});
+  }
+
+  /* ================= importar un .mrpack ================= */
+  var pending = null;   /* archivo inspeccionado, a la espera de confirmación */
+
+  function showPreview(path, info){
+    pending = { path: path, info: info };
+    $("previewSub").textContent = "Revisa y confirma.";
+    $("previewBody").hidden = false;
+    $("previewName").textContent = info.name;
+    setIcon($("previewIcon"), info.icon);
+    var meta = [];
+    if (info.loader) meta.push(info.loader);
+    if (info.minecraft) meta.push("MC " + info.minecraft);
+    meta.push(info.files + " archivos");
+    meta.push(humanBytes(info.bytes));
+    $("previewMeta").innerHTML = meta.map(function(t, i){
+      return (i ? "<i></i>" : "") + "<span>" + t + "</span>";
+    }).join("");
+  }
+
+  function takeFile(path){
+    if (!/\.mrpack$/i.test(path)) {
+      $("dropHint").textContent = "eso no es un .mrpack";
+      return;
+    }
+    $("dropHint").textContent = "leyendo…";
+    call("inspect_mrpack", { path: path }).then(function(info){
+      $("dropHint").textContent = path.split("/").pop();
+      showPreview(path, info);
+    }).catch(function(e){
+      $("dropHint").textContent = "no pude leerlo: " + e;
+    });
+  }
+
+  var dz = $("dropZone");
+  if (dz && tauri) {
+    tauri.event.listen("tauri://drag-enter", function(){ dz.classList.add("over"); });
+    tauri.event.listen("tauri://drag-leave", function(){ dz.classList.remove("over"); });
+    tauri.event.listen("tauri://drag-drop", function(e){
+      dz.classList.remove("over");
+      var paths = (e.payload && e.payload.paths) || [];
+      if (paths.length) {
+        document.querySelector('[data-go="admin"]').click();
+        takeFile(paths[0]);
+      }
+    });
+  }
+
+  var btnInstall = $("btnInstall");
+  if (btnInstall) {
+    btnInstall.addEventListener("click", function(){
+      if (!pending) return;
+      var info = pending.info;
+      var srv = ($("srvInput").value || "").trim();
+      var autoJoin = document.querySelector('#previewPanel, .field-switch .switch[data-toggle]');
+      var pack = {
+        id: slug(info.name),
+        name: info.name,
+        version: info.version,
+        mrpack: pending.path,
+        server: srv || null
+      };
+      btnInstall.disabled = true;
+      btnInstall.textContent = "Instalando…";
+      call("set_pack", { pack: pack })
+        .then(function(){ PACK = pack; return runPlay({ installOnly: true }); })
+        .then(function(){
+          document.querySelector('[data-go="jugar"]').click();
+          return refreshAll();
+        })
+        .finally(function(){
+          btnInstall.disabled = false;
+          btnInstall.textContent = "Instalar este modpack";
+        });
+    });
+  }
+
+  /* ================= Jugar ================= */
+  var playBtn = document.querySelector(".play");
+  var playLabel = $("playLabel");
+
+  function setProgress(paso, frac){
+    if (playBtn) playBtn.style.setProperty("--p", Math.round((frac || 0) * 100) + "%");
+    if (playLabel && paso) playLabel.textContent = paso;
+  }
+
+  if (tauri) {
+    tauri.event.listen("install", function(e){
+      var p = e.payload || {};
+      setProgress(p.paso, p.frac);
+    });
+  }
+
+  function runPlay(opts){
+    opts = opts || {};
+    if (!PACK) return Promise.resolve();
+    showAlert(null);
+    if (playBtn) playBtn.disabled = true;
+    setProgress("Preparando", 0);
+    setSync(opts.installOnly ? "instalando…" : "preparando…", false);
+
+    return call("play", { args: {
+      mrpack: PACK.mrpack,
+      instance_id: PACK.id,
+      name: PACK.name,
+      version: PACK.version || "1.0.0",
+      server: PACK.server || null,
+      max_mem: 0,
+      jvm_args: "",
+      install_only: !!opts.installOnly
+    }}).then(function(r){
+      if (r === "login") {
+        showAlert("<b>Falta iniciar sesión.</b> Se abrió la ventana del motor: agrega tu cuenta ahí. Es solo la primera vez.");
+      } else if (!opts.installOnly) {
+        setProgress("Abriendo Minecraft", 1);
+      }
+      return r;
+    }).catch(function(err){
+      showAlert("<b>No se pudo.</b> " + String(err));
+      throw err;
+    }).finally(function(){
+      setSync(PACK ? "listo para jugar" : "sin modpack", !!PACK);
+      setTimeout(function(){
+        if (playBtn) { playBtn.disabled = false; playBtn.style.setProperty("--p", "0%"); }
+        if (playLabel) playLabel.textContent = "Jugar";
+      }, 1200);
+    });
+  }
+
+  if (playBtn) {
+    playBtn.addEventListener("click", function(){ runPlay().catch(function(){}); });
+  }
+
+  /* ================= botones de Ajustes ================= */
+  var btnFolder = $("btnFolder");
+  if (btnFolder) {
+    btnFolder.addEventListener("click", function(){
+      if (!PACK) return;
+      call("instance_info", { id: PACK.id }).then(function(i){
+        if (i && i.path) return call("open_folder", { path: i.path });
+      }).catch(function(e){ showAlert("<b>No pude abrir la carpeta.</b> " + e); });
+    });
+  }
+  var btnVerify = $("btnVerify");
+  if (btnVerify) {
+    btnVerify.addEventListener("click", function(){
+      if (!PACK) return;
+      btnVerify.disabled = true;
+      var antes = btnVerify.textContent;
+      btnVerify.textContent = "Verificando…";
+      /* La instalación ya es idempotente: revalida hashes y repara lo que falte. */
+      runPlay({ installOnly: true })
+        .then(refreshAll)
+        .finally(function(){ btnVerify.disabled = false; btnVerify.textContent = antes; });
+    });
+  }
+
+  refreshAll();
+
+  /* diagnóstico de cableado: dice exactamente qué pieza falta si algo no responde */
+  try {
+    window.__TAURI__ && window.__TAURI__.core.invoke("boot_ping", { msg:
+      "cableado: play=" + !!playBtn +
+      " tauri=" + !!tauri +
+      " invoke=" + !!(tauri && tauri.core && tauri.core.invoke) +
+      " event=" + !!(tauri && tauri.event && tauri.event.listen) +
+      " overlay=" + !!ob });
+  } catch (e) {}
+
+  /* ================= specular highlight follows the cursor ================= */
+  if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches){
+    var hero = document.querySelector(".hero");
+    var BASE = "linear-gradient(118deg, rgba(115,191,105,.13), rgba(11,70,35,.10) 54%, transparent 80%)";
+    hero.addEventListener("pointermove", function(e){
+      var r = hero.getBoundingClientRect();
+      var x = ((e.clientX - r.left) / r.width * 100).toFixed(1);
+      var y = ((e.clientY - r.top) / r.height * 100).toFixed(1);
+      hero.style.backgroundImage =
+        "radial-gradient(36% 58% at " + x + "% " + y + "%, rgba(255,255,255,.09), transparent 70%)," + BASE;
+    });
+    hero.addEventListener("pointerleave", function(){ hero.style.backgroundImage = BASE; });
+  }
+})();
+</script>

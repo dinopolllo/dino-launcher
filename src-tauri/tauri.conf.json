@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Dino Launcher",
+  "version": "0.1.0",
+  "identifier": "gg.dinolab.launcher",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Dino Launcher",
+        "width": 1120,
+        "height": 742,
+        "minWidth": 900,
+        "minHeight": 620,
+        "decorations": false,
+        "transparent": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "withGlobalTauri": true,
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/256x256.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Game",
+    "shortDescription": "Modpacks y servidor, listos de una vez."
+  }
+}
