@@ -11,14 +11,27 @@ fn window_minimize(window: Window) -> Result<(), String> {
     window.minimize().map_err(|e| e.to_string())
 }
 
+/// Devuelve el estado **nuevo**, no el viejo.
+///
+/// Windows dibuja dos iconos distintos: un cuadro para maximizar y dos superpuestos
+/// para restaurar. Una ventana maximizada que sigue mostrando el cuadro es de las
+/// cosas que delatan al instante que la barra de título no es del sistema.
 #[tauri::command]
-fn window_toggle_maximize(window: Window) -> Result<(), String> {
+fn window_toggle_maximize(window: Window) -> Result<bool, String> {
     let maximized = window.is_maximized().map_err(|e| e.to_string())?;
     if maximized {
-        window.unmaximize().map_err(|e| e.to_string())
+        window.unmaximize().map_err(|e| e.to_string())?;
     } else {
-        window.maximize().map_err(|e| e.to_string())
+        window.maximize().map_err(|e| e.to_string())?;
     }
+    Ok(!maximized)
+}
+
+/// El estado al arrancar, y tras un maximizado que no salió de nuestro botón:
+/// arrastrar la ventana contra el borde superior también la maximiza.
+#[tauri::command]
+fn window_is_maximized(window: Window) -> Result<bool, String> {
+    window.is_maximized().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -397,6 +410,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             window_minimize,
             window_toggle_maximize,
+            window_is_maximized,
             window_close,
             app_paths,
             boot_ping,

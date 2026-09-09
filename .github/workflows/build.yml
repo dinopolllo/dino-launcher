@@ -1,0 +1,57 @@
+name: build
+
+# Compilar Tauri en Windows pide MSVC y el SDK: varios GB en la máquina de quien
+# desarrolla. Aquí eso ya está puesto, así que el instalador sale de cada push sin
+# que nadie instale nada. Los tests corren en las dos plataformas a la vez, que es
+# lo único que detecta una regresión de rutas: `/` contra `\` no falla donde se
+# escribió, falla en la otra.
+
+on:
+  push:
+    branches: [main, windows-port]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: tests · ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      # Los que tocan la red están marcados `#[ignore]`: no corren aquí.
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test
+
+  windows-installer:
+    name: instalador de Windows
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - run: npm run build
+
+      # El .exe queda sin firmar: al abrirlo, SmartScreen avisa una vez y hay que
+      # entrar en "Más información > Ejecutar de todas formas". Se quita comprando
+      # un certificado de firma de código, no desde aquí.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dino-launcher-windows
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error

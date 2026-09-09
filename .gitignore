@@ -2,5 +2,14 @@ node_modules/
 dist/
 target/
 reference/
+
+# Los regenera tauri-build en cada compilación, y cada sistema añade el suyo:
+# compilar en macOS deja macOS-schema.json y compilar en Windows, windows-schema.json.
+src-tauri/gen/schemas/
+
+# basura que cada sistema deja en las carpetas
 .DS_Store
+Thumbs.db
+desktop.ini
+
 *.log

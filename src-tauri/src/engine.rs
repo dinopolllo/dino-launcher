@@ -255,12 +255,59 @@ pub fn total_memory_mb() -> Option<u32> {
     }
     #[cfg(target_os = "windows")]
     {
-        let out = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory"])
-            .output()
-            .ok()?;
-        let bytes: u64 = String::from_utf8(out.stdout).ok()?.trim().parse().ok()?;
-        return Some((bytes / 1024 / 1024) as u32);
+        // Vía API y no PowerShell a propósito. `Command::new("powershell")` desde una
+        // app sin terminal abre una consola negra durante casi un segundo, y esto se
+        // llama al abrir la ventana y en cada Jugar: se vería siempre.
+        //
+        // `GetPhysicallyInstalledSystemMemory` es el equivalente exacto de `hw.memsize`:
+        // devuelve la RAM **instalada**, no la que queda tras las reservas del firmware
+        // y la gráfica integrada. Los umbrales de `recommended_memory` están calibrados
+        // sobre ese número; con el otro, una máquina de 16 GB que reporta 14.8 GB
+        // utilizables caería un escalón y jugaría con menos memoria de la que puede.
+
+        // La estructura tiene que estar completa aunque solo miremos `total_phys`:
+        // el sistema escribe los nueve campos y `length` le dice cuántos caben.
+        #[repr(C)]
+        #[allow(dead_code)]
+        struct MemoryStatusEx {
+            length: u32,
+            memory_load: u32,
+            total_phys: u64,
+            avail_phys: u64,
+            total_page_file: u64,
+            avail_page_file: u64,
+            total_virtual: u64,
+            avail_virtual: u64,
+            avail_extended_virtual: u64,
+        }
+        #[link(name = "kernel32")]
+        #[allow(non_snake_case)] // los nombres son los de la API, no se traducen
+        extern "system" {
+            fn GetPhysicallyInstalledSystemMemory(total_kb: *mut u64) -> i32;
+            fn GlobalMemoryStatusEx(buf: *mut MemoryStatusEx) -> i32;
+        }
+
+        let mut kb: u64 = 0;
+        if unsafe { GetPhysicallyInstalledSystemMemory(&mut kb) } != 0 && kb > 0 {
+            return Some((kb / 1024) as u32);
+        }
+        // Falla cuando el SMBIOS viene mal formado, cosa habitual en máquinas
+        // virtuales. Ahí el total que ve el kernel es lo mejor que hay.
+        let mut st = MemoryStatusEx {
+            length: std::mem::size_of::<MemoryStatusEx>() as u32,
+            memory_load: 0,
+            total_phys: 0,
+            avail_phys: 0,
+            total_page_file: 0,
+            avail_page_file: 0,
+            total_virtual: 0,
+            avail_virtual: 0,
+            avail_extended_virtual: 0,
+        };
+        if unsafe { GlobalMemoryStatusEx(&mut st) } != 0 && st.total_phys > 0 {
+            return Some((st.total_phys / 1024 / 1024) as u32);
+        }
+        return None;
     }
     #[allow(unreachable_code)]
     None
@@ -288,13 +335,16 @@ pub const ENGINE_REPO: &str = "ElyPrismLauncher/Launcher";
 
 /// Ejecutable del motor dentro de su carpeta.
 ///
-/// Verificado contra el release 11.1.0: el bundle se llama `ElyPrismLauncher.app`
-/// pero el binario va en **minúsculas**. Es un binario universal (x86_64 + arm64).
+/// Verificado contra el release 11.1.0, leyendo el directorio central de cada zip:
+///  - macOS: el bundle se llama `ElyPrismLauncher.app` pero el binario va en
+///    **minúsculas**, y es universal (x86_64 + arm64).
+///  - Windows: el portable descomprime **sin carpeta contenedora**, y el ejecutable
+///    lleva la marca del fork: `elyprismlauncher.exe`, no `prismlauncher.exe`.
 pub fn engine_binary(dir: &Path) -> PathBuf {
     #[cfg(target_os = "macos")]
     return dir.join("ElyPrismLauncher.app/Contents/MacOS/elyprismlauncher");
     #[cfg(target_os = "windows")]
-    return dir.join("prismlauncher.exe");
+    return dir.join("elyprismlauncher.exe");
     #[cfg(all(unix, not(target_os = "macos")))]
     return dir.join("ElyPrismLauncher.AppImage");
 }
@@ -335,6 +385,16 @@ mod tests {
         Layout::new("/tmp/dino")
     }
 
+    /// El valor que sigue a una bandera.
+    ///
+    /// Las rutas se rinden con el separador del sistema, así que compararlas contra
+    /// una cadena POSIX pegada a mano solo funciona en macOS y Linux. Extraer el
+    /// argumento y contrastarlo con el mismo `Layout` prueba lo mismo en las tres.
+    fn arg_tras<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+        let i = args.iter().position(|a| a == flag)?;
+        args.get(i + 1).map(String::as_str)
+    }
+
     #[test]
     fn lanzar_nunca_muestra_la_ventana_del_motor() {
         let a = launch_args(
@@ -354,31 +414,30 @@ mod tests {
             &Account::Profile("jugador".into()),
             Some("mc.dinolab.gg"),
         );
-        let joined = a.join(" ");
-        assert!(joined.contains("--dir /tmp/dino/engine"));
-        assert!(joined.contains("--launch dino-smp"));
-        assert!(joined.contains("--profile jugador"));
-        assert!(joined.contains("--server mc.dinolab.gg"));
+        assert_eq!(arg_tras(&a, "--dir"), Some(path_arg(&layout().engine()).as_str()));
+        assert_eq!(arg_tras(&a, "--launch"), Some("dino-smp"));
+        assert_eq!(arg_tras(&a, "--profile"), Some("jugador"));
+        assert_eq!(arg_tras(&a, "--server"), Some("mc.dinolab.gg"));
     }
 
     #[test]
     fn cuenta_offline_usa_su_propia_bandera() {
         let a = launch_args(&layout(), "dino-smp", &Account::Offline("Kevs".into()), None);
-        let joined = a.join(" ");
-        assert!(joined.contains("--offline Kevs"));
-        assert!(!joined.contains("--profile"));
+        assert_eq!(arg_tras(&a, "--offline"), Some("Kevs"));
+        assert!(!a.iter().any(|x| x == "--profile"));
     }
 
     #[test]
     fn importar_apunta_al_mrpack() {
-        let a = import_args(&layout(), Path::new("/tmp/dino/packs/dino-smp-4.3.1.mrpack"));
+        let pack = layout().packs().join("dino-smp-4.3.1.mrpack");
+        let a = import_args(&layout(), &pack);
         assert_eq!(
             a,
             vec![
-                "--dir",
-                "/tmp/dino/engine",
-                "--import",
-                "/tmp/dino/packs/dino-smp-4.3.1.mrpack"
+                "--dir".to_string(),
+                path_arg(&layout().engine()),
+                "--import".to_string(),
+                path_arg(&pack),
             ]
         );
     }
@@ -486,6 +545,24 @@ mod tests {
         assert!(l.engine_app().starts_with("/tmp/dino"));
         assert_ne!(l.engine_app(), l.engine(), "el binario no va dentro de la carpeta de datos");
         assert!(l.accounts().ends_with("engine/accounts.json"));
+    }
+
+    #[test]
+    fn el_ejecutable_lleva_el_nombre_real_del_release() {
+        // Leído del directorio central de cada zip del release 11.1.0. Equivocarse
+        // aquí no rompe la compilación: descarga el motor entero y recién entonces
+        // falla con "no encontré el ejecutable", que es el peor momento para enterarse.
+        let name = engine_binary(Path::new("bin"))
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        #[cfg(target_os = "windows")]
+        assert_eq!(name, "elyprismlauncher.exe");
+        #[cfg(target_os = "macos")]
+        assert_eq!(name, "elyprismlauncher");
+        #[cfg(all(unix, not(target_os = "macos")))]
+        assert_eq!(name, "ElyPrismLauncher.AppImage");
     }
 
     #[test]

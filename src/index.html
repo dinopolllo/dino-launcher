@@ -3,6 +3,16 @@
 <title>Dino Launcher</title>
 <script>
 (function(){
+  /* La barra de título la dibujamos nosotros, así que la convención de cada sistema
+     hay que aplicarla a mano: en macOS los controles van a la izquierda y redondos,
+     en Windows a la derecha y cuadrados. Se decide aquí, en el primer script y con
+     la página todavía en blanco, para que nadie llegue a ver los controles saltar
+     de lado. El userAgent basta y sobra: no fijamos uno propio en tauri.conf.json. */
+  var ua = navigator.userAgent;
+  document.documentElement.classList.add(
+    /Windows/.test(ua) ? "win" : /Mac OS X|Macintosh/.test(ua) ? "mac" : "linux"
+  );
+
   function ping(m){ try{ window.__TAURI__.core.invoke("boot_ping",{msg:m}); }catch(e){} }
   window.addEventListener("error", function(e){
     ping("JS ERROR: "+e.message+" @ "+(e.filename||"?")+":"+e.lineno);
@@ -56,9 +66,12 @@
   --r-card:14px;
   --r-chip:9px;
 
-  --font-display:"Bricolage Grotesque","Helvetica Neue",sans-serif;
-  --font-body:"Instrument Sans","Helvetica Neue",Arial,sans-serif;
-  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  /* Las tres vienen de Google Fonts. Los respaldos no son decorativos: la primera
+     vez sin internet son lo único que queda, y "Helvetica Neue" no existe en
+     Windows — sin Segoe delante, la interfaz entera cae a Arial. */
+  --font-display:"Bricolage Grotesque","Segoe UI Variable Display","Segoe UI","Helvetica Neue",system-ui,sans-serif;
+  --font-body:"Instrument Sans","Segoe UI Variable Text","Segoe UI","Helvetica Neue",Arial,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"Cascadia Mono",Consolas,"SF Mono",Menlo,monospace;
 }
 
 *{box-sizing:border-box}
@@ -169,6 +182,45 @@ body{
 .lights button[data-win="maximize"]{background:#28C840}
 /* la barra arrastra la ventana, pero no cuando el gesto empieza en un control */
 .titlebar button,.titlebar .sync{-webkit-app-region:no-drag}
+
+/* ---------------- Windows: los controles van a la derecha ----------------
+   El HTML conserva el orden de macOS (cerrar, minimizar, maximizar, a la izquierda)
+   y aquí no se mueve ni un nodo: se reordena con `order`. Así cada convención vive
+   en una sola capa y ninguna de las dos tiene que saber de la otra. */
+html.win .titlebar{padding-right:0}
+html.win .wordmark{order:1}
+html.win .tb-right{order:2}
+html.win .lights{order:3;gap:0;align-self:stretch}
+html.win .lights button[data-win="minimize"]{order:1}
+html.win .lights button[data-win="maximize"]{order:2}
+html.win .lights button[data-win="close"]{order:3}
+
+html.win .lights button{
+  width:46px;height:auto;border-radius:0;
+  background:transparent;box-shadow:none;color:var(--text-dim);
+  display:flex;align-items:center;justify-content:center;
+  transition:background .12s ease,color .12s ease;
+}
+/* Segoe Fluent Icons es de Windows 11 y MDL2 el mismo juego en Windows 10; los
+   códigos son los que usa la barra de título del sistema. Van por CSS y no en el
+   HTML porque en macOS estos botones son círculos de color y no llevan icono. */
+html.win .lights button::before{
+  font-family:"Segoe Fluent Icons","Segoe MDL2 Assets";
+  font-size:10px;line-height:1;
+}
+html.win .lights button[data-win="minimize"]::before{content:"\E921"}
+html.win .lights button[data-win="maximize"]::before{content:"\E922"}
+html.win .lights button[data-win="close"]::before{content:"\E8BB"}
+/* Maximizada, el icono pasa a ser el de restaurar: dos cuadros superpuestos. */
+html.win.maximized .lights button[data-win="maximize"]::before{content:"\E923"}
+
+html.win .lights button:hover{background:var(--glass-2);color:var(--text);filter:none}
+/* El rojo de cerrar es el del sistema; el hover ocupa el botón entero, no un punto. */
+html.win .lights button[data-win="close"]:hover{background:#C42B1C;color:#fff}
+
+/* Windows 11 redondea sus ventanas a 8px. Los 26 de macOS se leen aquí como un
+   elemento ajeno; 10 conserva la suavidad del diseño sin desentonar. */
+html.win{--r-window:10px}
 
 .wordmark{
   display:flex;align-items:center;gap:9px;margin-left:6px;
@@ -945,12 +997,34 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
   /* ================= controles de ventana (Tauri) ================= */
   var tauri = window.__TAURI__;
+
+  /* En Windows el botón central cambia de icono según el estado. La ventana puede
+     maximizarse sin pasar por él —arrastrándola contra el borde superior, o con un
+     doble clic en la barra— así que no basta con recordar lo que hizo el botón: hay
+     que preguntar tras cada cambio de tamaño. Con freno, que `resize` se dispara en
+     ráfaga mientras se arrastra un borde. */
+  var maxTimer = null;
+  function marcarMaximizada(v){
+    document.documentElement.classList.toggle("maximized", !!v);
+  }
+  function sincronizarMaximizada(){
+    if(!tauri) return;
+    tauri.core.invoke("window_is_maximized").then(marcarMaximizada).catch(function(){});
+  }
+  window.addEventListener("resize", function(){
+    clearTimeout(maxTimer);
+    maxTimer = setTimeout(sincronizarMaximizada, 120);
+  });
+  sincronizarMaximizada();
+
   document.querySelectorAll("[data-win]").forEach(function(b){
     b.addEventListener("click", function(){
       if(!tauri) return;                      // abierto en el navegador: no hay ventana que mover
       var cmd = { close:"window_close", minimize:"window_minimize",
                   maximize:"window_toggle_maximize" }[b.dataset.win];
-      tauri.core.invoke(cmd).catch(function(e){ console.error(cmd, e); });
+      tauri.core.invoke(cmd).then(function(estado){
+        if(cmd === "window_toggle_maximize") marcarMaximizada(estado);
+      }).catch(function(e){ console.error(cmd, e); });
     });
   });
 

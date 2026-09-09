@@ -70,6 +70,13 @@ pub async fn ensure_engine(
         unzip_into(&bytes, &dir)?;
     }
 
+    // El portable de Windows trae `portable.txt`: le dice al motor que guarde sus datos
+    // junto al ejecutable. Nosotros siempre pasamos `--dir`, que manda por encima, pero
+    // si alguna vez dejara de mandar, los datos irían a `bin/` y `accounts.json` quedaría
+    // donde nadie lo busca: el launcher pediría iniciar sesión eternamente. Upstream
+    // documenta el archivo como borrable; borrarlo quita la ambigüedad de raíz.
+    let _ = std::fs::remove_file(dir.join("portable.txt"));
+
     // Los releases vienen firmados adhoc; sin esto Gatekeeper los bloquea.
     drop_quarantine(&dir);
     set_dock_visibility(&dir, true);
@@ -199,58 +206,174 @@ pub fn set_dock_visibility(dir: &Path, hidden: bool) {
     }
 }
 
-/// Mata procesos huérfanos que dejamos atrás en sesiones anteriores.
-///
-/// Dos fuentes reales, vistas en pruebas:
-///  - el `crash_assistant` del pack lanza un Java propio al terminar la partida y
-///    queda reparentado a `launchd`, con icono en el Dock;
-///  - el motor no siempre se cierra pese a `QuitAfterGameStop`, y su socket de
-///    instancia única hace que el siguiente `--launch` no haga nada.
-///
-/// Solo tocamos procesos cuya línea de comandos apunta **dentro de nuestra carpeta**,
-/// y solo si ya son huérfanos (`ppid == 1`). Nunca matamos una partida en curso:
-/// esa cuelga del motor, no de `launchd`.
 /// Clase principal con la que el motor arranca el juego. Si aparece en la línea de
 /// comandos, ese proceso **es la partida** y no se toca pase lo que pase.
 const GAME_MAIN_CLASS: &str = "org.prismlauncher.EntryPoint";
+
+/// Un proceso vivo: lo mínimo para decidir si es basura nuestra.
+pub struct Proceso {
+    pub pid: u32,
+    pub ppid: u32,
+    pub args: String,
+}
+
+/// ¿Esta línea de comandos apunta dentro de nuestra carpeta?
+///
+/// En Windows hay que normalizar antes de comparar: Qt escribe el classpath que le
+/// pasa a Java con `/` aunque nosotros le demos `--dir` con `\`, y el sistema de
+/// archivos no distingue mayúsculas. Sin esto el Java del pack nunca coincidiría con
+/// la raíz y la limpieza no encontraría nada que limpiar.
+pub fn en_nuestra_carpeta(args: &str, root: &str) -> bool {
+    fn norm(s: &str) -> String {
+        let s = s.replace('\\', "/");
+        if cfg!(windows) {
+            s.to_lowercase()
+        } else {
+            s
+        }
+    }
+    norm(args).contains(&norm(root))
+}
 
 /// ¿Este proceso es basura nuestra que se puede matar?
 ///
 /// Pura y testeable a propósito: es la decisión que, mal tomada, le cierra el
 /// juego a alguien en plena partida.
-pub fn is_killable(args: &str, ppid: &str, root: &str, self_pid: u32, pid: &str) -> bool {
-    if ppid != "1" || !args.contains(root) {
+///
+/// `huerfano` lo calcula cada sistema a su manera y por eso entra ya resuelto: Unix
+/// reparenta a `launchd`/`init` y basta con `ppid == 1`, mientras que Windows no
+/// reparenta nada y deja el ppid apuntando a un proceso que ya no existe.
+pub fn is_killable(args: &str, huerfano: bool, root: &str, self_pid: u32, pid: u32) -> bool {
+    if !huerfano || !en_nuestra_carpeta(args, root) {
         return false; // no es huérfano, o no es nuestro
     }
     if args.contains(GAME_MAIN_CLASS) {
         return false; // es la partida: jamás
     }
-    pid.parse::<u32>().ok() != Some(self_pid) // no nos suicidemos
+    pid != self_pid // no nos suicidemos
 }
 
 #[cfg(unix)]
+fn procesos() -> Vec<Proceso> {
+    let Ok(out) = std::process::Command::new("ps").args(["-eo", "pid=,ppid=,args="]).output() else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut it = line.split_whitespace();
+            let pid = it.next()?.parse().ok()?;
+            let ppid = it.next()?.parse().ok()?;
+            Some(Proceso { pid, ppid, args: line.to_string() })
+        })
+        .collect()
+}
+
+/// Lista de procesos en Windows, con línea de comandos.
+///
+/// Vía CIM porque es lo único que da `CommandLine`: `tasklist` no la trae, y sin ella
+/// habría que matar por nombre de ejecutable, que es justo lo que cerraría el
+/// ElyPrism que alguien tuviera instalado por su cuenta.
+///
+/// `CREATE_NO_WINDOW` no es cosmético: sin esa bandera cada llamada abre una consola
+/// negra encima del launcher. El `OutputEncoding` tampoco: sin él, PowerShell emite en
+/// la codificación de la consola y una ruta como `C:\Users\José` vuelve rota, con lo
+/// que su propia carpeta dejaría de reconocerse como suya.
+#[cfg(windows)]
+fn procesos() -> Vec<Proceso> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    // Sin comillas dentro del script: se pasa como un solo argumento y cualquier
+    // comilla tendría que sobrevivir al encomillado de Rust y al de PowerShell.
+    let script = concat!(
+        "[Console]::OutputEncoding=[Text.Encoding]::UTF8; ",
+        "Get-CimInstance Win32_Process | ForEach-Object { ",
+        "($_.ProcessId, $_.ParentProcessId, $_.CommandLine) -join [char]9 }"
+    );
+    let Ok(out) = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut it = line.splitn(3, '\t');
+            let pid = it.next()?.trim().parse().ok()?;
+            let ppid = it.next()?.trim().parse().ok()?;
+            Some(Proceso { pid, ppid, args: it.next().unwrap_or("").to_string() })
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+fn matar(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status()
+        .is_ok()
+}
+
+/// Termina un proceso por PID.
+///
+/// Por API y no con `taskkill`: cada `taskkill` sería otra consola negra parpadeando,
+/// y aquí se llama una vez por proceso a limpiar.
+#[cfg(windows)]
+fn matar(pid: u32) -> bool {
+    #[link(name = "kernel32")]
+    #[allow(non_snake_case)] // los nombres son los de la API, no se traducen
+    extern "system" {
+        // `HANDLE` es un puntero opaco: `isize` tiene su mismo tamaño en 32 y 64 bits.
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
+        fn TerminateProcess(handle: isize, code: u32) -> i32;
+        fn CloseHandle(handle: isize) -> i32;
+    }
+    const PROCESS_TERMINATE: u32 = 0x0001;
+
+    unsafe {
+        let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if h == 0 {
+            return false; // ya murió, o no tenemos permiso: en ninguno de los dos insistimos
+        }
+        let ok = TerminateProcess(h, 1) != 0;
+        CloseHandle(h);
+        ok
+    }
+}
+
+/// Mata procesos huérfanos que dejamos atrás en sesiones anteriores.
+///
+/// Dos fuentes reales, vistas en pruebas:
+///  - el `crash_assistant` del pack lanza un Java propio al terminar la partida y
+///    queda suelto, con icono en el Dock o en la barra de tareas;
+///  - el motor no siempre se cierra pese a `QuitAfterGameStop`, y su socket de
+///    instancia única hace que el siguiente `--launch` no haga nada.
+///
+/// Solo tocamos procesos cuya línea de comandos apunta **dentro de nuestra carpeta**,
+/// y solo si ya nadie los sostiene. Nunca matamos una partida en curso.
 pub fn kill_orphans(root: &Path) -> usize {
     let Some(root) = root.to_str() else { return 0 };
-    let Ok(out) = std::process::Command::new("ps").args(["-eo", "pid=,ppid=,args="]).output() else {
-        return 0;
-    };
+    let ps = procesos();
+    let vivos: Vec<u32> = ps.iter().map(|p| p.pid).collect();
+    let yo = std::process::id();
+
     let mut killed = 0;
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let mut it = line.split_whitespace();
-        let (Some(pid), Some(ppid)) = (it.next(), it.next()) else { continue };
-        if !is_killable(line, ppid, root, std::process::id(), pid) {
+    for p in &ps {
+        // Windows no reparenta: el huérfano se reconoce porque su padre ya no está en
+        // la lista. Si ese PID fue reciclado por otro proceso vivo, este no se dará por
+        // huérfano y no se limpiará — se prefiere eso a matar de más.
+        let huerfano = if cfg!(windows) { !vivos.contains(&p.ppid) } else { p.ppid == 1 };
+        if !is_killable(&p.args, huerfano, root, yo, p.pid) {
             continue;
         }
-        if std::process::Command::new("kill").args(["-9", pid]).status().is_ok() {
+        if matar(p.pid) {
             killed += 1;
         }
     }
     killed
-}
-
-#[cfg(not(unix))]
-pub fn kill_orphans(_root: &Path) -> usize {
-    0
 }
 
 /// Lee un `.mrpack` sin instalarlo: para enseñar qué contiene antes de confirmar.
@@ -298,19 +421,15 @@ pub fn apply_silent_config(layout: &Layout) {
 }
 
 /// ¿Ya hay un motor corriendo sobre nuestra carpeta de datos?
-#[cfg(unix)]
+///
+/// El nombre del ejecutable es el mismo en las tres plataformas (con `.exe` en
+/// Windows), así que basta con buscarlo dentro de una línea que además apunte a
+/// nuestra raíz: el ElyPrism que alguien tenga instalado aparte no coincide.
 fn engine_running(root: &Path) -> bool {
     let Some(root) = root.to_str() else { return false };
-    let Ok(out) = std::process::Command::new("ps").args(["-eo", "args="]).output() else {
-        return false;
-    };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .any(|l| l.contains(root) && l.contains("elyprismlauncher"))
-}
-#[cfg(not(unix))]
-fn engine_running(_root: &Path) -> bool {
-    false
+    procesos().iter().any(|p| {
+        en_nuestra_carpeta(&p.args, root) && p.args.to_lowercase().contains("elyprismlauncher")
+    })
 }
 
 /// Arranca el motor en segundo plano, sin `--launch`, para que refresque los
@@ -322,8 +441,19 @@ fn engine_running(_root: &Path) -> bool {
 /// caliente, el `--launch` posterior se lo entrega por el socket de instancia
 /// única y no queda nada que esperar.
 ///
-/// Comprobado: arranca sin ventana principal y sin icono en el Dock.
+/// Comprobado en macOS: arranca sin ventana principal y sin icono en el Dock.
+///
+/// **En Windows no se hace.** Medido contra el release 11.1.0: arrancado sin
+/// `--launch`, el motor abre su ventana principal («PineconeMC - PineconeMC 11.1.0»)
+/// tanto en la primera corrida como en las siguientes, y con la config muda ya
+/// escrita. Aquí no existe equivalente de `LSUIElement`, así que precalentar costaría
+/// una ventana ajena encima del launcher durante toda la sesión — `QuitAfterGameStop`
+/// la mantiene viva hasta que se juega. El precio de renunciar es el diálogo
+/// «Please wait...» de ~2.5 s en el primer Jugar; mucho más barato que lo otro.
 pub fn warm_engine(layout: &Layout) {
+    if cfg!(windows) {
+        return;
+    }
     let bin = engine::engine_binary(&layout.engine_app());
     if !bin.exists() || engine_running(&layout.root) {
         return;
@@ -458,31 +588,66 @@ mod tests {
     use super::*;
 
     const ROOT: &str = "/Users/x/Library/Application Support/gg.dinolab.launcher";
+    /// La misma raíz tal como la escribe Windows.
+    #[cfg(windows)]
+    const ROOT_WIN: &str = r"C:\Users\Pici\AppData\Roaming\gg.dinolab.launcher";
 
     #[test]
     fn jamas_matamos_una_partida_en_curso() {
         // Si el motor muriera, el juego queda huérfano bajo nuestra carpeta.
         // Aun así no se toca: hay alguien jugando.
         let game = format!("java -Xmx3072m -cp {ROOT}/engine/libraries/... org.prismlauncher.EntryPoint");
-        assert!(!is_killable(&game, "1", ROOT, 999, "500"));
+        assert!(!is_killable(&game, true, ROOT, 999, 500));
     }
 
     #[test]
     fn si_matamos_la_basura_que_dejamos() {
         let leftover = format!("{ROOT}/engine/java/java-runtime-epsilon/bin/java -jar CrashAssistant.jar");
-        assert!(is_killable(&leftover, "1", ROOT, 999, "500"));
+        assert!(is_killable(&leftover, true, ROOT, 999, 500));
     }
 
     #[test]
     fn no_tocamos_lo_ajeno_ni_lo_vivo() {
         // Un Java de otro launcher, fuera de nuestra carpeta.
-        assert!(!is_killable("/opt/other/java -jar cosa.jar", "1", ROOT, 999, "500"));
-        // Nuestro, pero con padre vivo: lo está usando alguien.
+        assert!(!is_killable("/opt/other/java -jar cosa.jar", true, ROOT, 999, 500));
+        // Nuestro, pero sostenido por un padre vivo: lo está usando alguien.
         let ours = format!("{ROOT}/bin/elyprismlauncher --dir x");
-        assert!(!is_killable(&ours, "4321", ROOT, 999, "500"));
+        assert!(!is_killable(&ours, false, ROOT, 999, 500));
         // Y nunca a nosotros mismos.
         let me = format!("{ROOT}/Dino Launcher.app/Contents/MacOS/dino-launcher");
-        assert!(!is_killable(&me, "1", ROOT, 999, "999"));
+        assert!(!is_killable(&me, true, ROOT, 999, 999));
+    }
+
+    /// En Windows la línea de comandos no vuelve como la escribimos: Qt arma el
+    /// classpath con `/` aunque `--dir` lleve `\`, y el disco no distingue mayúsculas.
+    /// Comparando literal, nada de lo nuestro se reconocería y la limpieza —la que
+    /// destraba el siguiente `--launch`— no haría absolutamente nada.
+    #[cfg(windows)]
+    #[test]
+    fn en_windows_reconocemos_lo_nuestro_pese_a_barras_y_mayusculas() {
+        let java = format!(
+            "{}/engine/java/bin/java.exe -jar CrashAssistant.jar",
+            ROOT_WIN.replace('\\', "/").to_lowercase()
+        );
+        assert!(en_nuestra_carpeta(&java, ROOT_WIN));
+        assert!(is_killable(&java, true, ROOT_WIN, 999, 500));
+
+        // Y con ese mismo formato la partida sigue siendo intocable.
+        let game = format!(
+            "{}/engine/libs/x org.prismlauncher.EntryPoint",
+            ROOT_WIN.replace('\\', "/")
+        );
+        assert!(!is_killable(&game, true, ROOT_WIN, 999, 500));
+    }
+
+    /// Alguien puede tener su propio ElyPrism instalado: mismo nombre de ejecutable,
+    /// otra carpeta. Matarlo sería cerrarle su launcher sin explicación.
+    #[cfg(windows)]
+    #[test]
+    fn no_confundimos_el_elyprism_ajeno_con_el_nuestro() {
+        let ajeno = r"C:\Program Files\ElyPrismLauncher\elyprismlauncher.exe --dir D:\mc";
+        assert!(!en_nuestra_carpeta(ajeno, ROOT_WIN));
+        assert!(!is_killable(ajeno, true, ROOT_WIN, 999, 500));
     }
 
     #[test]

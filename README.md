@@ -20,6 +20,17 @@ Los detalles de la orquestación están en [docs/arquitectura.md](docs/arquitect
 
 Requiere [Rust](https://rustup.rs) y Node 18+.
 
+En **Windows** hacen falta además las Build Tools de C++ (Rust compila con el enlazador
+de MSVC) y el runtime de WebView2, que ya viene con Windows 11:
+
+```bash
+winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--wait --quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+winget install --id Rustlang.Rustup -e
+```
+
+Quien no quiera esos gigabytes puede saltárselo: `.github/workflows/build.yml`
+compila el instalador de Windows en cada push y lo deja como artefacto.
+
 ```bash
 npm install
 npm run dev
@@ -47,6 +58,7 @@ src-tauri/
   icons/            generados a partir del sprite del logo
 docs/               arquitectura y decisiones
 reference/          copia de solo lectura de ElyPrism (gitignorada)
+.github/workflows/  tests en macOS y Windows, e instalador de Windows
 ```
 
 ## Licencia
