@@ -180,7 +180,12 @@ jobs:
           # que dejaría a los instalados comprobando algo que nunca les sirve.
           FRAGS=$(find recogido -name 'frag-*.json' | tr '\n' ' ')
           if [ -n "$FRAGS" ]; then
-            node -e '
+            # La versión se pasa al proceso de node aquí mismo. Lo escrito en
+            # $GITHUB_ENV solo existe a partir del paso SIGUIENTE, así que leerla
+            # de process.env en este mismo paso la deja en `undefined`, y
+            # JSON.stringify borra las claves undefined: el manifiesto saldría sin
+            # `version` y el updater se quedaría sin nada que comparar.
+            VERSION="$VER" node -e '
               const fs = require("fs");
               const platforms = {};
               for (const f of process.argv.slice(1)) Object.assign(platforms, JSON.parse(fs.readFileSync(f, "utf8")));
@@ -192,6 +197,16 @@ jobs:
               }, null, 2) + "\n");
             ' $FRAGS
             echo "--- latest.json ---"; cat dist/latest.json
+
+            # Un manifiesto incompleto no da error en ningún sitio: falla mucho
+            # después, en la máquina de quien intente actualizar.
+            node -e '
+              const m = JSON.parse(require("fs").readFileSync("dist/latest.json", "utf8"));
+              if (!m.version) { console.error("::error::latest.json sin version"); process.exit(1); }
+              const n = Object.keys(m.platforms || {}).length;
+              if (!n) { console.error("::error::latest.json sin plataformas"); process.exit(1); }
+              console.log("manifiesto correcto: v" + m.version + ", " + n + " plataforma(s)");
+            '
           else
             echo "sin firmas: no se publica manifiesto"
           fi
