@@ -93,6 +93,29 @@ pub fn launch_args(
     args
 }
 
+/// Argumentos para que el usuario inicie sesión.
+///
+/// **Con instancia va `--launch` y nunca `--show-window`.** Medido contra el release
+/// 11.1.0 enumerando las ventanas del proceso: así el motor no abre su ventana
+/// principal, solo un aviso «No Accounts» y de ahí su página de Cuentas.
+/// `LaunchController::decideAccount()` lo confirma — con la lista vacía llama a
+/// `ShowGlobalSettings(..., "accounts")`. Pasar `--show-window` era justamente lo que
+/// hacía aparecer el launcher ajeno completo.
+///
+/// Sin instancia no hay alternativa: `--launch` exige una que exista, así que se cae
+/// a la ventana principal. Pasa solo si alguien abre el setup antes de instalar nada.
+pub fn login_args(layout: &Layout, instance: Option<&str>) -> Vec<String> {
+    let mut args = vec!["--dir".into(), path_arg(&layout.engine())];
+    match instance {
+        Some(id) => {
+            args.push("--launch".into());
+            args.push(id.to_string());
+        }
+        None => args.push("--show-window".into()),
+    }
+    args
+}
+
 /// Argumentos para importar un `.mrpack`.
 ///
 /// `ModrinthInstanceCreationTask` del motor resuelve el índice, descarga cada mod
@@ -425,6 +448,25 @@ mod tests {
         let a = launch_args(&layout(), "dino-smp", &Account::Offline("Kevs".into()), None);
         assert_eq!(arg_tras(&a, "--offline"), Some("Kevs"));
         assert!(!a.iter().any(|x| x == "--profile"));
+    }
+
+    #[test]
+    fn el_login_con_instancia_no_abre_el_launcher_entero() {
+        // Es el punto entero del cambio: `--show-window` es lo que hacía aparecer la
+        // ventana del motor completa en vez de solo su página de Cuentas.
+        let a = login_args(&layout(), Some("dino-smp"));
+        assert!(!a.iter().any(|x| x == "--show-window"));
+        assert_eq!(arg_tras(&a, "--launch"), Some("dino-smp"));
+        assert_eq!(arg_tras(&a, "--dir"), Some(path_arg(&layout().engine()).as_str()));
+    }
+
+    #[test]
+    fn sin_instancia_no_queda_mas_que_la_ventana_principal() {
+        // `--launch` exige una instancia que exista; sin ella el motor no tiene por
+        // dónde entrar a la página de cuentas.
+        let a = login_args(&layout(), None);
+        assert!(a.iter().any(|x| x == "--show-window"));
+        assert!(!a.iter().any(|x| x == "--launch"));
     }
 
     #[test]

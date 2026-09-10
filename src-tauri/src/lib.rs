@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod engine;
 pub mod install;
 pub mod pack;
@@ -68,7 +69,21 @@ fn boot_ping(app: tauri::AppHandle, msg: String) {
 
 
 /// Versión del motor que fijamos. Subirla es una decisión, no un accidente.
+///
+/// El formato de `accounts.json` que escribe `auth.rs` está verificado contra esta
+/// versión concreta. Si se sube, hay que volver a comprobarlo.
 const ENGINE_VERSION: &str = "11.1.0";
+
+/// `client_id` propio en Ely.by, de `account.ely.by` (gratis y self-service).
+///
+/// No es un secreto: el flujo de código de dispositivo no usa `client_secret`, por eso
+/// puede vivir en el repo. Se puede sobrescribir al compilar con `DINO_ELY_CLIENT_ID`.
+/// Vacío significa que la rama de Ely.by queda deshabilitada, y la interfaz lo dice en
+/// vez de fallar a medio login.
+const ELY_CLIENT_ID: &str = match option_env!("DINO_ELY_CLIENT_ID") {
+    Some(id) => id,
+    None => "",
+};
 
 /// ¿Hay alguna cuenta registrada en el motor?
 ///
@@ -161,16 +176,11 @@ async fn play(app: tauri::AppHandle, args: PlayArgs) -> Result<String, String> {
         return Ok("installed".into());
     }
 
-    // Primera vez: hace falta iniciar sesión, y eso sí necesita la ventana del motor.
+    // Primera vez: hace falta iniciar sesión. El motor NO se abre desde aquí: quien
+    // dirige eso es el setup, que primero pregunta qué cuenta tiene el usuario. Abrirlo
+    // a ciegas era lo que le plantaba delante un launcher ajeno sin haberlo pedido.
     if !has_account(&layout) {
         emit("Falta iniciar sesión", 1.0);
-        // Solo para el login le devolvemos el Dock: una ventana de app agente sale
-        // sin foco y no se podría escribir en ella. Al siguiente Jugar se re-oculta.
-        install::set_dock_visibility(&layout.engine_app(), false);
-        std::process::Command::new(&bin)
-            .args(["--dir", &layout.engine().to_string_lossy(), "--show-window"])
-            .spawn()
-            .map_err(|e| format!("no pude abrir el motor: {e}"))?;
         return Ok("login".into());
     }
 
@@ -200,6 +210,124 @@ async fn play(app: tauri::AppHandle, args: PlayArgs) -> Result<String, String> {
         .spawn()
         .map_err(|e| format!("no pude lanzar el juego: {e}"))?;
     Ok("launched".into())
+}
+
+/// Abre el motor para iniciar sesión con Microsoft.
+///
+/// Microsoft no se puede resolver aquí dentro: su flujo necesita un `client_id` de
+/// Azure con acceso a la API de Minecraft aprobado por Mojang, que es un trámite
+/// externo. Pero sí se puede evitar que aparezca el launcher ajeno completo: con
+/// `--launch` y sin `--show-window`, el motor va directo a su página de Cuentas.
+///
+/// Devuelve `"direct"` si se pudo hacer así, o `"full"` si hubo que caer a la ventana
+/// principal por no haber instancia todavía. La interfaz redacta el aviso según cuál.
+///
+/// Si alguien cierra el login sin añadir cuenta, el motor no se detiene ahí: pregunta
+/// «Play demo?» y, si le dicen que no —es el botón por defecto—, se va. La interfaz
+/// ofrece cancelar desde nuestra ventana, que mata el motor antes de ese rodeo.
+#[tauri::command]
+async fn open_engine_login(
+    app: tauri::AppHandle,
+    instance: Option<String>,
+) -> Result<String, String> {
+    let layout = layout_of(&app)?;
+    let emit = |paso: &str, frac: f32| {
+        let _ = app.emit("install", serde_json::json!({ "paso": paso, "frac": frac }));
+    };
+    let bin = install::ensure_engine(&layout, ENGINE_VERSION, &emit)
+        .await
+        .map_err(|e| e.to_string())?;
+    install::apply_silent_config(&layout);
+    // Para el login sí queremos que se vea y tenga foco: una ventana de app agente
+    // sale sin foco en macOS y no se podría escribir en ella.
+    install::set_dock_visibility(&layout.engine_app(), false);
+
+    // `--launch` solo vale si la instancia existe de verdad en disco.
+    let id = instance.filter(|id| layout.instance(id).exists());
+    let modo = if id.is_some() { "direct" } else { "full" };
+    let args = engine::login_args(&layout, id.as_deref());
+
+    std::process::Command::new(&bin)
+        .args(&args)
+        .spawn()
+        .map_err(|e| format!("no pude abrir el motor: {e}"))?;
+    Ok(modo.into())
+}
+
+/// Ventanas visibles del motor, para saber si cancelaron el login.
+///
+/// `null` = este sistema no sabe contarlas; la interfaz debe seguir esperando en vez
+/// de dar por hecho que no hay ninguna.
+#[tauri::command]
+fn engine_windows(app: tauri::AppHandle) -> Option<usize> {
+    let layout = layout_of(&app).ok()?;
+    install::engine_windows(&layout.root)
+}
+
+/// Arranca el login de Ely.by y devuelve el código que hay que teclear.
+#[tauri::command]
+async fn ely_start_login() -> Result<auth::DeviceCode, String> {
+    auth::start_device_code(ELY_CLIENT_ID).await.map_err(|e| e.to_string())
+}
+
+/// Un sondeo del login. La interfaz lo repite cada `interval` segundos.
+///
+/// Devuelve `"pending"`, `"denied"` o `"ok"`. Con `"ok"` la cuenta ya está escrita
+/// en el `accounts.json` del motor y se puede jugar.
+#[tauri::command]
+async fn ely_poll_login(app: tauri::AppHandle, code: String) -> Result<String, String> {
+    let layout = layout_of(&app)?;
+    match auth::poll_once(ELY_CLIENT_ID, &code).await.map_err(|e| e.to_string())? {
+        auth::Poll::Pending => Ok("pending".into()),
+        auth::Poll::Denied => Ok("denied".into()),
+        auth::Poll::Ready(tokens) => {
+            let perfil = auth::fetch_profile(&tokens.access_token)
+                .await
+                .map_err(|e| e.to_string())?;
+            let cuenta = auth::account_json(ELY_CLIENT_ID, &tokens, auth::profile_json(&perfil));
+            auth::save_account(&layout, cuenta).map_err(|e| e.to_string())?;
+            Ok("ok".into())
+        }
+    }
+}
+
+/// ¿Está configurada la rama de Ely.by?
+///
+/// Sin `client_id` el botón se enseña deshabilitado con el motivo, en vez de dejar
+/// que alguien lo pulse y se coma un error a mitad del flujo.
+#[tauri::command]
+fn ely_configured() -> bool {
+    !ELY_CLIENT_ID.trim().is_empty()
+}
+
+/// Cierra la ventana del motor cuando ya cumplió su papel.
+#[tauri::command]
+fn close_engine(app: tauri::AppHandle) -> Result<usize, String> {
+    let layout = layout_of(&app)?;
+    Ok(install::close_engine(&layout.root))
+}
+
+/// Abre una dirección en el navegador del sistema.
+///
+/// Solo `https`, y solo hacia Ely.by: la interfaz no debería poder abrir cualquier
+/// cosa, y las únicas direcciones que necesita son las del propio login.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    const PERMITIDOS: [&str; 2] = ["https://account.ely.by", "https://ely.by"];
+    if !PERMITIDOS.iter().any(|p| url.starts_with(p)) {
+        return Err(format!("dirección no permitida: {url}"));
+    }
+    #[cfg(target_os = "macos")]
+    let cmd = "open";
+    #[cfg(target_os = "windows")]
+    let cmd = "explorer";
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let cmd = "xdg-open";
+    std::process::Command::new(cmd)
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// Tamaño en disco de una carpeta, en bytes.
@@ -424,6 +552,13 @@ pub fn run() {
             open_folder,
             inspect_mrpack,
             java_runtimes,
+            open_engine_login,
+            engine_windows,
+            ely_start_login,
+            ely_poll_login,
+            ely_configured,
+            close_engine,
+            open_url,
         ])
         .run(tauri::generate_context!())
         .expect("Dino Launcher no pudo arrancar");

@@ -161,6 +161,61 @@ y Ely.by la alternativa.
 en cualquier servidor sin plugin ni mod**. Eso elimina CustomSkinLoader, la API propia de skins
 y el hosting de texturas que estaban en el plan anterior.
 
+## Cuentas: qué resuelve el motor y qué resolvemos nosotros
+
+El motor sigue siendo el dueño de las cuentas —las guarda, las refresca y las usa para
+lanzar—, pero **no tiene ninguna bandera para abrir su diálogo de login** (comprobado
+contra `--help` del release 11.1.0: `--dir`, `--launch`, `--server`, `--world`,
+`--profile`, `--offline`, `--alive`, `--show-window`, `--import`, `--show`). Sin eso, la
+única forma de que alguien iniciara sesión era abrirle el motor entero, que es
+exactamente el launcher ajeno que este proyecto existe para no enseñar.
+
+El setup de primera vez pregunta primero y de ahí salen dos caminos distintos:
+
+- **Microsoft** — sigue pasando por el motor: hacerlo aquí dentro exigiría un `client_id`
+  de Azure con acceso a la API de Minecraft **aprobado por Mojang**, trámite externo que
+  puede negarse. Lo que sí cambia es cuánto se ve. Se lanza con `--launch <instancia>` y
+  **nunca** con `--show-window`; medido enumerando las ventanas del proceso, así el motor
+  no abre su ventana principal, solo el aviso «No Accounts» y de ahí su página de Cuentas.
+  Pasar `--show-window` —que es lo que se hacía antes— era justamente lo que plantaba
+  delante el launcher ajeno completo.
+
+  Tras iniciar sesión el motor continúa solo y abre el juego, así que en ese camino **no**
+  se le mata: hacerlo abortaría el lanzamiento. Si en cambio alguien cierra el login sin
+  entrar, el motor pregunta «Play demo?» —con *Cancelar* por defecto, sin ajuste que lo
+  desactive— y se va. No se intenta adivinar ese momento contando ventanas, porque al
+  cerrar un diálogo abre el siguiente y el conteo no baja; para cortar antes está el botón
+  de cancelar de nuestra ventana, que llama a `close_engine`.
+
+  `--launch` exige que la instancia exista, así que si alguien abre el setup antes de
+  instalar el modpack se cae a `--show-window`. `open_engine_login` devuelve cuál de los
+  dos caminos consiguió para que la interfaz redacte el aviso en consecuencia.
+- **Ely.by** — nativo, en `src-tauri/src/auth.rs`. Código de dispositivo contra
+  `account.ely.by`, sin abrir el motor y sin que nadie escriba una contraseña aquí dentro.
+  Necesita un `client_id` propio, que en Ely.by es self-service y no lleva `client_secret`
+  (por eso puede vivir en el repo). Con `ELY_CLIENT_ID` vacío la rama se enseña
+  deshabilitada con el motivo, en vez de fallar a mitad del flujo.
+
+Ely.by **no tiene API de registro**: crear una cuenta pide correo, contraseña y
+confirmación en su web. El botón de «crear una» abre `account.ely.by/register` en el
+navegador y ahí termina nuestra parte.
+
+### Escribir en `accounts.json` es la parte delicada
+
+`auth.rs` escribe la cuenta en el archivo del motor. El formato está verificado leyendo
+`AccountData.cpp` y `AccountList.cpp` del release fijado, y tiene dos trampas que no dan
+error, solo se comen la cuenta en silencio:
+
+- `formatVersion` **tiene que ser 3**. Con cualquier otro número el motor renombra el
+  archivo a `accounts-old.json` y arranca con la lista vacía, llevándose lo que hubiera.
+- `profile` debe traer `id`, `name`, un `skin` con `id`/`url`/`variant` (cadenas, aunque
+  sean vacías) y `capes` como array. Si falta cualquiera, `profileFromJSONV3` descarta el
+  perfil entero y la cuenta queda inválida: el launcher pediría iniciar sesión para
+  siempre sin decir por qué.
+
+Las pruebas de `auth.rs` replican esas reglas de upstream a propósito, para que un perfil
+mal formado falle en `cargo test` y no en la máquina de alguien.
+
 ## Distribución
 
 Catálogo en GitHub (`catalog.json` + los `.mrpack` como release assets). El launcher lo consulta

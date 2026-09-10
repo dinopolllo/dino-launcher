@@ -565,6 +565,27 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   font-size:26px;line-height:1.06;letter-spacing:-.03em;margin:0}
 .ob-body{font-size:13.5px;color:var(--text-dim);line-height:1.55;margin:0}
 
+/* --- setup de primera vez: las dos puertas de entrada --- */
+.choice{display:flex;flex-direction:column;gap:10px;margin-top:18px}
+.choice button{
+  display:flex;flex-direction:column;align-items:flex-start;gap:3px;
+  padding:14px 16px;text-align:left;cursor:pointer;
+  border-radius:var(--r-card);border:1px solid var(--hairline);
+  background:var(--glass-1);color:var(--text);
+  font-family:var(--font-body);font-size:13.5px;font-weight:600;
+  transition:background .15s ease,border-color .15s ease;
+}
+.choice button:hover{background:var(--glass-2);border-color:var(--hairline-strong)}
+.choice button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.choice button small{font-weight:400;font-size:11.5px;color:var(--text-dim);line-height:1.45}
+.choice button[disabled]{opacity:.5;cursor:not-allowed}
+.link-min{
+  background:none;border:0;padding:0;margin-top:14px;cursor:pointer;
+  font-family:var(--font-mono);font-size:10.5px;letter-spacing:.02em;
+  color:var(--text-faint);text-decoration:underline;text-underline-offset:3px;
+}
+.link-min:hover{color:var(--text-dim)}
+
 .ob-foot{display:flex;gap:9px;align-items:center;margin-top:22px;
   padding-top:17px;border-top:1px solid rgba(255,255,255,.065)}
 .ob-foot .btn{flex:none;padding:10px 18px}
@@ -883,6 +904,64 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       </div>
     </div>
   </div>
+
+  <!-- Setup real de primera vez. Comparte los estilos del de invitación, pero este
+       sí habla con el backend: es lo que sustituye a abrir el motor a secas. -->
+  <div class="onboard" id="setup" hidden>
+    <div class="ob-card">
+      <div class="ob-dots"><i class="done" data-sd="1"></i><i data-sd="2"></i><i data-sd="3"></i></div>
+
+      <div class="ob-step on" data-sp="1">
+        <span class="app-icon" style="--s:62px"><canvas data-dino width="22" height="21"></canvas></span>
+        <h2 class="ob-title">Conecta tu cuenta</h2>
+        <p class="ob-body">Solo se hace una vez. Después entras directo.</p>
+        <div class="choice">
+          <button type="button" id="sp-msa">
+            Tengo Minecraft comprado
+            <small>Inicias sesión con tu cuenta de Microsoft, la misma del juego.</small>
+          </button>
+          <button type="button" id="sp-ely">
+            No tengo Minecraft
+            <small>Usas una cuenta de Ely.by. Tu skin y capa se ven igual en el servidor.</small>
+          </button>
+        </div>
+      </div>
+
+      <div class="ob-step" data-sp="2-msa">
+        <h2 class="ob-title">Inicia sesión con Microsoft</h2>
+        <p class="ob-body" id="sp-msa-texto">Abriendo…</p>
+        <div class="note">
+          <b>No cierres esta ventana.</b> En cuanto detecte tu cuenta sigo yo solo.
+          No tienes que volver aquí a mano.
+        </div>
+        <div class="hint" id="sp-msa-estado">esperando…</div>
+        <button type="button" class="link-min" id="sp-msa-cancelar">Cancelar y volver</button>
+      </div>
+
+      <div class="ob-step" data-sp="2-ely">
+        <h2 class="ob-title">Conecta tu cuenta de Ely.by</h2>
+        <p class="ob-body">Abre <span class="mono-i" id="sp-ely-uri">account.ely.by</span>
+          en tu navegador y escribe este código:</p>
+        <div class="code" id="sp-ely-code"></div>
+        <div class="hint" id="sp-ely-estado">pidiendo código…</div>
+        <button type="button" class="btn" id="sp-ely-abrir" style="margin-top:14px">Abrir en el navegador</button>
+        <button type="button" class="link-min" id="sp-ely-crear">No tengo cuenta de Ely.by — crear una</button>
+      </div>
+
+      <div class="ob-step" data-sp="3">
+        <span class="app-icon" style="--s:62px"><canvas data-dino width="22" height="21"></canvas></span>
+        <h2 class="ob-title">Listo</h2>
+        <p class="ob-body" id="sp-listo">Tu cuenta quedó conectada.</p>
+      </div>
+
+      <div class="ob-foot">
+        <button class="ob-skip" id="sp-cerrar">Ahora no</button>
+        <span class="grow"></span>
+        <button class="btn" id="sp-atras" hidden>Atrás</button>
+        <button class="btn green" id="sp-jugar" hidden>Jugar</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -1079,6 +1158,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     if (e.key === "Escape" && !ob.hidden) closeOb();
   });
   renderOb();
+
 
   /* ================= estado real: pack, cuenta, servidor, instancia ================= */
   var call = function(cmd, args){
@@ -1354,7 +1434,10 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       install_only: !!opts.installOnly
     }}).then(function(r){
       if (r === "login") {
-        showAlert("<b>Falta iniciar sesión.</b> Se abrió la ventana del motor: agrega tu cuenta ahí. Es solo la primera vez.");
+        /* Ya no se deja al usuario frente a la ventana del motor sin contexto:
+           el setup pregunta primero qué cuenta tiene y guía la que elija. */
+        call("close_engine").catch(function(){});
+        spAbrir();
       } else if (!opts.installOnly) {
         setProgress("Abriendo Minecraft", 1);
       }
@@ -1398,6 +1481,184 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
         .finally(function(){ btnVerify.disabled = false; btnVerify.textContent = antes; });
     });
   }
+
+  /* ================= setup real de primera vez =================
+     La rama de Microsoft no se puede resolver aquí dentro: su flujo necesita un
+     client_id de Azure con acceso a la API de Minecraft aprobado por Mojang. Así que
+     abre el motor, pero vigila accounts.json y lo cierra sola en cuanto entra la
+     cuenta — antes te dejaba con una ventana ajena abierta y sin instrucciones.
+     La de Ely.by sí es nativa: código de dispositivo, sin ventana del motor y sin
+     que nadie escriba una contraseña aquí dentro. */
+  function dlog(m){ try{ window.__TAURI__.core.invoke("boot_ping", { msg: m }); }catch(e){} }
+  var setup   = document.getElementById("setup");
+  var spPasos = Array.prototype.slice.call(setup.querySelectorAll("[data-sp]"));
+  var spDots  = Array.prototype.slice.call(setup.querySelectorAll(".ob-dots i"));
+  var spAtras = document.getElementById("sp-atras");
+  var spJugar = document.getElementById("sp-jugar");
+  var spTimer = null;   /* sondeo en curso: hay que pararlo al salir o se queda vivo */
+  var spUri   = "https://account.ely.by";
+
+  function spIr(paso, punto){
+    spPasos.forEach(function(e){ e.classList.toggle("on", e.dataset.sp === paso); });
+    spDots.forEach(function(d, i){ d.classList.toggle("done", i < punto); });
+    spAtras.hidden = (paso === "1" || paso === "3");
+    spJugar.hidden = (paso !== "3");
+  }
+  function spParar(){ if (spTimer) { clearTimeout(spTimer); spTimer = null; } }
+  function spCerrar(){ spParar(); setup.hidden = true; }
+  function spAbrir(){ spParar(); setup.hidden = false; spIr("1", 1); }
+
+  function mmss(seg){
+    var m = Math.floor(seg / 60), s2 = seg % 60;
+    return m + ":" + (s2 < 10 ? "0" : "") + s2;
+  }
+  /* El código va carácter por carácter, como en la vista de invitación. */
+  function pintarCodigo(el, texto){
+    el.innerHTML = "";
+    String(texto).split("").forEach(function(ch){
+      var sp = document.createElement("span");
+      if (ch === "-" || ch === " ") { sp.className = "sep"; sp.textContent = "–"; }
+      else sp.textContent = ch;
+      el.appendChild(sp);
+    });
+  }
+
+  function spListo(yaJugando){
+    spParar();
+    renderAccount().then(function(){
+      var a = document.querySelector(".account-name");
+      var nombre = a ? a.textContent : "";
+      var quien = (nombre && nombre !== "Sin cuenta") ? "Tu cuenta " + nombre : "Tu cuenta";
+      document.getElementById("sp-listo").textContent = yaJugando
+        ? quien + " quedó conectada. Minecraft está abriendo."
+        : quien + " quedó conectada.";
+    }).catch(function(){});
+    spIr("3", 3);
+    /* Si el motor ya está lanzando el juego, ofrecer "Jugar" lanzaría una segunda vez. */
+    spJugar.hidden = !!yaJugando;
+  }
+
+  /* ---- rama Microsoft ----
+     Con instancia instalada el motor va directo a su página de Cuentas y no enseña su
+     ventana principal (modo "direct"). Ahí, tras iniciar sesión, el propio motor sigue
+     y abre Minecraft: por eso en ese modo NO lo matamos, sería abortarle el lanzamiento.
+
+     Si alguien cierra el login sin entrar, el motor pregunta «Play demo?» y se va si le
+     dicen que no. No se intenta adivinar ese momento contando ventanas —al cerrar un
+     diálogo abre el otro, así que el conteo no baja—: lo que se detecta es que el motor
+     terminó, para dejar de esperar. Para cortar antes está el botón de cancelar. */
+  document.getElementById("sp-msa").addEventListener("click", function(){
+    spIr("2-msa", 2);
+    var estado = document.getElementById("sp-msa-estado");
+    var texto  = document.getElementById("sp-msa-texto");
+    estado.textContent = "abriendo el motor…";
+    texto.textContent  = "Abriendo…";
+
+    call("open_engine_login", { instance: PACK ? PACK.id : null }).then(function(modo){
+      var directo = (modo === "direct");
+      texto.innerHTML = directo
+        ? 'Se abrió la página de <span class="mono-i">Cuentas</span> del motor. ' +
+          'Añade ahí tu cuenta de Microsoft.'
+        : 'Se abrió la ventana del motor. Ve a <span class="mono-i">Cuentas</span> ' +
+          'y añade tu cuenta de Microsoft.';
+      estado.textContent = "esperando a que inicies sesión…";
+
+      var vistas = false;   /* ¿llegamos a ver alguna ventana suya? */
+      (function vigilar(){
+        spTimer = setTimeout(function(){
+          call("active_account").then(function(a){
+            if (a && a.name) {
+              if (directo) {
+                /* El motor sigue solo y abre el juego. Matarlo aquí lo abortaría. */
+                estado.textContent = "sesión iniciada; Minecraft está abriendo…";
+              } else {
+                estado.textContent = "cuenta detectada, cerrando el motor…";
+                call("close_engine").catch(function(){});
+              }
+              spListo(directo);
+              return;
+            }
+            /* Sin cuenta todavía: ¿el motor sigue ahí? */
+            return call("engine_windows").then(function(n){
+              if (n === null || n === undefined) return vigilar();  /* no se puede saber */
+              if (n > 0) { vistas = true; return vigilar(); }
+              if (!vistas) return vigilar();   /* aún no había abierto: no es cancelar */
+              estado.textContent = "se cerró el motor sin iniciar sesión. Puedes reintentarlo.";
+              spAtras.hidden = false;
+            });
+          }).catch(function(){ vigilar(); });
+        }, 2000);
+      })();
+    }).catch(function(e){ estado.textContent = "no se pudo abrir el motor: " + String(e); });
+  });
+
+  /* ---- rama Ely.by: código de dispositivo, todo aquí dentro ---- */
+  document.getElementById("sp-ely").addEventListener("click", function(){
+    spIr("2-ely", 2);
+    var code   = document.getElementById("sp-ely-code");
+    var estado = document.getElementById("sp-ely-estado");
+    var uriEl  = document.getElementById("sp-ely-uri");
+    code.innerHTML = "";
+    estado.textContent = "pidiendo código…";
+
+    call("ely_configured").then(function(ok){
+      if (!ok) {
+        /* Mejor decirlo aquí que dejar que alguien pulse y se coma un error a medias. */
+        estado.innerHTML = "Falta registrar el <span class=\"mono-i\">client_id</span> " +
+                           "de Ely.by y recompilar. Mientras tanto, usa la otra opción.";
+        return;
+      }
+      return call("ely_start_login").then(function(d){
+        pintarCodigo(code, d.user_code);
+        uriEl.textContent = String(d.verification_uri).replace(/^https?:\/\//, "");
+        spUri = d.verification_uri_complete || d.verification_uri;
+        var quedan = d.expires_in;
+        estado.textContent = "esperando… " + mmss(quedan);
+        (function sondear(){
+          spTimer = setTimeout(function(){
+            quedan -= d.interval;
+            if (quedan <= 0) { estado.textContent = "el código expiró; vuelve a intentarlo."; return; }
+            call("ely_poll_login", { code: d.device_code }).then(function(r){
+              if (r === "ok") spListo();
+              else if (r === "denied") estado.textContent = "cancelaste el acceso.";
+              else { estado.textContent = "esperando… " + mmss(quedan); sondear(); }
+            }).catch(function(e){ estado.textContent = String(e); });
+          }, d.interval * 1000);
+        })();
+      });
+    }).catch(function(e){ estado.textContent = String(e); });
+  });
+
+  /* Cancelar desde aquí mata el motor: es lo que evita el rodeo del «Play demo?». */
+  document.getElementById("sp-msa-cancelar").addEventListener("click", function(){
+    spParar();
+    call("close_engine").catch(function(){});
+    spIr("1", 1);
+  });
+
+  document.getElementById("sp-ely-abrir").addEventListener("click", function(){
+    call("open_url", { url: spUri }).catch(function(e){ console.error(e); });
+  });
+  document.getElementById("sp-ely-crear").addEventListener("click", function(){
+    /* Ely.by no tiene API de registro: pide correo y confirmación en su web.
+       Lo único honesto es llevar al usuario allí. */
+    call("open_url", { url: "https://account.ely.by/register" }).catch(function(e){ console.error(e); });
+  });
+
+  document.getElementById("sp-cerrar").addEventListener("click", spCerrar);
+  spAtras.addEventListener("click", function(){ spParar(); spIr("1", 1); });
+  spJugar.addEventListener("click", function(){ spCerrar(); runPlay().catch(function(){}); });
+  document.addEventListener("keydown", function(e){
+    if (e.key === "Escape" && !setup.hidden) spCerrar();
+  });
+
+  /* Primera vez: si no hay cuenta, el setup sale solo. Es justo el momento en que
+     antes te aparecía el launcher del motor sin que lo hubieras pedido. */
+  call("active_account").then(function(a){
+    var hay = !!(a && a.name);
+    dlog("setup: cuenta=" + (hay ? a.name : "ninguna"));
+    if (!hay) { spAbrir(); dlog("setup: visible=" + (!setup.hidden)); }
+  }).catch(function(e){ dlog("setup: fallo al consultar cuenta: " + String(e)); });
 
   refreshAll();
 

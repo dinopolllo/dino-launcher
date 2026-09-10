@@ -344,6 +344,104 @@ fn matar(pid: u32) -> bool {
     }
 }
 
+/// Cuántas ventanas visibles tiene ahora mismo el motor.
+///
+/// Sirve para saber que el motor terminó sin que apareciera ninguna cuenta —o sea,
+/// que alguien canceló el login— y poder decirlo en la interfaz en vez de dejarla
+/// esperando para siempre.
+///
+/// No sirve para adivinar el momento exacto de la cancelación: medido contra el
+/// release 11.1.0, al cerrar el aviso «No Accounts» el motor abre acto seguido otro
+/// diálogo, «Play demo?», así que el conteo pasa de uno a uno. Ese diálogo pregunta
+/// antes de nada y trae *Cancelar* como botón por defecto (`askPlayDemo()`, sin ajuste
+/// que lo desactive), de modo que la demo no arranca sola. Quien quiera cortar antes
+/// tiene el botón de cancelar de nuestra propia ventana, que llama a `close_engine`.
+///
+/// `None` significa «no se puede saber en este sistema»: solo está implementado en
+/// Windows, y quien llama debe tratarlo como «sigue esperando», nunca como «cero».
+pub fn engine_windows(root: &Path) -> Option<usize> {
+    #[cfg(not(windows))]
+    {
+        let _ = root;
+        None
+    }
+    #[cfg(windows)]
+    {
+        use std::sync::Mutex;
+
+        #[link(name = "user32")]
+        #[allow(non_snake_case)] // los nombres son los de la API, no se traducen
+        extern "system" {
+            fn EnumWindows(cb: extern "system" fn(isize, isize) -> i32, param: isize) -> i32;
+            fn GetWindowThreadProcessId(hwnd: isize, pid: *mut u32) -> u32;
+            fn IsWindowVisible(hwnd: isize) -> i32;
+        }
+
+        // `EnumWindows` toma una función suelta, sin contexto propio, así que los PIDs
+        // que buscamos y la cuenta tienen que vivir fuera. El candado hace que dos
+        // llamadas a la vez no se pisen los datos.
+        static ESTADO: Mutex<(Vec<u32>, usize)> = Mutex::new((Vec::new(), 0));
+
+        extern "system" fn visitar(hwnd: isize, _p: isize) -> i32 {
+            let mut pid = 0u32;
+            unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+            if let Ok(mut e) = ESTADO.lock() {
+                if e.0.contains(&pid) && unsafe { IsWindowVisible(hwnd) } != 0 {
+                    e.1 += 1;
+                }
+            }
+            1 // seguir enumerando
+        }
+
+        let root = root.to_str()?;
+        let nuestros: Vec<u32> = procesos()
+            .iter()
+            .filter(|p| {
+                en_nuestra_carpeta(&p.args, root)
+                    && p.args.to_lowercase().contains("elyprismlauncher")
+            })
+            .map(|p| p.pid)
+            .collect();
+        if nuestros.is_empty() {
+            return Some(0); // sin motor no hay ventanas que contar
+        }
+
+        let mut guard = ESTADO.lock().ok()?;
+        *guard = (nuestros, 0);
+        drop(guard);
+        unsafe { EnumWindows(visitar, 0) };
+        Some(ESTADO.lock().ok()?.1)
+    }
+}
+
+/// Cierra el motor que abrimos para iniciar sesión.
+///
+/// `kill_orphans` no sirve aquí: ese solo toca procesos que ya nadie sostiene, y este
+/// lo acabamos de lanzar nosotros. Se usa cuando la cuenta ya aparece en
+/// `accounts.json` y la ventana del motor no tiene nada más que hacer en pantalla.
+///
+/// La partida sigue siendo intocable: `GAME_MAIN_CLASS` la protege igual que siempre.
+pub fn close_engine(root: &Path) -> usize {
+    let Some(root) = root.to_str() else { return 0 };
+    let yo = std::process::id();
+    let mut cerrados = 0;
+    for p in procesos() {
+        if p.pid == yo || !en_nuestra_carpeta(&p.args, root) {
+            continue;
+        }
+        if p.args.contains(GAME_MAIN_CLASS) {
+            continue; // es la partida: jamás
+        }
+        if !p.args.to_lowercase().contains("elyprismlauncher") {
+            continue;
+        }
+        if matar(p.pid) {
+            cerrados += 1;
+        }
+    }
+    cerrados
+}
+
 /// Mata procesos huérfanos que dejamos atrás en sesiones anteriores.
 ///
 /// Dos fuentes reales, vistas en pruebas:
