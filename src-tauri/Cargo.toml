@@ -19,6 +19,9 @@ thiserror = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
+# Para el UUID sin conexión: es MD5 porque así lo define Java en nameUUIDFromBytes,
+# y tiene que dar el mismo valor que el motor y que el servidor de Minecraft.
+md-5 = "0.10"
 futures-util = "0.3"
 base64 = "0.22"
 hickory-resolver = { version = "0.24", default-features = false, features = ["tokio-runtime", "system-config"] }

@@ -151,16 +151,6 @@ salió la instancia, así que la detección de actualizaciones sale casi gratis.
 Los `overrides/` del `.mrpack` son *managed* por definición. Los archivos *seed* se copian
 una única vez y después se respetan; ese es el trabajo propio de Dino Launcher.
 
-## Cuentas
-
-ElyPrism trae **Microsoft y Ely.by**, ambos con flujo de código de dispositivo
-(`ElyDeviceCodeStep`, `ElyYggdrasilTokenStep`). Microsoft es el predeterminado en la interfaz
-y Ely.by la alternativa.
-
-`ElyPatchTask` inyecta los parches oficiales de authlib de Ely.by: **las skins y capas se ven
-en cualquier servidor sin plugin ni mod**. Eso elimina CustomSkinLoader, la API propia de skins
-y el hosting de texturas que estaban en el plan anterior.
-
 ## Cuentas: qué resuelve el motor y qué resolvemos nosotros
 
 El motor sigue siendo el dueño de las cuentas —las guarda, las refresca y las usa para
@@ -190,28 +180,50 @@ El setup de primera vez pregunta primero y de ahí salen dos caminos distintos:
   `--launch` exige que la instancia exista, así que si alguien abre el setup antes de
   instalar el modpack se cae a `--show-window`. `open_engine_login` devuelve cuál de los
   dos caminos consiguió para que la interfaz redacte el aviso en consecuencia.
-- **Ely.by** — nativo, en `src-tauri/src/auth.rs`. Código de dispositivo contra
-  `account.ely.by`, sin abrir el motor y sin que nadie escriba una contraseña aquí dentro.
-  Necesita un `client_id` propio, que en Ely.by es self-service y no lleva `client_secret`
-  (por eso puede vivir en el repo). Con `ELY_CLIENT_ID` vacío la rama se enseña
-  deshabilitada con el motivo, en vez de fallar a mitad del flujo.
+- **Sin conexión** — nativo, en `src-tauri/src/auth.rs`. Se pide un nombre y se escribe
+  la cuenta directamente: no autentica contra nadie, así que el motor ni se abre. El
+  nombre y el UUID que se deriva de él son toda la identidad.
 
-Ely.by **no tiene API de registro**: crear una cuenta pide correo, contraseña y
-confirmación en su web. El botón de «crear una» abre `account.ely.by/register` en el
-navegador y ahí termina nuestra parte.
+  Se descartó Ely.by, que era la alternativa anterior. Daba identidad real y skins en
+  cualquier servidor, pero a cambio pedía registro con correo y confirmación, un
+  `client_id` propio y depender de un servicio ajeno cuyo flujo de código de dispositivo
+  ni siquiera está documentado. Para un launcher entre amigos no compensaba.
+
+  La contrapartida asumida: **cualquiera puede escribir el nombre de otro** y entrar como
+  él. Se acepta a sabiendas; si algún día molesta, se resuelve entonces.
+
+### El UUID tiene que ser exactamente el que calcula Minecraft
+
+`uuid_offline` reimplementa `UUID.nameUUIDFromBytes` de Java sobre `OfflinePlayer:<nombre>`
+—MD5, versión 3, variante IETF—, que es lo que hacen `MinecraftAccount::uuidFromUsername`
+y el propio servidor. No es un identificador interno nuestro: es con el que el mundo guarda
+el inventario y la posición. Derivarlo de otra forma haría que alguien reapareciera sin
+nada de lo suyo, y sin ningún error que lo explicara.
+
+Por eso cambiar de nombre equivale a ser otro jugador. La interfaz lo avisa antes de crear
+la cuenta, que es el único momento en que sirve saberlo.
 
 ### Escribir en `accounts.json` es la parte delicada
 
 `auth.rs` escribe la cuenta en el archivo del motor. El formato está verificado leyendo
-`AccountData.cpp` y `AccountList.cpp` del release fijado, y tiene dos trampas que no dan
-error, solo se comen la cuenta en silencio:
+`MinecraftAccount.cpp` (`createOffline`), `AccountData.cpp` y `AccountList.cpp` del release
+fijado, y tiene trampas que no dan error: se comen la cuenta en silencio.
 
 - `formatVersion` **tiene que ser 3**. Con cualquier otro número el motor renombra el
   archivo a `accounts-old.json` y arranca con la lista vacía, llevándose lo que hubiera.
+- `ygg.token` es el literal **`"0"`**. Las versiones anteriores a la 7.2 usaban `"offline"`
+  y el motor todavía lo traduce, pero cualquier otro valor da una cuenta que no lanza.
+- `ygg.extra.userName` es de donde sale el nombre del jugador al lanzar — no del perfil.
 - `profile` debe traer `id`, `name`, un `skin` con `id`/`url`/`variant` (cadenas, aunque
-  sean vacías) y `capes` como array. Si falta cualquiera, `profileFromJSONV3` descarta el
-  perfil entero y la cuenta queda inválida: el launcher pediría iniciar sesión para
-  siempre sin decir por qué.
+  vacías) y `capes` como array. Si falta cualquiera, `profileFromJSONV3` descarta el perfil
+  entero, el motor concluye que la cuenta no posee Minecraft y **lanza el juego en modo
+  Demo**: 100 minutos y un mundo fijo, sin decir por qué.
+
+Ese último punto es el que hace que esto funcione. Una cuenta sin conexión recién creada
+*dentro* del motor no posee Minecraft hasta que se guarda y se vuelve a leer; la nuestra
+nace ya en disco, así que pasa por `resumeStateFromV3`, que sin bloque `entitlement` y con
+perfil válido asume `ownsMinecraft`. Comprobado ejecutándolo: con esta cuenta el motor va
+directo a «Please wait…» y no aparece ni «No Accounts» ni «Play demo?».
 
 Las pruebas de `auth.rs` replican esas reglas de upstream a propósito, para que un perfil
 mal formado falle en `cargo test` y no en la máquina de alguien.

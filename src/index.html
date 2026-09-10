@@ -13,6 +13,16 @@
     /Windows/.test(ua) ? "win" : /Mac OS X|Macintosh/.test(ua) ? "mac" : "linux"
   );
 
+  /* El vidrio ya lo pidió Rust antes de que esto corra, pero preguntar por él es
+     asíncrono y la ventana se pinta antes de la respuesta. Se pinta opaca: es el
+     estado seguro, y pasar de opaco a translúcido es un fundido. Al revés sería
+     un frame de escritorio sin desenfocar, y eso sí se ve. */
+  try{
+    window.__TAURI__.core.invoke("window_glass").then(function(on){
+      if(on) document.documentElement.classList.add("glass");
+    });
+  }catch(e){}
+
   function ping(m){ try{ window.__TAURI__.core.invoke("boot_ping",{msg:m}); }catch(e){} }
   window.addEventListener("error", function(e){
     ping("JS ERROR: "+e.message+" @ "+(e.filename||"?")+":"+e.lineno);
@@ -33,6 +43,9 @@
   /* ground — near-black with a green bias, darker than before */
   --ink:#03060A;
   --ink-2:#050A0C;
+  /* La tinción de la ventana cuando hay vidrio detrás. Es `--ink` con alfa: el
+     mismo color, para que encender el vidrio aclare la ventana sin virarla. */
+  --window-tint:rgba(3,6,10,.62);
 
   /* glass material */
   --glass-0:rgba(255,255,255,.030);
@@ -154,14 +167,34 @@ body{
   border-radius:var(--r-window);
   overflow:hidden;
   display:flex;flex-direction:column;
-  /* .app ES la ventana: base opaca. Lo que va detrás es el escritorio, no un fondo propio.
-     La profundidad la dan el mesh interior y el vidrio de los paneles encima. */
-  background:var(--ink);
+  /* .app ES la ventana, y el fondo va en dos declaraciones a propósito: el color
+     es lo único que cambia al encender el vidrio, y separado se puede animar.
+     Opaco es el estado de partida y el respaldo, no el destino. */
+  background-color:var(--ink);
+  background-image:linear-gradient(180deg, rgba(255,255,255,.055), transparent 132px);
+  transition:background-color .28s ease;
   box-shadow:
     inset 0 1px 0 var(--specular),
     inset 0 0 0 1px var(--hairline),
     0 46px 92px -22px rgba(0,0,0,.85),
     0 10px 30px -12px rgba(0,0,0,.6);
+}
+
+/* ---------- vidrio de ventana ----------
+   `html.glass` lo pone el arranque, y solo si el sistema aplicó vidrio nativo detrás
+   de la ventana. Es la condición entera: sin ese desenfoque, bajar la opacidad no
+   deja ver vidrio, deja ver el escritorio, y el texto claro se pierde encima de lo
+   que sea que haya abierto. Por eso la interfaz nace opaca y se aclara después. */
+html.glass .app{background-color:var(--window-tint)}
+
+/* El mesh es lo que el vidrio tiñe. Translúcida la ventana, el mesh pinta sobre el
+   escritorio y no sobre negro: al mismo valor taparía justo lo que deja pasar. */
+html.glass .mesh{opacity:.72}
+
+/* La regla de Apple para Liquid Glass: la transparencia es una preferencia del
+   sistema, no del diseño. Reducida, el vidrio se va y vuelve el fondo opaco. */
+@media (prefers-reduced-transparency:reduce){
+  html.glass .app{background-color:var(--ink)}
 }
 
 .titlebar{
@@ -947,9 +980,9 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
             Tengo Minecraft comprado
             <small>Inicias sesión con tu cuenta de Microsoft, la misma del juego.</small>
           </button>
-          <button type="button" id="sp-ely">
+          <button type="button" id="sp-offline">
             No tengo Minecraft
-            <small>Usas una cuenta de Ely.by. Tu skin y capa se ven igual en el servidor.</small>
+            <small>Juegas con el nombre que elijas. Sin cuenta y sin instalar nada más.</small>
           </button>
         </div>
       </div>
@@ -965,14 +998,21 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
         <button type="button" class="link-min" id="sp-msa-cancelar">Cancelar y volver</button>
       </div>
 
-      <div class="ob-step" data-sp="2-ely">
-        <h2 class="ob-title">Conecta tu cuenta de Ely.by</h2>
-        <p class="ob-body">Abre <span class="mono-i" id="sp-ely-uri">account.ely.by</span>
-          en tu navegador y escribe este código:</p>
-        <div class="code" id="sp-ely-code"></div>
-        <div class="hint" id="sp-ely-estado">pidiendo código…</div>
-        <button type="button" class="btn" id="sp-ely-abrir" style="margin-top:14px">Abrir en el navegador</button>
-        <button type="button" class="link-min" id="sp-ely-crear">No tengo cuenta de Ely.by — crear una</button>
+      <div class="ob-step" data-sp="2-offline">
+        <h2 class="ob-title">Elige tu nombre</h2>
+        <p class="ob-body">Es como te verán en el servidor.</p>
+        <div class="field">
+          <label for="sp-nick">Nombre</label>
+          <input id="sp-nick" type="text" maxlength="16" autocomplete="off"
+                 spellcheck="false" placeholder="Kevs">
+        </div>
+        <div class="hint" id="sp-nick-estado">de 3 a 16 caracteres: letras, números y guion bajo</div>
+        <div class="note">
+          <b>Tu mundo va atado a este nombre.</b> Si lo cambias más adelante, el
+          servidor te tratará como a alguien nuevo: sin tu inventario ni tu posición.
+        </div>
+        <button type="button" class="btn green" id="sp-nick-crear"
+                style="margin-top:16px" disabled>Crear cuenta</button>
       </div>
 
       <div class="ob-step" data-sp="3">
@@ -1523,7 +1563,6 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   var spAtras = document.getElementById("sp-atras");
   var spJugar = document.getElementById("sp-jugar");
   var spTimer = null;   /* sondeo en curso: hay que pararlo al salir o se queda vivo */
-  var spUri   = "https://account.ely.by";
 
   function spIr(paso, punto){
     spPasos.forEach(function(e){ e.classList.toggle("on", e.dataset.sp === paso); });
@@ -1619,57 +1658,51 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     }).catch(function(e){ estado.textContent = "no se pudo abrir el motor: " + String(e); });
   });
 
-  /* ---- rama Ely.by: código de dispositivo, todo aquí dentro ---- */
-  document.getElementById("sp-ely").addEventListener("click", function(){
-    spIr("2-ely", 2);
-    var code   = document.getElementById("sp-ely-code");
-    var estado = document.getElementById("sp-ely-estado");
-    var uriEl  = document.getElementById("sp-ely-uri");
-    code.innerHTML = "";
-    estado.textContent = "pidiendo código…";
+  /* ---- rama sin conexión: la cuenta se crea aquí, el motor ni se abre ----
+     No autentica contra nadie: el nombre y el UUID que se deriva de él son toda la
+     identidad. Se asume a sabiendas que cualquiera puede escribir el nombre de otro;
+     es un launcher entre amigos y esa cuenta se paga si algún día hace falta. */
+  var nick       = document.getElementById("sp-nick");
+  var nickEstado = document.getElementById("sp-nick-estado");
+  var nickBtn    = document.getElementById("sp-nick-crear");
+  var nickTimer  = null;
+  var NICK_AYUDA = "de 3 a 16 caracteres: letras, números y guion bajo";
 
-    call("ely_configured").then(function(ok){
-      if (!ok) {
-        /* Mejor decirlo aquí que dejar que alguien pulse y se coma un error a medias. */
-        estado.innerHTML = "Falta registrar el <span class=\"mono-i\">client_id</span> " +
-                           "de Ely.by y recompilar. Mientras tanto, usa la otra opción.";
-        return;
-      }
-      return call("ely_start_login").then(function(d){
-        pintarCodigo(code, d.user_code);
-        uriEl.textContent = String(d.verification_uri).replace(/^https?:\/\//, "");
-        spUri = d.verification_uri_complete || d.verification_uri;
-        var quedan = d.expires_in;
-        estado.textContent = "esperando… " + mmss(quedan);
-        (function sondear(){
-          spTimer = setTimeout(function(){
-            quedan -= d.interval;
-            if (quedan <= 0) { estado.textContent = "el código expiró; vuelve a intentarlo."; return; }
-            call("ely_poll_login", { code: d.device_code }).then(function(r){
-              if (r === "ok") spListo();
-              else if (r === "denied") estado.textContent = "cancelaste el acceso.";
-              else { estado.textContent = "esperando… " + mmss(quedan); sondear(); }
-            }).catch(function(e){ estado.textContent = String(e); });
-          }, d.interval * 1000);
-        })();
-      });
-    }).catch(function(e){ estado.textContent = String(e); });
+  document.getElementById("sp-offline").addEventListener("click", function(){
+    spIr("2-offline", 2);
+    nick.value = "";
+    nickBtn.disabled = true;
+    nickEstado.textContent = NICK_AYUDA;
+    setTimeout(function(){ nick.focus(); }, 50);
   });
 
-  /* Cancelar desde aquí mata el motor: es lo que evita el rodeo del «Play demo?». */
-  document.getElementById("sp-msa-cancelar").addEventListener("click", function(){
-    spParar();
-    call("close_engine").catch(function(){});
-    spIr("1", 1);
+  /* La validación vive en Rust y se consulta según se escribe: así la regla existe
+     en un solo sitio y nadie llega a pulsar Crear con un nombre que el servidor
+     rechazaría después. */
+  nick.addEventListener("input", function(){
+    clearTimeout(nickTimer);
+    nickTimer = setTimeout(function(){
+      var valor = nick.value;
+      if (!valor.trim()) { nickBtn.disabled = true; nickEstado.textContent = NICK_AYUDA; return; }
+      call("offline_check", { name: valor }).then(function(motivo){
+        nickBtn.disabled = !!motivo;
+        nickEstado.textContent = motivo || "se ve bien";
+      }).catch(function(){});
+    }, 150);
+  });
+  nick.addEventListener("keydown", function(e){
+    if (e.key === "Enter" && !nickBtn.disabled) nickBtn.click();
   });
 
-  document.getElementById("sp-ely-abrir").addEventListener("click", function(){
-    call("open_url", { url: spUri }).catch(function(e){ console.error(e); });
-  });
-  document.getElementById("sp-ely-crear").addEventListener("click", function(){
-    /* Ely.by no tiene API de registro: pide correo y confirmación en su web.
-       Lo único honesto es llevar al usuario allí. */
-    call("open_url", { url: "https://account.ely.by/register" }).catch(function(e){ console.error(e); });
+  nickBtn.addEventListener("click", function(){
+    nickBtn.disabled = true;
+    nickEstado.textContent = "creando la cuenta…";
+    call("offline_create", { name: nick.value }).then(function(){
+      spListo(false);
+    }).catch(function(e){
+      nickEstado.textContent = String(e);
+      nickBtn.disabled = false;
+    });
   });
 
   document.getElementById("sp-cerrar").addEventListener("click", spCerrar);

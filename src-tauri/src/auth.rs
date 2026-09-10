@@ -1,21 +1,13 @@
-//! Login de Ely.by sin abrir el motor.
+//! Cuentas escritas por nosotros en el `accounts.json` del motor.
 //!
 //! El motor resuelve la autenticación, pero solo desde su propia ventana: no hay
 //! bandera de línea de comandos que abra su diálogo de cuentas (verificado contra
-//! `--help` del release 11.1.0). Eso obliga a que la primera vez el usuario vea un
-//! launcher que no es el nuestro, que es justo lo que este módulo evita.
+//! `--help` del release 11.1.0). Para Microsoft no queda otra que pasar por ahí, pero
+//! una cuenta **sin conexión** no autentica contra nadie: es un nombre y un UUID
+//! derivado de él, así que se puede crear aquí y evitar la ventana ajena entera.
 //!
-//! Aquí se replica **solo** el flujo de Ely.by —código de dispositivo— y se escribe
-//! la cuenta en el `accounts.json` del motor. A partir de ahí el motor la refresca y
-//! la usa como si la hubiera creado él; no hace falta tocar nada más.
-//!
-//! Microsoft se queda fuera a propósito: su flujo necesita un `client_id` de Azure
-//! con acceso a la API de Minecraft aprobado por Mojang, que es un trámite externo.
-//! Esa rama sigue pasando por la ventana del motor.
-//!
-//! Extremos y formato verificados leyendo el fork en el release 11.1.0:
-//! `ElyDeviceCodeStep.cpp`, `ElyStep.cpp`, `ElyYggdrasilTokenStep.cpp`,
-//! `MinecraftProfileStepEly.cpp`, `AccountData.cpp` y `AccountList.cpp`.
+//! Todo verificado leyendo el fork en el release fijado: `MinecraftAccount.cpp`
+//! (`createOffline`, `uuidFromUsername`), `AccountData.cpp` y `AccountList.cpp`.
 //! Como `ENGINE_VERSION` está fijado, el formato no se mueve por su cuenta.
 
 use crate::engine::Layout;
@@ -28,68 +20,55 @@ use serde_json::{json, Value};
 /// da error, se lleva por delante las cuentas que ya hubiera.
 const ACCOUNTS_FORMAT_VERSION: u64 = 3;
 
-const DEVICE_CODE_URL: &str = "https://account.ely.by/api/oauth2/v1/devicecode";
-const TOKEN_URL: &str = "https://account.ely.by/api/oauth2/v1/token";
-const PROFILE_URL: &str = "https://account.ely.by/api/mojang/services/minecraft/profile";
-
-/// Los mismos que pide el motor en `ElyStep.cpp`. `offline_access` es el que trae el
-/// `refresh_token`: sin él la sesión se muere en una hora y hay que volver a entrar.
-const SCOPES: &str = "account_info offline_access minecraft_server_session";
-
-const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
-
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
-    #[error("error de red: {0}")]
-    Http(#[from] reqwest::Error),
     #[error("error de disco: {0}")]
     Io(#[from] std::io::Error),
-    #[error("respuesta inesperada de Ely.by: {0}")]
+    #[error("respuesta inesperada: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("falta configurar el client_id de Ely.by")]
-    NoClientId,
-    #[error("Ely.by respondió {0}: {1}")]
-    Remote(u16, String),
-    #[error("el código caducó; hay que pedir uno nuevo")]
-    Expired,
     #[error("el accounts.json del motor está corrupto")]
     BadAccountsFile,
+    #[error("{0}")]
+    NombreInvalido(String),
 }
 
-/// Lo que se le enseña al usuario mientras espera.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct DeviceCode {
-    /// El código corto que teclea. El de la captura era `8VYNRUKD`.
-    pub user_code: String,
-    /// Dónde lo teclea.
-    pub verification_uri: String,
-    /// Algunas implementaciones dan la URL con el código ya puesto.
-    pub verification_uri_complete: Option<String>,
-    /// Secreto: es lo que nosotros mandamos al sondear. No se enseña.
-    pub device_code: String,
-    /// Segundos entre sondeos. Sondear más rápido hace que Ely.by responda
-    /// `slow_down`, así que se respeta.
-    pub interval: u64,
-    pub expires_in: u64,
+/// Comprueba que el nombre sirva como nombre de Minecraft.
+///
+/// Las reglas son las de Mojang: de 3 a 16 caracteres, letras, dígitos y guion bajo.
+/// No es purismo — el servidor rechaza lo que se salga de ahí, y es mucho mejor
+/// decirlo mientras se escribe que dejar que falle al entrar a jugar.
+pub fn validar_nombre(n: &str) -> Result<(), AuthError> {
+    let n = n.trim();
+    if n.chars().count() < 3 || n.chars().count() > 16 {
+        return Err(AuthError::NombreInvalido(
+            "El nombre debe tener entre 3 y 16 caracteres.".into(),
+        ));
+    }
+    if !n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(AuthError::NombreInvalido(
+            "Solo letras, números y guion bajo.".into(),
+        ));
+    }
+    Ok(())
 }
 
-/// Resultado de un sondeo.
-#[derive(Debug)]
-pub enum Poll {
-    /// Todavía no aprobó. Hay que volver a preguntar tras `interval`.
-    Pending,
-    /// Aprobó: estos son los tokens.
-    Ready(Tokens),
-    /// Dijo que no. No se reintenta.
-    Denied,
-}
-
-#[derive(Debug, Clone)]
-pub struct Tokens {
-    pub access_token: String,
-    pub refresh_token: String,
-    /// Segundos de vida del `access_token`.
-    pub expires_in: u64,
+/// UUID sin conexión derivado del nombre.
+///
+/// Reimplementa `UUID.nameUUIDFromBytes` de Java sobre `OfflinePlayer:<nombre>`, que
+/// es lo que hace `MinecraftAccount::uuidFromUsername` y, antes que él, el propio
+/// servidor de Minecraft. **Tiene que coincidir exactamente**: es el identificador con
+/// el que el mundo guarda el inventario y la posición, así que derivarlo de otra forma
+/// haría que alguien reapareciera sin nada de lo suyo.
+///
+/// Se devuelve en 32 hex sin guiones, el formato `QUuid::Id128` que escribe el motor.
+pub fn uuid_offline(nombre: &str) -> String {
+    use md5::{Digest, Md5};
+    let mut h = Md5::new();
+    h.update(format!("OfflinePlayer:{nombre}").as_bytes());
+    let mut d: [u8; 16] = h.finalize().into();
+    d[6] = (d[6] & 0x0f) | 0x30; // versión 3
+    d[8] = (d[8] & 0x3f) | 0x80; // variante IETF
+    d.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn ahora() -> u64 {
@@ -99,176 +78,44 @@ fn ahora() -> u64 {
         .unwrap_or(0)
 }
 
-async fn leer_json(r: reqwest::Response) -> Result<Value, AuthError> {
-    let status = r.status();
-    let bytes = r.bytes().await?;
-    let v: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-    if !status.is_success() {
-        // Los errores de OAuth vienen en el cuerpo aunque el código sea 4xx, y el
-        // sondeo depende de distinguirlos: `authorization_pending` no es un fallo.
-        if v.get("error").is_some() {
-            return Ok(v);
-        }
-        let texto = String::from_utf8_lossy(&bytes).chars().take(200).collect::<String>();
-        return Err(AuthError::Remote(status.as_u16(), texto));
-    }
-    Ok(v)
-}
-
-/// Pide el código de dispositivo. Es el primer paso y el único que necesita
-/// que el usuario no haya hecho nada todavía.
-pub async fn start_device_code(client_id: &str) -> Result<DeviceCode, AuthError> {
-    if client_id.trim().is_empty() {
-        return Err(AuthError::NoClientId);
-    }
-    let v = leer_json(
-        reqwest::Client::new()
-            .post(DEVICE_CODE_URL)
-            .form(&[("client_id", client_id), ("scope", SCOPES)])
-            .send()
-            .await?,
-    )
-    .await?;
-
-    if let Some(e) = v.get("error").and_then(|e| e.as_str()) {
-        return Err(AuthError::Remote(400, e.to_string()));
-    }
-    let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(String::from);
-    Ok(DeviceCode {
-        user_code: s("user_code").ok_or(AuthError::BadAccountsFile)?,
-        verification_uri: s("verification_uri").unwrap_or_else(|| "https://account.ely.by".into()),
-        verification_uri_complete: s("verification_uri_complete"),
-        device_code: s("device_code").ok_or(AuthError::BadAccountsFile)?,
-        // El estándar recomienda 5 s cuando el servidor no dice otra cosa.
-        interval: v.get("interval").and_then(|x| x.as_u64()).unwrap_or(5),
-        expires_in: v.get("expires_in").and_then(|x| x.as_u64()).unwrap_or(600),
-    })
-}
-
-/// Un sondeo. La espera entre llamadas la lleva quien llama, para que la interfaz
-/// pueda enseñar una cuenta atrás y permitir cancelar.
-pub async fn poll_once(client_id: &str, device_code: &str) -> Result<Poll, AuthError> {
-    let v = leer_json(
-        reqwest::Client::new()
-            .post(TOKEN_URL)
-            .form(&[
-                ("client_id", client_id),
-                ("device_code", device_code),
-                ("grant_type", DEVICE_CODE_GRANT),
-            ])
-            .send()
-            .await?,
-    )
-    .await?;
-
-    if let Some(e) = v.get("error").and_then(|x| x.as_str()) {
-        return Ok(clasificar_error(e)?);
-    }
-    let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
-    Ok(Poll::Ready(Tokens {
-        access_token: s("access_token"),
-        refresh_token: s("refresh_token"),
-        expires_in: v.get("expires_in").and_then(|x| x.as_u64()).unwrap_or(3600),
-    }))
-}
-
-/// Los códigos de error del sondeo son estándar de OAuth 2.0 (RFC 8628 §3.5).
+/// La cuenta sin conexión tal como la guarda el motor.
 ///
-/// Pura y aparte porque confundir `authorization_pending` con un fallo real haría
-/// que el login se rindiera justo mientras el usuario está tecleando el código.
-pub fn clasificar_error(code: &str) -> Result<Poll, AuthError> {
-    Ok(match code {
-        "authorization_pending" | "slow_down" => Poll::Pending,
-        "access_denied" => Poll::Denied,
-        "expired_token" => return Err(AuthError::Expired),
-        otro => return Err(AuthError::Remote(400, otro.to_string())),
-    })
-}
-
-/// Perfil de Minecraft asociado a la cuenta, en el formato de Mojang.
-pub async fn fetch_profile(access_token: &str) -> Result<Value, AuthError> {
-    leer_json(
-        reqwest::Client::new()
-            .get(PROFILE_URL)
-            .bearer_auth(access_token)
-            .send()
-            .await?,
-    )
-    .await
-}
-
-/// Traduce el perfil de Mojang al que guarda el motor.
+/// Calcado de `MinecraftAccount::createOffline` y de cómo lo serializa
+/// `AccountData::saveState`. Tres cosas que parecen adorno y no lo son:
 ///
-/// **Todos los campos son obligatorios.** `AccountData.cpp::profileFromJSONV3`
-/// descarta el perfil entero —y con él la cuenta— si falta `skin` con sus tres
-/// cadenas o si `capes` no es un array. Y lo hace en silencio: el usuario vería un
-/// launcher que le pide iniciar sesión una y otra vez sin decir por qué.
-///
-/// Por eso la piel vacía se escribe igual con cadenas vacías en vez de omitirse:
-/// la validación de upstream solo exige que sean cadenas, no que tengan contenido.
-pub fn profile_json(mojang: &Value) -> Value {
-    let id = mojang.get("id").and_then(|x| x.as_str()).unwrap_or("");
-    let name = mojang.get("name").and_then(|x| x.as_str()).unwrap_or("");
+///  - **`token: "0"`** es literal. Versiones anteriores a la 7.2 usaban la cadena
+///    `"offline"` y el motor todavía la traduce a `"0"` al cargar; escribir cualquier
+///    otra cosa daría una cuenta que no arranca el juego.
+///  - **`extra.userName`** es de donde sale el nombre del jugador al lanzar, no del
+///    perfil. Sin él la partida entra sin nombre.
+///  - **el bloque `profile` completo** —con `skin` de cadenas vacías y `capes` vacío—
+///    porque `profileFromJSONV3` descarta el perfil entero si falta cualquiera de
+///    esos campos, y sin perfil válido el motor considera que la cuenta no posee
+///    Minecraft y **lanza el juego en modo Demo**. Ese es el fallo que más caro
+///    saldría: no avisa, simplemente se juega una demo de 100 minutos.
+pub fn offline_account(nombre: &str) -> Result<Value, AuthError> {
+    validar_nombre(nombre)?;
+    let nombre = nombre.trim();
 
-    let vacia = json!({ "id": "", "url": "", "variant": "CLASSIC" });
-    let skin = mojang
-        .get("skins")
-        .and_then(|x| x.as_array())
-        .and_then(|skins| {
-            // La activa manda; si ninguna lo está, la primera sirve.
-            skins
-                .iter()
-                .find(|s| s.get("state").and_then(|x| x.as_str()) == Some("ACTIVE"))
-                .or_else(|| skins.first())
-        })
-        .map(|s| {
-            json!({
-                "id": s.get("id").and_then(|x| x.as_str()).unwrap_or(""),
-                "url": s.get("url").and_then(|x| x.as_str()).unwrap_or(""),
-                "variant": s.get("variant").and_then(|x| x.as_str()).unwrap_or("CLASSIC"),
-            })
-        })
-        .unwrap_or(vacia);
-
-    let capes: Vec<Value> = mojang
-        .get("capes")
-        .and_then(|x| x.as_array())
-        .map(|cs| {
-            cs.iter()
-                .map(|c| {
-                    json!({
-                        "id": c.get("id").and_then(|x| x.as_str()).unwrap_or(""),
-                        "url": c.get("url").and_then(|x| x.as_str()).unwrap_or(""),
-                        "alias": c.get("alias").and_then(|x| x.as_str()).unwrap_or(""),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    json!({ "id": id, "name": name, "skin": skin, "capes": capes })
-}
-
-/// La entrada de cuenta tal como la guarda el motor.
-///
-/// `ygg` es una copia literal de `msa`: eso hace `ElyYggdrasilTokenStep`, que no
-/// llama a ninguna API, solo asigna `yggdrasilToken = msaToken`.
-pub fn account_json(client_id: &str, t: &Tokens, profile: Value) -> Value {
-    let iat = ahora();
-    let token = json!({
-        "iat": iat,
-        "exp": iat + t.expires_in,
-        "token": t.access_token,
-        "refresh_token": t.refresh_token,
-    });
-    json!({
-        "type": "Ely",
-        "msa-client-id": client_id,
-        "msa": token,
-        "ygg": token,
-        "profile": profile,
+    Ok(json!({
+        "type": "Offline",
+        "ygg": {
+            "iat": ahora(),
+            "token": "0",
+            "extra": {
+                "userName": nombre,
+                // El motor mete aquí un UUID nuevo cada vez; solo tiene que existir.
+                "clientToken": uuid_offline(&format!("cliente:{nombre}")),
+            },
+        },
+        "profile": {
+            "id": uuid_offline(nombre),
+            "name": nombre,
+            "skin": { "id": "", "url": "", "variant": "" },
+            "capes": [],
+        },
         "active": true,
-    })
+    }))
 }
 
 /// Mete la cuenta en el `accounts.json` conservando las que ya hubiera.
@@ -292,7 +139,7 @@ pub fn merge_into_accounts(existing: &str, nueva: Value) -> Result<String, AuthE
         .and_then(|a| a.as_array_mut())
         .ok_or(AuthError::BadAccountsFile)?;
 
-    // Entrar dos veces con la misma cuenta la actualiza, no la duplica.
+    // Entrar dos veces con el mismo nombre la actualiza, no la duplica.
     lista.retain(|a| a["profile"]["id"].as_str().unwrap_or("") != id_nueva);
     // La nueva pasa a ser la activa, así que ninguna otra puede seguir siéndolo.
     for a in lista.iter_mut() {
@@ -324,7 +171,7 @@ mod tests {
     ///
     /// Copiar aquí las reglas de upstream es el único modo de que una prueba nuestra
     /// falle antes de que falle el motor. Sin esto, un perfil inválido no se nota
-    /// hasta que alguien se queda sin poder entrar y sin mensaje que lo explique.
+    /// hasta que alguien se encuentra jugando una demo sin saber por qué.
     fn el_motor_aceptaria(p: &Value) -> bool {
         let cadena = |v: &Value, k: &str| v.get(k).map(|x| x.is_string()).unwrap_or(false);
         if !cadena(p, "id") || !cadena(p, "name") {
@@ -338,69 +185,64 @@ mod tests {
         {
             return false;
         }
-        let Some(capes) = p.get("capes").and_then(|c| c.as_array()) else {
-            return false;
-        };
-        capes
-            .iter()
-            .all(|c| cadena(c, "id") && cadena(c, "url") && cadena(c, "alias"))
+        p.get("capes").and_then(|c| c.as_array()).is_some()
     }
 
-    fn tokens() -> Tokens {
-        Tokens {
-            access_token: "acceso".into(),
-            refresh_token: "refresco".into(),
-            expires_in: 3600,
+    #[test]
+    fn el_uuid_es_el_mismo_que_calcula_minecraft() {
+        // `UUID.nameUUIDFromBytes("OfflinePlayer:Notch")` da este valor; es el mismo
+        // que usan el servidor y el motor. Si no coincidiera, alguien entraría con
+        // otra identidad y aparecería sin su inventario ni su posición.
+        assert_eq!(uuid_offline("Notch"), "b50ad385829d3141a2167e7d7539ba7f");
+        // Versión 3 y variante IETF, en los nibbles que manda el RFC 4122.
+        let u = uuid_offline("Kevs");
+        assert_eq!(&u[12..13], "3");
+        assert!(matches!(&u[16..17], "8" | "9" | "a" | "b"));
+        assert_eq!(u.len(), 32, "32 hex sin guiones, como QUuid::Id128");
+    }
+
+    #[test]
+    fn nombres_distintos_dan_uuids_distintos() {
+        assert_ne!(uuid_offline("Kevs"), uuid_offline("kevs"), "distingue mayúsculas");
+        assert_ne!(uuid_offline("Kevs"), uuid_offline("Yahir"));
+    }
+
+    #[test]
+    fn la_cuenta_tiene_lo_que_el_motor_exige() {
+        let a = offline_account("Kevs").unwrap();
+        assert_eq!(a["type"], "Offline");
+        assert_eq!(a["ygg"]["token"], "0", "el motor espera el literal \"0\"");
+        assert_eq!(a["ygg"]["extra"]["userName"], "Kevs", "de aquí sale el nombre al jugar");
+        assert!(a["ygg"]["extra"]["clientToken"].as_str().is_some());
+        assert_eq!(a["profile"]["name"], "Kevs");
+        assert_eq!(a["profile"]["id"], uuid_offline("Kevs"));
+        assert!(el_motor_aceptaria(&a["profile"]), "sin perfil válido se jugaría en modo Demo");
+    }
+
+    #[test]
+    fn no_escribimos_entitlement() {
+        // Es lo que hace que el motor asuma que la cuenta posee Minecraft: sin bloque
+        // `entitlement` y con perfil válido, `resumeStateFromV3` pone ownsMinecraft.
+        // Escribirlo a mano sería justo lo que la mandaría a modo Demo.
+        let a = offline_account("Kevs").unwrap();
+        assert!(a.get("entitlement").is_none());
+    }
+
+    #[test]
+    fn el_nombre_se_valida_como_lo_valida_mojang() {
+        for malo in ["ab", "", "   ", "un_nombre_demasiado_largo", "con espacio", "acentós", "hey!"] {
+            assert!(validar_nombre(malo).is_err(), "{malo:?} debería rechazarse");
+        }
+        for bueno in ["Kevs", "abc", "Un_Nombre_De_16C", "jugador_123"] {
+            assert!(validar_nombre(bueno).is_ok(), "{bueno:?} debería aceptarse");
         }
     }
 
     #[test]
-    fn el_perfil_cumple_lo_que_exige_el_motor() {
-        let mojang = json!({
-            "id": "0123456789abcdef0123456789abcdef",
-            "name": "Kevs",
-            "skins": [{ "id": "s1", "state": "ACTIVE", "url": "https://x/s.png", "variant": "SLIM" }],
-            "capes": []
-        });
-        let p = profile_json(&mojang);
-        assert!(el_motor_aceptaria(&p));
-        assert_eq!(p["name"], "Kevs");
-        assert_eq!(p["skin"]["variant"], "SLIM");
-    }
-
-    #[test]
-    fn sin_piel_el_perfil_sigue_siendo_valido() {
-        // Una cuenta recién creada en Ely.by no tiene piel. Si por eso omitiéramos
-        // `skin`, el motor tiraría la cuenta entera y nadie sabría por qué.
-        let p = profile_json(&json!({ "id": "abc", "name": "Nuevo", "skins": [] }));
-        assert!(el_motor_aceptaria(&p), "una cuenta sin piel debe poder jugar");
-        assert_eq!(p["skin"]["url"], "");
-        assert!(p["capes"].as_array().unwrap().is_empty());
-    }
-
-    #[test]
-    fn entre_varias_pieles_gana_la_activa() {
-        let p = profile_json(&json!({
-            "id": "abc", "name": "N",
-            "skins": [
-                { "id": "vieja", "state": "INACTIVE", "url": "https://x/v.png", "variant": "CLASSIC" },
-                { "id": "buena", "state": "ACTIVE",   "url": "https://x/b.png", "variant": "CLASSIC" }
-            ]
-        }));
-        assert_eq!(p["skin"]["id"], "buena");
-    }
-
-    #[test]
-    fn la_cuenta_lleva_ygg_igual_que_msa() {
-        // `ElyYggdrasilTokenStep` no llama a ninguna API: copia el token. Si aquí no
-        // se copiara, el motor tendría cuenta pero no podría autenticar el juego.
-        let a = account_json("cid", &tokens(), profile_json(&json!({ "id": "a", "name": "N" })));
-        assert_eq!(a["type"], "Ely");
-        assert_eq!(a["msa-client-id"], "cid");
-        assert_eq!(a["ygg"], a["msa"]);
-        assert_eq!(a["msa"]["token"], "acceso");
-        assert_eq!(a["msa"]["refresh_token"], "refresco");
-        assert!(a["msa"]["exp"].as_u64().unwrap() > a["msa"]["iat"].as_u64().unwrap());
+    fn los_espacios_de_los_bordes_no_cuentan() {
+        let a = offline_account("  Kevs  ").unwrap();
+        assert_eq!(a["profile"]["name"], "Kevs");
+        assert_eq!(a["profile"]["id"], uuid_offline("Kevs"), "el UUID sale del nombre limpio");
     }
 
     #[test]
@@ -410,11 +252,7 @@ mod tests {
             "accounts": [{ "type": "MSA", "active": true, "profile": { "id": "otra", "name": "Yahir" } }]
         })
         .to_string();
-        let out = merge_into_accounts(
-            &previo,
-            account_json("cid", &tokens(), profile_json(&json!({ "id": "nueva", "name": "Kevs" }))),
-        )
-        .unwrap();
+        let out = merge_into_accounts(&previo, offline_account("Kevs").unwrap()).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         let cuentas = v["accounts"].as_array().unwrap();
         assert_eq!(cuentas.len(), 2, "se perdió una cuenta");
@@ -428,11 +266,7 @@ mod tests {
             "accounts": [{ "type": "MSA", "active": true, "profile": { "id": "otra", "name": "Y" } }]
         })
         .to_string();
-        let out = merge_into_accounts(
-            &previo,
-            account_json("cid", &tokens(), profile_json(&json!({ "id": "nueva", "name": "K" }))),
-        )
-        .unwrap();
+        let out = merge_into_accounts(&previo, offline_account("Kevs").unwrap()).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         let activas: Vec<_> = v["accounts"]
             .as_array()
@@ -441,21 +275,13 @@ mod tests {
             .filter(|a| a["active"] == json!(true))
             .collect();
         assert_eq!(activas.len(), 1);
-        assert_eq!(activas[0]["profile"]["id"], "nueva");
+        assert_eq!(activas[0]["profile"]["name"], "Kevs");
     }
 
     #[test]
-    fn entrar_dos_veces_no_duplica_la_cuenta() {
-        let uno = merge_into_accounts(
-            "",
-            account_json("cid", &tokens(), profile_json(&json!({ "id": "yo", "name": "K" }))),
-        )
-        .unwrap();
-        let dos = merge_into_accounts(
-            &uno,
-            account_json("cid", &tokens(), profile_json(&json!({ "id": "yo", "name": "K" }))),
-        )
-        .unwrap();
+    fn el_mismo_nombre_dos_veces_no_duplica() {
+        let uno = merge_into_accounts("", offline_account("Kevs").unwrap()).unwrap();
+        let dos = merge_into_accounts(&uno, offline_account("Kevs").unwrap()).unwrap();
         let v: Value = serde_json::from_str(&dos).unwrap();
         assert_eq!(v["accounts"].as_array().unwrap().len(), 1);
     }
@@ -464,11 +290,7 @@ mod tests {
     fn siempre_escribimos_la_version_que_el_motor_espera() {
         // Con otro número el motor renombra el archivo a accounts-old.json y
         // arranca con la lista vacía: se llevaría por delante lo que hubiera.
-        let out = merge_into_accounts(
-            "",
-            account_json("cid", &tokens(), profile_json(&json!({ "id": "a", "name": "N" }))),
-        )
-        .unwrap();
+        let out = merge_into_accounts("", offline_account("Kevs").unwrap()).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["formatVersion"], 3);
     }
@@ -476,21 +298,7 @@ mod tests {
     #[test]
     fn un_archivo_ilegible_no_se_pisa_a_ciegas() {
         // Preferimos fallar a sobrescribir algo que no entendemos.
-        let r = merge_into_accounts(
-            "{esto no es json",
-            account_json("cid", &tokens(), profile_json(&json!({ "id": "a", "name": "N" }))),
-        );
+        let r = merge_into_accounts("{esto no es json", offline_account("Kevs").unwrap());
         assert!(matches!(r, Err(AuthError::BadAccountsFile)));
-    }
-
-    #[test]
-    fn el_sondeo_sabe_esperar_en_vez_de_rendirse() {
-        // Mientras el usuario teclea el código, Ely.by responde `authorization_pending`
-        // una y otra vez. Tomarlo por un fallo cancelaría el login a los pocos segundos.
-        assert!(matches!(clasificar_error("authorization_pending"), Ok(Poll::Pending)));
-        assert!(matches!(clasificar_error("slow_down"), Ok(Poll::Pending)));
-        assert!(matches!(clasificar_error("access_denied"), Ok(Poll::Denied)));
-        assert!(matches!(clasificar_error("expired_token"), Err(AuthError::Expired)));
-        assert!(matches!(clasificar_error("cualquier_otra"), Err(AuthError::Remote(_, _))));
     }
 }

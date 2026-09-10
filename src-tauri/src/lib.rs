@@ -74,17 +74,6 @@ fn boot_ping(app: tauri::AppHandle, msg: String) {
 /// versión concreta. Si se sube, hay que volver a comprobarlo.
 const ENGINE_VERSION: &str = "11.1.0";
 
-/// `client_id` propio en Ely.by, de `account.ely.by` (gratis y self-service).
-///
-/// No es un secreto: el flujo de código de dispositivo no usa `client_secret`, por eso
-/// puede vivir en el repo. Se puede sobrescribir al compilar con `DINO_ELY_CLIENT_ID`.
-/// Vacío significa que la rama de Ely.by queda deshabilitada, y la interfaz lo dice en
-/// vez de fallar a medio login.
-const ELY_CLIENT_ID: &str = match option_env!("DINO_ELY_CLIENT_ID") {
-    Some(id) => id,
-    None => "",
-};
-
 /// ¿Hay alguna cuenta registrada en el motor?
 ///
 /// Sin cuenta, `--launch` no puede autenticar. La primera vez abrimos el motor
@@ -264,42 +253,6 @@ fn engine_windows(app: tauri::AppHandle) -> Option<usize> {
     install::engine_windows(&layout.root)
 }
 
-/// Arranca el login de Ely.by y devuelve el código que hay que teclear.
-#[tauri::command]
-async fn ely_start_login() -> Result<auth::DeviceCode, String> {
-    auth::start_device_code(ELY_CLIENT_ID).await.map_err(|e| e.to_string())
-}
-
-/// Un sondeo del login. La interfaz lo repite cada `interval` segundos.
-///
-/// Devuelve `"pending"`, `"denied"` o `"ok"`. Con `"ok"` la cuenta ya está escrita
-/// en el `accounts.json` del motor y se puede jugar.
-#[tauri::command]
-async fn ely_poll_login(app: tauri::AppHandle, code: String) -> Result<String, String> {
-    let layout = layout_of(&app)?;
-    match auth::poll_once(ELY_CLIENT_ID, &code).await.map_err(|e| e.to_string())? {
-        auth::Poll::Pending => Ok("pending".into()),
-        auth::Poll::Denied => Ok("denied".into()),
-        auth::Poll::Ready(tokens) => {
-            let perfil = auth::fetch_profile(&tokens.access_token)
-                .await
-                .map_err(|e| e.to_string())?;
-            let cuenta = auth::account_json(ELY_CLIENT_ID, &tokens, auth::profile_json(&perfil));
-            auth::save_account(&layout, cuenta).map_err(|e| e.to_string())?;
-            Ok("ok".into())
-        }
-    }
-}
-
-/// ¿Está configurada la rama de Ely.by?
-///
-/// Sin `client_id` el botón se enseña deshabilitado con el motivo, en vez de dejar
-/// que alguien lo pulse y se coma un error a mitad del flujo.
-#[tauri::command]
-fn ely_configured() -> bool {
-    !ELY_CLIENT_ID.trim().is_empty()
-}
-
 /// Cierra la ventana del motor cuando ya cumplió su papel.
 #[tauri::command]
 fn close_engine(app: tauri::AppHandle) -> Result<usize, String> {
@@ -307,35 +260,12 @@ fn close_engine(app: tauri::AppHandle) -> Result<usize, String> {
     Ok(install::close_engine(&layout.root))
 }
 
-/// Abre una dirección en el navegador del sistema.
-///
-/// Solo `https`, y solo hacia Ely.by: la interfaz no debería poder abrir cualquier
-/// cosa, y las únicas direcciones que necesita son las del propio login.
-#[tauri::command]
-fn open_url(url: String) -> Result<(), String> {
-    const PERMITIDOS: [&str; 2] = ["https://account.ely.by", "https://ely.by"];
-    if !PERMITIDOS.iter().any(|p| url.starts_with(p)) {
-        return Err(format!("dirección no permitida: {url}"));
-    }
-    #[cfg(target_os = "macos")]
-    let cmd = "open";
-    #[cfg(target_os = "windows")]
-    let cmd = "explorer";
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let cmd = "xdg-open";
-    std::process::Command::new(cmd)
-        .arg(&url)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
-}
-
 /// ¿Hay una versión nueva del launcher?
 ///
 /// Devuelve `null` cuando no hay nada que instalar **y también cuando el updater no
-/// está configurado todavía** (sin `pubkey` ni `endpoints` en `tauri.conf.json`).
-/// Se tratan igual a propósito: un launcher sin actualizaciones configuradas debe
-/// verse normal, no enseñar un error que su usuario no puede resolver.
+/// está configurado** (sin `pubkey` ni `endpoints`). Se tratan igual a propósito: un
+/// launcher sin actualizaciones configuradas debe verse normal, no enseñar un error
+/// que su usuario no puede resolver.
 #[tauri::command]
 async fn update_check(app: tauri::AppHandle) -> Result<Option<serde_json::Value>, String> {
     #[cfg(desktop)]
@@ -415,7 +345,32 @@ async fn update_install(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 
-/// Tamaño en disco de una carpeta, en bytes.
+/// Crea una cuenta sin conexión con el nombre dado y la deja activa.
+///
+/// Es la rama de «no tengo Minecraft». No autentica contra nadie: el nombre y el UUID
+/// que se deriva de él son toda la identidad, así que se puede hacer aquí dentro y el
+/// usuario no llega a ver el motor.
+///
+/// Devuelve el nombre ya limpio de espacios, que es el que quedó guardado.
+#[tauri::command]
+fn offline_create(app: tauri::AppHandle, name: String) -> Result<String, String> {
+    let layout = layout_of(&app)?;
+    let cuenta = auth::offline_account(&name).map_err(|e| e.to_string())?;
+    let guardado = cuenta["profile"]["name"].as_str().unwrap_or("").to_string();
+    auth::save_account(&layout, cuenta).map_err(|e| e.to_string())?;
+    Ok(guardado)
+}
+
+/// Comprueba el nombre sin crear nada, para avisar mientras se escribe.
+///
+/// Devuelve `null` si vale, o el motivo si no. Enterarse al teclear es mucho mejor
+/// que enterarse cuando el servidor rechaza la conexión.
+#[tauri::command]
+fn offline_check(name: String) -> Option<String> {
+    auth::validar_nombre(&name).err().map(|e| e.to_string())
+}
+
+/// Tamaño en disco de una carpeta, en bytes./// Tamaño en disco de una carpeta, en bytes.
 fn dir_size(p: &std::path::Path) -> u64 {
     let Ok(rd) = std::fs::read_dir(p) else { return 0 };
     rd.flatten()
@@ -612,9 +567,10 @@ pub fn run() {
             }
 
             let window = app.get_webview_window("main").expect("falta la ventana main");
-            // El vidrio nativo solo aporta si la ventana es transparente. Hoy no lo es:
-            // la interfaz pinta su propio fondo para verse igual en las tres plataformas.
-            let _ = &window;
+            // El vidrio va aquí, antes de que la interfaz pinte nada: lo que la ventana
+            // pide al sistema no depende de la interfaz, pero lo que la interfaz pinta sí
+            // depende de si el sistema se lo dio. Por eso el resultado se guarda.
+            app.manage(Glass(apply_glass(&window)));
 
             // Limpiar restos de la sesión anterior y dejar el motor caliente: así
             // refresca los tokens mientras el usuario mira la interfaz, y al pulsar
@@ -632,6 +588,7 @@ pub fn run() {
             window_minimize,
             window_toggle_maximize,
             window_is_maximized,
+            window_glass,
             window_close,
             app_paths,
             boot_ping,
@@ -647,11 +604,9 @@ pub fn run() {
             java_runtimes,
             open_engine_login,
             engine_windows,
-            ely_start_login,
-            ely_poll_login,
-            ely_configured,
             close_engine,
-            open_url,
+            offline_create,
+            offline_check,
             update_check,
             update_install,
         ])
@@ -659,33 +614,59 @@ pub fn run() {
         .expect("Dino Launcher no pudo arrancar");
 }
 
-/// Vidrio nativo del sistema.
+/// Vidrio nativo del sistema: el desenfoque de lo que hay detrás de la ventana.
 ///
-/// Sin usar por ahora: requiere `transparent: true` en la ventana, y con un `body`
-/// opaco encima no se vería. En Linux no existe equivalente, que es justo por lo que
-/// la interfaz pinta su propio fondo y se ve igual en las tres plataformas.
-/// Se conserva por si el fondo llega a ser translúcido algún día.
-#[allow(dead_code)]
-fn apply_glass(window: &tauri::WebviewWindow) {
+/// Es lo único que separa un fondo translúcido de un agujero. Sin él, bajar la
+/// opacidad no enseña vidrio: enseña el escritorio en crudo, y el texto encima
+/// se vuelve ilegible en cuanto hay algo claro abierto detrás.
+fn apply_glass(window: &tauri::WebviewWindow) -> bool {
     #[cfg(target_os = "macos")]
     {
         use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
-        let _ = apply_vibrancy(
+        // El radio tiene que ser el mismo que `--r-window` del CSS. Si no coinciden,
+        // el vidrio asoma por fuera de las esquinas redondeadas de la interfaz.
+        apply_vibrancy(
             window,
             NSVisualEffectMaterial::HudWindow,
             Some(NSVisualEffectState::Active),
             Some(26.0),
-        );
+        )
+        .is_ok()
     }
     #[cfg(target_os = "windows")]
     {
-        // Mica es de Windows 11; en 10 falla y la interfaz cae a su propio fondo.
-        if window_vibrancy::apply_mica(window, Some(true)).is_err() {
-            let _ = window_vibrancy::apply_acrylic(window, Some((10, 10, 16, 160)));
-        }
+        // Acrylic antes que Mica, y es una decisión, no el orden que salió.
+        // Mica solo muestrea el fondo de escritorio: da una tinción, no un reflejo,
+        // y con una ventana encima no cambia nada. Acrylic muestrea lo que hay detrás
+        // de verdad, que es lo que describe Apple para Liquid Glass — desenfocar y
+        // ajustar la luminosidad del contenido de detrás. Mica queda de respaldo
+        // porque es más barata y en equipos justos es mejor eso que nada.
+        //
+        // El color solo lo usa el camino viejo de Windows 10; en 11 el desenfoque lo
+        // compone DWM y lo ignora. Es `--ink`, para que los dos caminos tiñan igual.
+        window_vibrancy::apply_acrylic(window, Some((3, 6, 10, 180))).is_ok()
+            || window_vibrancy::apply_mica(window, Some(true)).is_ok()
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
+        // No hay API: depende del compositor, y no todos desenfocan. La interfaz
+        // se queda opaca, que es exactamente para lo que existe el respaldo.
         let _ = window;
+        false
     }
+}
+
+/// Si la ventana consiguió vidrio nativo.
+///
+/// Se guarda en vez de recalcularse porque solo se puede pedir una vez, al arrancar.
+struct Glass(bool);
+
+/// La interfaz lo pregunta al cargar, y solo entonces se vuelve translúcida.
+///
+/// Va en este sentido y no en el contrario a propósito: empezar opaca y aclararse
+/// cuesta un fundido de 280ms que parece intencionado. Empezar translúcida y tener
+/// que taparse deja ver el escritorio sin desenfocar, aunque sea un frame.
+#[tauri::command]
+fn window_glass(glass: tauri::State<Glass>) -> bool {
+    glass.0
 }
