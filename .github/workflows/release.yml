@@ -1,12 +1,17 @@
 name: release
 
-# Publica una versión nueva y el manifiesto que lee el updater del launcher.
+# Publica los instaladores y, si hay clave de firma, el manifiesto que lee el updater.
 #
-# Las descargas van a un repo público aparte porque este es privado y el updater
-# pide la URL sin autenticación: no puede mandar credenciales, así que un release
-# privado le devolvería un 404.
+# Las descargas van a un repo público aparte porque este es privado: el updater pide la
+# URL sin autenticación y en un repo privado hasta las releases devuelven 404, así que
+# ni el auto-update ni el reparto a mano funcionarían desde aquí.
 #
 # Se dispara con una etiqueta: `git tag v0.2.0 && git push --tags`.
+#
+# La firma es **opcional a propósito**. Sin los secretos se publican igual los
+# instaladores —que es lo que hace falta para repartir el launcher— y se omite el
+# `latest.json`; esas versiones se descargan a mano y no se auto-actualizan. Con los
+# secretos puestos, se firma y se publica el manifiesto.
 
 on:
   push:
@@ -18,36 +23,43 @@ on:
         required: true
 
 env:
-  # Repo público donde viven los instaladores y el latest.json.
   RELEASES_REPO: dinopolllo/dino-launcher-releases
 
 jobs:
-  windows:
-    name: publicar Windows
-    runs-on: windows-latest
+  construir:
+    name: ${{ matrix.nombre }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            nombre: Windows
+            plataforma: windows-x86_64
+            args: ""
+          # Universal como el motor: un solo archivo para Intel y Apple Silicon.
+          - os: macos-latest
+            nombre: macOS
+            plataforma: darwin-universal
+            args: "--target universal-apple-darwin"
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
       - uses: dtolnay/rust-toolchain@stable
+      - name: Añadir los targets de macOS
+        if: matrix.os == 'macos-latest'
+        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-
-      - name: Comprobar que la clave pública está puesta
-        shell: bash
-        run: |
-          if grep -q "PEGA_AQUI_LA_CLAVE_PUBLICA" src-tauri/tauri.release.conf.json; then
-            echo "::error::Falta la clave pública en src-tauri/tauri.release.conf.json."
-            echo "Generala con: npm run tauri signer generate -- -w ~/.tauri/dino.key"
-            exit 1
-          fi
+          key: ${{ matrix.plataforma }}
 
       # La versión del binario sale de tauri.conf.json, no de la etiqueta. Si no
       # coinciden, el updater ofrecería para siempre una versión que al instalarse
-      # sigue diciendo que es la vieja: bucle infinito de "hay una versión nueva".
-      - name: Comprobar que la etiqueta coincide con la versión
+      # sigue diciendo que es la vieja.
+      - name: Comprobar etiqueta y versión
         shell: bash
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
@@ -59,57 +71,139 @@ jobs:
           echo "VERSION=$VER" >> "$GITHUB_ENV"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
 
+      - name: ¿Se puede firmar?
+        id: firma
+        shell: bash
+        env:
+          CLAVE: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$CLAVE" ]; then
+            echo "hay=no" >> "$GITHUB_OUTPUT"
+            echo "::warning::Sin TAURI_SIGNING_PRIVATE_KEY: se publican los instaladores pero no el manifiesto, así que estas versiones no se auto-actualizan."
+          elif grep -q "PEGA_AQUI_LA_CLAVE_PUBLICA" src-tauri/tauri.release.conf.json; then
+            echo "::error::Hay clave privada pero falta la pública en src-tauri/tauri.release.conf.json."
+            exit 1
+          else
+            echo "hay=si" >> "$GITHUB_OUTPUT"
+          fi
+
       - run: npm ci
 
-      - name: Compilar y firmar
+      # Con firma se añade `--config`, que es lo que activa `createUpdaterArtifacts`.
+      # Esa bandera hace fallar la compilación si no hay clave, por eso no vive en el
+      # tauri.conf.json de siempre.
+      - name: Compilar
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run build -- --config src-tauri/tauri.release.conf.json
+        shell: bash
+        run: |
+          EXTRA=""
+          [ "${{ steps.firma.outputs.hay }}" = "si" ] && EXTRA="--config src-tauri/tauri.release.conf.json"
+          npm run build -- ${{ matrix.args }} $EXTRA
 
-      # El instalador sale con espacios en el nombre y GitHub los convierte en puntos
-      # al subirlo, con lo que la URL del manifiesto dejaría de coincidir con el
-      # archivo real y el updater se descargaría un 404. Se renombra antes.
-      - name: Preparar artefactos y manifiesto
+      # Los instaladores salen con espacios en el nombre y GitHub los convierte en
+      # puntos al subirlos, con lo que la URL del manifiesto dejaría de coincidir con el
+      # archivo real. Se renombran antes de tocar nada.
+      - name: Recoger artefactos
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
-          SRC=$(ls src-tauri/target/release/bundle/nsis/*-setup.exe)
-          NOMBRE="dino-launcher_${VERSION}_x64-setup.exe"
-          cp "$SRC" "dist/$NOMBRE"
-          FIRMA=$(cat "$SRC.sig")
+          RAIZ=src-tauri/target
+          [ -n "${{ matrix.args }}" ] && RAIZ=src-tauri/target/universal-apple-darwin
 
-          node -e '
-            const fs = require("fs");
-            const { VERSION, TAG, RELEASES_REPO } = process.env;
-            const nombre = process.argv[1], firma = process.argv[2];
-            fs.writeFileSync("dist/latest.json", JSON.stringify({
-              version: VERSION,
-              notes: "Dino Launcher " + VERSION,
-              pub_date: new Date().toISOString(),
-              platforms: {
-                "windows-x86_64": {
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            INSTALADOR=$(ls "$RAIZ"/release/bundle/nsis/*-setup.exe)
+            NOMBRE="dino-launcher_${VERSION}_x64-setup.exe"
+          else
+            INSTALADOR=$(ls "$RAIZ"/release/bundle/dmg/*.dmg)
+            NOMBRE="dino-launcher_${VERSION}_universal.dmg"
+          fi
+          cp "$INSTALADOR" "dist/$NOMBRE"
+          echo "instalador -> $NOMBRE"
+
+          # El updater no descarga el instalador en macOS: usa el .app.tar.gz. En
+          # Windows sí es el propio .exe. Por eso lo que se firma no es lo mismo.
+          if [ "${{ steps.firma.outputs.hay }}" = "si" ]; then
+            if [ "${{ matrix.os }}" = "windows-latest" ]; then
+              PAQUETE="$NOMBRE"; FIRMA=$(cat "$INSTALADOR.sig")
+            else
+              TGZ=$(ls "$RAIZ"/release/bundle/macos/*.app.tar.gz)
+              PAQUETE="dino-launcher_${VERSION}_universal.app.tar.gz"
+              cp "$TGZ" "dist/$PAQUETE"
+              FIRMA=$(cat "$TGZ.sig")
+            fi
+            node -e '
+              const fs = require("fs");
+              const [plataforma, paquete, firma] = process.argv.slice(1);
+              const { RELEASES_REPO, TAG } = process.env;
+              fs.writeFileSync("dist/frag-" + plataforma + ".json", JSON.stringify({
+                [plataforma]: {
                   signature: firma,
-                  url: `https://github.com/${RELEASES_REPO}/releases/download/${TAG}/${nombre}`
+                  url: `https://github.com/${RELEASES_REPO}/releases/download/${TAG}/${paquete}`
                 }
-              }
-            }, null, 2) + "\n");
-          ' "$NOMBRE" "$FIRMA"
+              }));
+            ' "${{ matrix.plataforma }}" "$PAQUETE" "$FIRMA"
+          fi
+          ls -la dist
 
-          echo "--- latest.json ---"; cat dist/latest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.plataforma }}
+          path: dist/*
+          if-no-files-found: error
 
-      # `latest.json` se sube como asset del release: la URL
-      # .../releases/latest/download/latest.json siempre apunta al más nuevo, que es
-      # justo lo que espera el endpoint configurado en la app.
-      - name: Publicar en el repo público
-        uses: softprops/action-gh-release@v2
+  publicar:
+    name: publicar
+    needs: construir
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: recogido
+      - name: Armar el release
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VER=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=$VER" >> "$GITHUB_ENV"
+
+          mkdir -p dist
+          find recogido -type f ! -name 'frag-*.json' -exec cp {} dist/ \;
+
+          # Un solo latest.json con las dos plataformas dentro. Si ninguna se firmó,
+          # no se escribe: es preferible no publicar manifiesto a publicar uno vacío,
+          # que dejaría a los instalados comprobando algo que nunca les sirve.
+          FRAGS=$(find recogido -name 'frag-*.json' | tr '\n' ' ')
+          if [ -n "$FRAGS" ]; then
+            node -e '
+              const fs = require("fs");
+              const platforms = {};
+              for (const f of process.argv.slice(1)) Object.assign(platforms, JSON.parse(fs.readFileSync(f, "utf8")));
+              fs.writeFileSync("dist/latest.json", JSON.stringify({
+                version: process.env.VERSION,
+                notes: "Dino Launcher " + process.env.VERSION,
+                pub_date: new Date().toISOString(),
+                platforms
+              }, null, 2) + "\n");
+            ' $FRAGS
+            echo "--- latest.json ---"; cat dist/latest.json
+          else
+            echo "sin firmas: no se publica manifiesto"
+          fi
+          ls -la dist
+
+      # `latest.json` va como asset del release para que la URL
+      # .../releases/latest/download/latest.json apunte siempre al más nuevo.
+      - uses: softprops/action-gh-release@v2
         with:
           repository: ${{ env.RELEASES_REPO }}
           token: ${{ secrets.RELEASES_TOKEN }}
           tag_name: ${{ env.TAG }}
           name: Dino Launcher ${{ env.VERSION }}
-          files: |
-            dist/dino-launcher_${{ env.VERSION }}_x64-setup.exe
-            dist/latest.json
+          files: dist/*
           fail_on_unmatched_files: true

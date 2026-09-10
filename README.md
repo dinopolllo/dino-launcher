@@ -63,27 +63,11 @@ reference/          copia de solo lectura de ElyPrism (gitignorada)
 
 ## Publicar una versión
 
-El launcher se actualiza solo: comprueba al abrir y ofrece instalar con un botón. No
-se instala sin permiso — reemplazar el ejecutable cierra la app, y hacerlo por sorpresa
-sería peor que la molestia que esto evita.
+Las descargas viven en **[dino-launcher-releases](https://github.com/dinopolllo/dino-launcher-releases)**,
+un repo público aparte. Este es privado, y en un repo privado hasta las releases
+devuelven 404: ni el auto-update ni pasarle el link a alguien funcionarían desde aquí.
 
-Las descargas viven en un **repo público aparte**, porque este es privado y el updater
-pide la URL sin autenticación: contra un release privado recibiría un 404.
-
-Preparación, una sola vez:
-
-1. Crear el repo público de descargas (`dino-launcher-releases`).
-2. Generar la clave de firma y pegar la **pública** en `src-tauri/tauri.release.conf.json`:
-   ```bash
-   npm run tauri signer generate -- -w ~/.tauri/dino.key
-   ```
-3. Añadir tres secretos al repo privado:
-   - `TAURI_SIGNING_PRIVATE_KEY` — el contenido de la clave privada.
-   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — su contraseña.
-   - `RELEASES_TOKEN` — un token personal con permiso de escritura en el repo de
-     descargas. El `GITHUB_TOKEN` normal no sirve: no alcanza a otros repos.
-
-Después, cada versión son dos pasos:
+Publicar son dos pasos:
 
 ```bash
 npm version 0.2.0 --no-git-tag-version && git commit -am "v0.2.0"
@@ -93,15 +77,35 @@ npm version 0.2.0 --no-git-tag-version && git commit -am "v0.2.0"
 git tag v0.2.0 && git push --tags
 ```
 
-La etiqueta dispara `.github/workflows/release.yml`, que compila con
-`tauri.release.conf.json`, firma, arma el `latest.json` y publica todo en el repo de
-descargas. Antes de compilar comprueba que la etiqueta coincide con la versión de
+La etiqueta dispara `.github/workflows/release.yml`, que compila Windows y macOS
+—universal, Intel y Apple Silicon en un archivo— y publica ambos instaladores.
+Antes de compilar comprueba que la etiqueta coincida con la versión de
 `tauri.conf.json`: si no coincidieran, el launcher ofrecería una actualización que al
 instalarse sigue diciendo que es la vieja, y avisaría de ella para siempre.
 
-Hoy solo se publica el instalador de Windows. Un macOS que consulte el manifiesto no
-encuentra su plataforma y sencillamente no ve actualizaciones; añadirlo es sumar un job
-que aporte su `.app.tar.gz` firmado al mismo `latest.json`.
+Hace falta un secreto: **`RELEASES_TOKEN`**, un token personal con permiso de escritura
+en el repo de descargas. El `GITHUB_TOKEN` normal no alcanza a otros repos.
+
+### Auto-actualización
+
+Es **opcional y se añade encima**. Sin claves de firma el workflow publica igual los
+instaladores y omite el `latest.json`; esas versiones se descargan a mano y no se
+auto-actualizan. Para activarla:
+
+1. Generar la clave y pegar la **pública** en `src-tauri/tauri.release.conf.json`:
+   ```bash
+   npm run tauri signer generate -- -w ~/.tauri/dino.key
+   ```
+2. Añadir `TAURI_SIGNING_PRIVATE_KEY` y `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` como
+   secretos.
+
+A partir del siguiente tag, el workflow firma y publica el manifiesto, y los launchers
+ya instalados empiezan a verse las versiones nuevas solos.
+
+`createUpdaterArtifacts` y la configuración del updater están en
+`tauri.release.conf.json` y no en `tauri.conf.json` porque esa bandera hace fallar la
+compilación cuando no hay clave de firma: en el config principal habría tumbado el CI
+de cada push.
 
 ## Licencia
 
