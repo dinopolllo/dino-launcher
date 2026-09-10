@@ -260,6 +260,14 @@ fn close_engine(app: tauri::AppHandle) -> Result<usize, String> {
     Ok(install::close_engine(&layout.root))
 }
 
+/// Marca de que el updater llegó a registrarse.
+///
+/// Hace falta porque `app.updater()` **entra en pánico** —no devuelve error— cuando el
+/// plugin no está gestionado, y no lo está siempre que falte la configuración del
+/// updater: en desarrollo, y en cualquier release compilada sin firma. Preguntar por
+/// esta marca antes es lo que evita tumbar la app al arrancar.
+struct UpdaterListo;
+
 /// ¿Hay una versión nueva del launcher?
 ///
 /// Devuelve `null` cuando no hay nada que instalar **y también cuando el updater no
@@ -271,8 +279,11 @@ async fn update_check(app: tauri::AppHandle) -> Result<Option<serde_json::Value>
     #[cfg(desktop)]
     {
         use tauri_plugin_updater::UpdaterExt;
+        if app.try_state::<UpdaterListo>().is_none() {
+            return Ok(None); // sin configurar: no hay actualizaciones y no es un fallo
+        }
         let Ok(updater) = app.updater() else {
-            return Ok(None); // sin configurar
+            return Ok(None);
         };
         return match updater.check().await {
             Ok(Some(u)) => Ok(Some(serde_json::json!({
@@ -305,6 +316,9 @@ async fn update_install(app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(desktop)]
     {
         use tauri_plugin_updater::UpdaterExt;
+        if app.try_state::<UpdaterListo>().is_none() {
+            return Err("esta versión no trae actualizaciones automáticas".into());
+        }
         let updater = app.updater().map_err(|e| e.to_string())?;
         let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
             return Err("ya no hay ninguna versión nueva".into());
@@ -562,8 +576,13 @@ pub fn run() {
             // no existe. Fallar al registrarlo no debe impedir que la app abra: sin él
             // simplemente no hay actualizaciones.
             #[cfg(desktop)]
-            if let Err(e) = app.handle().plugin(tauri_plugin_updater::Builder::new().build()) {
-                println!("[UPDATE] no se pudo registrar el updater: {e}");
+            match app.handle().plugin(tauri_plugin_updater::Builder::new().build()) {
+                Ok(()) => {
+                    app.manage(UpdaterListo);
+                }
+                // Sin `plugins.updater` en la configuración el plugin no entra, y eso
+                // es normal: en desarrollo y en las releases sin firma no hay updater.
+                Err(e) => println!("[UPDATE] sin actualizaciones automáticas: {e}"),
             }
 
             let window = app.get_webview_window("main").expect("falta la ventana main");

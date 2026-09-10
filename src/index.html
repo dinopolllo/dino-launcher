@@ -45,7 +45,7 @@
   --ink-2:#050A0C;
   /* La tinción de la ventana cuando hay vidrio detrás. Es `--ink` con alfa: el
      mismo color, para que encender el vidrio aclare la ventana sin virarla. */
-  --window-tint:rgba(3,6,10,.62);
+  --window-tint:rgba(3,6,10,.52);
 
   /* glass material */
   --glass-0:rgba(255,255,255,.030);
@@ -189,7 +189,7 @@ html.glass .app{background-color:var(--window-tint)}
 
 /* El mesh es lo que el vidrio tiñe. Translúcida la ventana, el mesh pinta sobre el
    escritorio y no sobre negro: al mismo valor taparía justo lo que deja pasar. */
-html.glass .mesh{opacity:.72}
+html.glass .mesh{opacity:.62}
 
 /* La regla de Apple para Liquid Glass: la transparencia es una preferencia del
    sistema, no del diseño. Reducida, el vidrio se va y vuelve el fondo opaco. */
