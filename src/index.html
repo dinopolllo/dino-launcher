@@ -663,12 +663,275 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
 .bar{height:7px;border-radius:99px;background:rgba(255,255,255,.08);
   box-shadow:inset 0 0 0 1px var(--hairline);overflow:hidden}
-.bar b{display:block;height:100%;width:68%;border-radius:99px;
+/* El ancho entra por `--frac` y no por `style.width` a propósito: un estilo en
+   línea le gana a cualquier selector, y entonces el modo indeterminado de abajo
+   no podría imponer el ancho de su segmento. Se pone con
+   `bar.style.setProperty("--frac", pct + "%")`. */
+.bar b{display:block;height:100%;width:var(--frac,0%);border-radius:99px;
   background:linear-gradient(90deg,var(--green-deep),var(--green));
-  box-shadow:0 0 14px var(--green-glow)}
+  box-shadow:0 0 14px var(--green-glow);
+  transition:width .3s cubic-bezier(.22,.68,0,1)}
 .bar-meta{display:flex;justify-content:space-between;margin-top:7px;
   font-family:var(--font-mono);font-size:10.5px;color:var(--text-faint);
   font-variant-numeric:tabular-nums}
+
+/* ---------- barra indeterminada ----------
+   El motor no publica porcentaje: el número vive dentro de su diálogo Qt y de ahí
+   no sale. Así que la barra no puede fingir que sabe cuánto queda. Un segmento que
+   barre el carril dice «sigo trabajando» y no dice nada más, que es exactamente lo
+   que sabemos. Los extremos del degradado van a transparente para que se lea como
+   luz pasando por detrás y no como un bloque que va y viene. */
+.bar[data-indeterminate] b{
+  width:38%;
+  background:linear-gradient(90deg,transparent,var(--green-hot) 20%,var(--green) 52%,var(--dino-light) 70%,transparent);
+  box-shadow:none;
+  transition:none;
+  animation:sweep 1.5s cubic-bezier(.6,.05,.4,.95) infinite;
+}
+/* 263% = 100/38: lo que tiene que recorrer el segmento, medido en anchos de sí
+   mismo, para entrar y salir del carril entero por el otro lado. */
+@keyframes sweep{
+  from{transform:translateX(-100%)}
+  to{transform:translateX(263%)}
+}
+/* La regla global de movimiento reducido deja toda animación en 0.01ms, pero
+   `sweep` es infinita: a esa duración no se para, se reinicia miles de veces por
+   segundo y el segmento salta de sitio en cada frame. Hay que apagarla por nombre
+   —`animation:none`, que el `!important` global no toca porque solo fija la
+   duración—; bajarla no vale. Sin movimiento, el carril se llena a media luz: dice
+   «en marcha» sin inventarse un porcentaje. */
+@media (prefers-reduced-motion:reduce){
+  .bar[data-indeterminate] b{
+    animation:none;
+    width:100%;transform:none;opacity:.55;
+    background:linear-gradient(90deg,var(--green-deep),var(--green-hot));
+  }
+}
+
+/* ---------- progreso de arranque ----------
+   Vive en el hueco del botón Jugar: el control se convierte en su propio progreso
+   en vez de abrir nada encima — que es justo lo que estamos quitando al ocultar la
+   ventana del motor. Sin `backdrop-filter` propio a propósito: `.hero` ya es vidrio,
+   y apilar vidrio sobre vidrio es lo que el HIG de Apple dice que no se haga. */
+.launch{min-width:252px;display:flex;flex-direction:column;gap:9px}
+.launch .bar{height:9px}
+.launch-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.launch-phase{
+  font-size:13px;font-weight:600;color:var(--text);
+  min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+/* Tabular para que el contador no baile de ancho al cambiar de cifra. */
+.launch-amt{
+  flex:none;font-family:var(--font-mono);font-size:10.5px;
+  color:var(--text-faint);font-variant-numeric:tabular-nums;
+}
+.launch-foot{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.launch-hint{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.04em;color:var(--text-faint)}
+.launch-cancel{
+  flex:none;border:0;cursor:pointer;border-radius:8px;padding:5px 11px;
+  font-family:var(--font-body);font-size:11.5px;font-weight:500;
+  color:var(--text-dim);background:var(--glass-1);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+  transition:color .16s ease,background .16s ease,box-shadow .16s ease;
+}
+/* Cancelar no es destructivo hasta que se pulsa, así que el rojo aparece al ir
+   hacia él y no antes: en reposo es un control tranquilo más. */
+.launch-cancel:hover{
+  color:#FFD8DD;background:rgba(255,107,122,.16);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 0 0 1px rgba(255,107,122,.34);
+}
+.launch-cancel:focus-visible{outline:2px solid var(--rose);outline-offset:2px}
+.launch-cancel[disabled]{opacity:.5;cursor:default}
+
+/* ---------- estado «jugando» ----------
+   El tercero de `.hero-right`: jugar → preparando → jugando → jugar. Reutiliza
+   `.dot-live` del panel de servidor, que en esta interfaz ya significa «esto está
+   vivo», con el latido de `.sync .pulse` — un punto quieto dice «configurado», uno
+   que late dice «ahora mismo». */
+.session{
+  min-width:252px;
+  display:flex;flex-direction:column;gap:11px;
+}
+.session-head{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600}
+.session .dot-live{animation:blink 2.8s ease-in-out infinite}
+.session-name{
+  margin-left:auto;min-width:0;
+  font-family:var(--font-mono);font-size:10.5px;color:var(--text-faint);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+
+/* Detener no es Cancelar, y la diferencia no es de grado. Cancelar tira una descarga
+   a medias y se vuelve a empezar; detener mata una partida en marcha y puede costar
+   lo que no se haya guardado. Encima cae justo donde estaba el botón de Jugar: quien
+   vuelve del juego y pulsa por costumbre mata su propia sesión. Por eso en reposo no
+   es un slab rojo esperando un clic distraído — es rojo, se ve que es destructivo,
+   pero pide un segundo clic para hacerlo. */
+.stop{
+  border:0;cursor:pointer;border-radius:14px;
+  padding:13px 20px;
+  display:flex;align-items:center;justify-content:center;gap:9px;
+  font-family:var(--font-display);font-weight:700;font-size:14.5px;
+  color:#FFD8DD;
+  background:rgba(255,107,122,.10);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.10),inset 0 0 0 1px rgba(255,107,122,.34);
+  transition:background .16s ease,color .16s ease,box-shadow .16s ease,
+             transform .16s cubic-bezier(.32,.72,0,1);
+}
+.stop svg{width:13px;height:13px;fill:currentColor;flex:none}
+.stop:hover{background:rgba(255,107,122,.18);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 0 0 1px rgba(255,107,122,.50)}
+.stop:active{transform:translateY(1px)}
+.stop:focus-visible{outline:2px solid var(--rose);outline-offset:3px}
+
+/* Armado: el siguiente clic sí mata la partida, así que ahora sí es un slab lleno.
+   Es el negativo exacto del botón de Jugar —mismo peso, mismo texto oscuro sobre
+   color— para que se lea de un vistazo que esto es lo contrario de aquello. */
+.stop[data-armed]{
+  color:#2A0206;
+  background:linear-gradient(165deg,#FF9AA5,var(--rose) 52%,#E23D50);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.5),
+    inset 0 -1px 0 rgba(0,0,0,.2),
+    0 12px 30px -10px rgba(255,107,122,.5),
+    0 2px 6px rgba(0,0,0,.4);
+}
+/* Las dos etiquetas viven en el markup y las cambia el CSS: así el JS solo pone y
+   quita `data-armed` y no tiene que saber qué pone el botón en cada estado. */
+.stop .stop-confirm{display:none}
+.stop[data-armed] .stop-label{display:none}
+.stop[data-armed] .stop-confirm{display:inline}
+
+/* ---------- el paso entre los tres estados ----------
+   Los dos estados transitorios entran subiendo; el que se va, se va. Sin animación
+   de salida a propósito: `hidden` es `display:none` y encadenar salida con entrada
+   dejaría el hueco vacío un momento, que es justo el tirón que hay que evitar.
+   Es el mismo `rise` que ya usan las vistas, con el mismo `both`, así que está
+   probado en esta app.
+
+   `.play` no lleva ninguna: es el estado de reposo, la casa de la tarjeta, y volver
+   a casa al instante se lea como respuesta y no como salto. Además una animación con
+   `opacity` de por medio en el botón principal solo puede acabar de una forma mala
+   —invisible— si algún día no llega a correr, y el fundido no valía ese riesgo. */
+.launch:not([hidden]),.session:not([hidden]){
+  animation:rise .34s cubic-bezier(.22,.68,0,1) both;
+}
+
+/* ---------- botones ----------
+   `.btn` y `.btn.green` se usaban en ocho sitios —onboarding, setup de cuenta,
+   ajustes, importar— sin estar definidas en ninguno: salían como botones grises del
+   sistema en mitad de la interfaz oscura. Aquí quedan. `.green` es el primario: la
+   misma receta que `.play`, a menor escala. */
+.btn{
+  border:0;cursor:pointer;border-radius:10px;
+  padding:9px 16px;
+  font-family:var(--font-body);font-size:12.5px;font-weight:600;
+  color:var(--text-dim);
+  background:var(--glass-1);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+  transition:color .16s ease,background .16s ease,transform .16s cubic-bezier(.32,.72,0,1);
+}
+.btn:hover{color:var(--text);background:var(--glass-2)}
+.btn:active{transform:translateY(1px)}
+.btn:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.btn[disabled]{opacity:.5;cursor:default;transform:none}
+.btn.green{
+  color:#04170A;
+  background:linear-gradient(165deg,#99D984,var(--green) 48%,var(--green-hot) 78%,var(--green-deep));
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.5),
+    inset 0 -1px 0 rgba(0,0,0,.2),
+    0 8px 22px -10px var(--green-glow),
+    0 1px 4px rgba(0,0,0,.35);
+}
+.btn.green:hover{
+  color:#04170A;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 12px 28px -10px rgba(115,191,105,.6),
+             0 1px 4px rgba(0,0,0,.35);
+}
+
+/* ---------- ficha de un pack ----------
+   La misma en «Qué contiene» de importar y en el resultado de un código: misma
+   información, misma forma, un solo sitio donde cambiarla. */
+.packcard{display:flex;align-items:center;gap:14px;min-width:0}
+.packcard-body{min-width:0}
+.packcard .pack-title{font-size:19px;margin:0}
+.packcard .metaline{margin:6px 0 0}
+
+/* ---------- unirse con un código ----------
+   Vive en la vista de Jugar y no en la de importar. No es lo mismo el amigo que
+   recibe un código —que no tiene archivo ninguno y solo quiere jugar— que quien
+   exporta un `.mrpack` y lo arrastra. Meter el código junto a la zona de arrastre
+   junta dos públicos que no se parecen; aquí cae en el sitio donde el amigo se
+   queda parado la primera vez. */
+.join{margin-top:16px}
+.join-ask{display:flex;flex-direction:column;gap:8px}
+.join-field{display:flex;gap:9px;align-items:stretch}
+/* Mono y tracking porque es un código, no una frase: así se lee carácter a carácter
+   y se compara de un vistazo con el que te pasaron. Las mayúsculas son cosmética
+   —Rust normaliza igual— pero enseñan la forma canónica mientras se escribe. */
+.join-input{
+  flex:1;min-width:0;
+  border:0;border-radius:10px;padding:11px 13px;
+  font-family:var(--font-mono);font-size:15px;font-weight:500;
+  letter-spacing:.12em;text-transform:uppercase;
+  color:var(--text);background:rgba(0,0,0,.28);
+  box-shadow:inset 0 0 0 1px var(--hairline);
+}
+.join-input::placeholder{color:var(--text-faint);letter-spacing:.12em}
+.join-input:focus{outline:2px solid var(--green);outline-offset:1px}
+.join-hint{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.04em;color:var(--text-faint)}
+
+.join-busy{
+  display:flex;align-items:center;gap:10px;
+  font-size:13px;color:var(--text-dim);padding:6px 0;
+}
+.join-busy b{font-family:var(--font-mono);color:var(--text);font-weight:500;letter-spacing:.06em}
+
+.join-found{display:flex;flex-direction:column;gap:13px}
+.join-server{
+  display:flex;align-items:center;gap:8px;
+  font-size:12px;color:var(--text-dim);
+}
+.join-server b{color:var(--text);font-weight:600;font-family:var(--font-mono);font-size:11.5px}
+.join-actions{display:flex;align-items:center;gap:14px}
+.join-actions .btn{flex:1}
+/* `.link-min` trae `margin-top:14px` de su uso en el onboarding; aquí descuadra. */
+.join-actions .link-min{margin-top:0;flex:none}
+
+/* ---------- los dos errores ----------
+   Se leen distinto porque son cosas distintas. «No existe» es culpa del código y no
+   tiene reintento: lo que arregla eso es corregir lo escrito, así que el aviso es
+   rosa y el foco vuelve al campo. «Sin conexión» no es culpa de nadie y sí se
+   reintenta: por eso va en gris —no es un error del usuario— y trae su botón. */
+.join-msg{
+  display:flex;align-items:center;gap:11px;
+  border-radius:var(--r-card);padding:11px 13px;
+  font-size:12.5px;line-height:1.45;
+}
+.join-msg-ico{flex:none;display:flex;align-items:center;justify-content:center;width:18px;height:18px}
+.join-msg-ico svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.9;
+  stroke-linecap:round;stroke-linejoin:round}
+.join-msg-body{min-width:0;flex:1}
+.join-msg-t{font-weight:600}
+.join-msg-s{color:var(--text-dim);font-size:11.5px;margin-top:2px}
+
+.join-msg[data-kind="notfound"]{
+  background:rgba(255,107,122,.09);
+  box-shadow:inset 0 0 0 1px rgba(255,107,122,.28);
+  color:#F5C9CE;
+}
+.join-msg[data-kind="notfound"] .join-msg-ico{color:var(--rose)}
+.join-msg[data-kind="offline"]{
+  background:var(--glass-1);
+  box-shadow:inset 0 0 0 1px var(--hairline);
+  color:var(--text);
+}
+.join-msg[data-kind="offline"] .join-msg-ico{color:var(--text-dim)}
+/* Cada aviso enseña su icono y su botón; el otro se queda fuera. Lo decide el CSS
+   para que el JS solo tenga que poner `data-kind`. */
+.join-msg .ico-offline,.join-msg[data-kind="offline"] .ico-notfound{display:none}
+.join-msg[data-kind="offline"] .ico-offline{display:block}
+.join-msg[data-kind="notfound"] .join-retry{display:none}
 
 .steps-list{display:flex;flex-direction:column;margin-top:2px}
 .sl{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:13px}
@@ -780,6 +1043,86 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
               <svg viewBox="0 0 24 24"><path d="M6 4v16l13-8z"/></svg>
               <span id="playLabel">Jugar</span>
             </button>
+            <!-- Ocupa el sitio del botón mientras se instala: se oculta `.play` y se
+                 enseña esto. `data-indeterminate` es el estado de partida porque el
+                 motor no da porcentaje; se quita cuando llega un `frac` de verdad. -->
+            <div class="launch" id="launch" hidden>
+              <div class="launch-head">
+                <span class="launch-phase" id="launchPhase">Preparando</span>
+                <span class="launch-amt" id="launchAmt"></span>
+              </div>
+              <div class="bar" id="launchBar" data-indeterminate><b></b></div>
+              <div class="launch-foot">
+                <span class="launch-hint" id="launchHint">no cierres la ventana</span>
+                <button type="button" class="launch-cancel" id="launchCancel">Cancelar</button>
+              </div>
+            </div>
+            <!-- Tercer estado: Minecraft está corriendo. `data-armed` en el botón lo
+                 pone y lo quita el JS; las dos etiquetas ya están puestas. -->
+            <div class="session" id="session" hidden>
+              <div class="session-head">
+                <span class="dot-live"></span>
+                <span>Jugando</span>
+                <span class="session-name" id="sessionName"></span>
+              </div>
+              <button type="button" class="stop" id="sessionStop">
+                <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
+                <span class="stop-label">Detener</span>
+                <span class="stop-confirm">Confirmar</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== unirse con un código =====
+             Cuatro estados excluyentes dentro del panel: pedir, buscando, encontrado
+             y aviso. El panel entero se esconde cuando ya hay un pack instalado. -->
+        <div class="panel join" id="join" hidden>
+          <h2>¿Te pasaron un código?</h2>
+          <p class="sub">Escríbelo y te instalo el pack de tus amigos.</p>
+
+          <div class="join-ask" id="joinAsk">
+            <div class="join-field">
+              <input type="text" class="join-input" id="joinCode" placeholder="DINO-SMP"
+                     maxlength="14" spellcheck="false" autocomplete="off"
+                     autocapitalize="characters" aria-label="Código del modpack">
+              <button type="button" class="btn green" id="joinGo">Buscar</button>
+            </div>
+            <div class="join-hint">las mayúsculas y los guiones dan igual</div>
+          </div>
+
+          <div class="join-busy" id="joinBusy" hidden>
+            <span class="spin"></span>
+            <span>Buscando <b id="joinBusyCode"></b>…</span>
+          </div>
+
+          <div class="join-found" id="joinFound" hidden>
+            <div class="packcard">
+              <span class="app-icon" style="--s:52px" id="joinIcon"><canvas data-dino width="22" height="21"></canvas></span>
+              <div class="packcard-body">
+                <div class="pack-title" id="joinName"></div>
+                <div class="metaline" id="joinMeta"></div>
+              </div>
+            </div>
+            <div class="join-server" id="joinServer" hidden>
+              <span class="dot-live"></span><span>Entra a <b id="joinServerName"></b></span>
+            </div>
+            <div class="join-actions">
+              <button type="button" class="btn green" id="joinInstall">Instalar y jugar</button>
+              <button type="button" class="link-min" id="joinBack">no es este</button>
+            </div>
+          </div>
+
+          <div class="join-msg" id="joinMsg" hidden data-kind="notfound">
+            <span class="join-msg-ico">
+              <svg class="ico-notfound" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.4a2.7 2.7 0 0 1 5.2.9c0 1.8-2.6 2.1-2.6 3.9"/><path d="M12 17.4h.01"/></svg>
+              <svg class="ico-offline" viewBox="0 0 24 24"><path d="M3 8.5a15 15 0 0 1 18 0"/><path d="M6.5 12.2a10 10 0 0 1 11 0"/><path d="M10 15.9a4.6 4.6 0 0 1 4 0"/><path d="M12 19.5h.01"/><path d="m3.5 3.5 17 17"/></svg>
+            </span>
+            <div class="join-msg-body">
+              <div class="join-msg-t" id="joinMsgTitle"></div>
+              <div class="join-msg-s" id="joinMsgSub"></div>
+            </div>
+            <button type="button" class="btn join-retry" id="joinRetry">Reintentar</button>
           </div>
         </div>
 
@@ -878,11 +1221,13 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
             <h2>Qué contiene</h2>
             <p class="sub" id="previewSub">Suelta un archivo para verlo antes de instalar.</p>
             <div id="previewBody" hidden>
-              <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+              <!-- Misma ficha que el resultado de un código: clases `.packcard`. Los
+                   ids no cambian, así que `showPreview` sigue funcionando igual. -->
+              <div class="packcard" style="margin-bottom:14px">
                 <span class="app-icon" style="--s:52px" id="previewIcon"><canvas data-dino width="22" height="21"></canvas></span>
-                <div style="min-width:0">
-                  <div class="pack-title" style="font-size:19px;margin:0" id="previewName"></div>
-                  <div class="metaline" style="margin:6px 0 0" id="previewMeta"></div>
+                <div class="packcard-body">
+                  <div class="pack-title" id="previewName"></div>
+                  <div class="metaline" id="previewMeta"></div>
                 </div>
               </div>
               <button class="btn green" id="btnInstall" style="width:100%">Instalar este modpack</button>
@@ -934,8 +1279,12 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
       <div class="ob-step" data-ob="3">
         <h2 class="ob-title">Preparando todo</h2>
-        <div class="bar"><b></b></div>
-        <div class="bar-meta"><span>68 %</span><span>842 MB / 1.24 GB · 11.4 MB/s</span></div>
+        <!-- Indeterminada de partida: los «68 %» y «842 MB / 1.24 GB» que había aquí
+             eran fijos y nadie los actualizaba, así que se quedaban clavados durante
+             una instalación real. Prefiero no decir nada a decir un número falso.
+             Para pasarla a determinada: poner `--frac` y quitar `data-indeterminate`. -->
+        <div class="bar" id="obBar" data-indeterminate><b></b></div>
+        <div class="bar-meta"><span id="obPct"></span><span id="obAmt"></span></div>
         <div class="steps-list">
           <div class="sl done"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg></span>Java 21 (Temurin)<span class="amt">46 MB</span></div>
           <div class="sl done"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg></span>Fabric 0.16.9<span class="amt">3 MB</span></div>
@@ -1384,6 +1733,8 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   function refreshAll(){
     return call("get_pack").then(function(p){
       PACK = p && p.id ? p : null;
+      /* Unirse con un código es para quien todavía no tiene nada instalado. */
+      if (joinPanel) joinPanel.hidden = !!PACK;
       $("kvEngine").textContent = "ElyPrism 11.1.0 · administrado";
       setSync(PACK ? "listo para jugar" : "sin modpack", !!PACK);
       return Promise.all([renderInstance(), renderAccount(), renderServer(), renderMemory(), renderJava()]);
@@ -1470,9 +1821,40 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   var playBtn = document.querySelector(".play");
   var playLabel = $("playLabel");
 
+  /* ================= los tres estados del panel de lanzamiento =================
+     Reposo (botón Jugar), preparando (barra) y jugando (detener). Cuál toca lo dice
+     el backend en `session_state`, que es la lectura de un atómico y no cuesta nada,
+     así que se puede preguntar seguido.
+
+     El ancho de la barra entra por la variable `--frac` y no por `style.width`: un
+     ancho en línea le ganaría a cualquier selector y dejaría sin ancho al segmento del
+     modo indeterminado, con lo que la barra parecería congelada justo cuando más
+     importa que se vea viva. */
+  var bloqueLaunch  = $("launch");
+  var bloqueSession = $("session");
+  var launchPhase   = $("launchPhase");
+  var launchAmt     = $("launchAmt");
+  var launchBar     = $("launchBar");
+  var launchCancel  = $("launchCancel");
+  var sessionStop   = $("sessionStop");
+  var sessionName   = $("sessionName");
+
+  function mostrarEstado(cual){
+    if (playBtn)      playBtn.hidden      = (cual !== "reposo");
+    if (bloqueLaunch) bloqueLaunch.hidden = (cual !== "preparando");
+    if (bloqueSession)bloqueSession.hidden= (cual !== "jugando");
+    if (cual !== "jugando") desarmarStop();
+  }
+
   function setProgress(paso, frac){
-    if (playBtn) playBtn.style.setProperty("--p", Math.round((frac || 0) * 100) + "%");
-    if (playLabel && paso) playLabel.textContent = paso;
+    if (paso) launchPhase.textContent = paso;
+    if (typeof frac === "number" && frac >= 0) {
+      launchBar.removeAttribute("data-indeterminate");
+      launchBar.style.setProperty("--frac", Math.round(frac * 100) + "%");
+    } else {
+      /* Sin dato no se finge uno: el motor no publica porcentaje por ninguna vía. */
+      launchBar.setAttribute("data-indeterminate", "");
+    }
   }
 
   if (tauri) {
@@ -1482,12 +1864,83 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     });
   }
 
+  /* ---- cancelar la preparación ----
+     Sustituye al botón Abort del motor, que desapareció al esconderle la ventana.
+     Sin esto no habría forma de parar una descarga de cientos de megas. */
+  if (launchCancel) {
+    launchCancel.addEventListener("click", function(){
+      launchCancel.disabled = true;
+      launchPhase.textContent = "Cancelando";
+      call("abort_launch").catch(function(e){ console.error(e); }).then(function(){
+        launchCancel.disabled = false;
+        mostrarEstado("reposo");
+      });
+    });
+  }
+
+  /* ---- detener la partida, con confirmación ----
+     El botón cae justo donde estaba Jugar, así que quien vuelve del juego y pulsa por
+     costumbre mataría su propia sesión. Por eso el primer clic solo arma. Y se desarma
+     solo: un botón que se queda armado indefinidamente es la misma trampa más tarde. */
+  var stopTimer = null;
+  function desarmarStop(){
+    clearTimeout(stopTimer); stopTimer = null;
+    if (sessionStop) sessionStop.removeAttribute("data-armed");
+  }
+  if (sessionStop) {
+    sessionStop.addEventListener("click", function(){
+      if (!sessionStop.hasAttribute("data-armed")) {
+        sessionStop.setAttribute("data-armed", "");
+        stopTimer = setTimeout(desarmarStop, 4000);
+        return;
+      }
+      desarmarStop();
+      /* Minecraft no guarda al morir así: se pierde lo que no estuviera guardado. */
+      call("stop_game").catch(function(e){ console.error(e); });
+    });
+  }
+  document.addEventListener("keydown", function(e){
+    if (e.key === "Escape") desarmarStop();
+  });
+
+  /* ---- seguir al backend ----
+     Se sondea siempre, no solo tras pulsar Jugar: la partida puede seguir viva de una
+     sesión anterior del launcher, y al abrirlo hay que encontrarla ya en marcha. */
+  var estadoPrevio = null;
+  function seguirSesion(){
+    call("session_state").then(function(st){
+      if (st === estadoPrevio) return;
+      estadoPrevio = st;
+      if (st === "jugando") {
+        if (sessionName) sessionName.textContent = PACK ? PACK.name : "";
+        mostrarEstado("jugando");
+      } else if (st === "preparando") {
+        /* Aquí manda el motor y no publica porcentaje, así que barra indeterminada. */
+        setProgress("Descargando Minecraft", -1);
+        mostrarEstado("preparando");
+      } else {
+        mostrarEstado("reposo");
+      }
+    }).catch(function(){});
+  }
+  setInterval(seguirSesion, 1000);
+  seguirSesion();
+
+  /* Un segundo Jugar mientras el primero sigue en marcha lanzaría el motor dos veces.
+     El botón ya se esconde al empezar, pero el teclado y un doble clic rápido llegan
+     igual, así que el cerrojo va aquí y no en el estado visual. */
+  var lanzando = false;
+
   function runPlay(opts){
     opts = opts || {};
-    if (!PACK) return Promise.resolve();
+    if (!PACK || lanzando) return Promise.resolve();
+    lanzando = true;
     showAlert(null);
-    if (playBtn) playBtn.disabled = true;
+    /* El botón desaparece y su sitio lo ocupa la barra. `estadoPrevio` se limpia para
+       que el sondeo vuelva a aplicar lo que diga el backend en cuanto cambie. */
+    estadoPrevio = null;
     setProgress("Preparando", 0);
+    mostrarEstado("preparando");
     setSync(opts.installOnly ? "instalando…" : "preparando…", false);
 
     return call("play", { args: {
@@ -1504,20 +1957,23 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
         /* Ya no se deja al usuario frente a la ventana del motor sin contexto:
            el setup pregunta primero qué cuenta tiene y guía la que elija. */
         call("close_engine").catch(function(){});
+        estadoPrevio = null; mostrarEstado("reposo");
         spAbrir();
-      } else if (!opts.installOnly) {
-        setProgress("Abriendo Minecraft", 1);
+      } else if (opts.installOnly) {
+        estadoPrevio = null; mostrarEstado("reposo");
+      } else {
+        /* A partir de aquí manda el motor, que no publica porcentaje. El sondeo de
+           `session_state` es quien pasará a «jugando» cuando el juego arranque. */
+        setProgress("Descargando Minecraft", -1);
       }
       return r;
     }).catch(function(err){
       showAlert("<b>No se pudo.</b> " + String(err));
+      estadoPrevio = null; mostrarEstado("reposo");
       throw err;
     }).finally(function(){
+      lanzando = false;
       setSync(PACK ? "listo para jugar" : "sin modpack", !!PACK);
-      setTimeout(function(){
-        if (playBtn) { playBtn.disabled = false; playBtn.style.setProperty("--p", "0%"); }
-        if (playLabel) playLabel.textContent = "Jugar";
-      }, 1200);
     });
   }
 
@@ -1719,6 +2175,95 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     dlog("setup: cuenta=" + (hay ? a.name : "ninguna"));
     if (!hay) { spAbrir(); dlog("setup: visible=" + (!setup.hidden)); }
   }).catch(function(e){ dlog("setup: fallo al consultar cuenta: " + String(e)); });
+
+  /* ================= unirse con un código =================
+     Cuatro estados excluyentes: pedir, buscando, encontrado y aviso. El código se
+     manda tal cual se escribió; normalizarlo es cosa de Rust, que también acepta que
+     peguen el link entero. Aquí no se toca para no tener la regla en dos sitios. */
+  var joinPanel = $("join");
+  var joinAsk   = $("joinAsk");
+  var joinBusy  = $("joinBusy");
+  var joinFound = $("joinFound");
+  var joinMsg   = $("joinMsg");
+  var joinCode  = $("joinCode");
+  var ultimoCodigo = "";
+
+  function joinEstado(cual){
+    if (!joinPanel) return;
+    joinAsk.hidden   = (cual !== "pedir");
+    joinBusy.hidden  = (cual !== "buscando");
+    joinFound.hidden = (cual !== "encontrado");
+    joinMsg.hidden   = (cual !== "aviso");
+  }
+
+  function joinBuscar(){
+    var texto = (joinCode.value || "").trim();
+    if (!texto) { joinCode.focus(); return; }
+    ultimoCodigo = texto;
+    $("joinBusyCode").textContent = texto;
+    joinEstado("buscando");
+
+    call("catalog_lookup", { code: texto }).then(function(p){
+      $("joinName").textContent = p.name;
+      /* Solo se enseña lo que el catálogo trae: inventar un dato que falta sería
+         prometer algo que luego no se cumple. */
+      var partes = [];
+      if (p.minecraft) partes.push("Minecraft " + p.minecraft);
+      if (p.loader)    partes.push(p.loader);
+      if (p.mods)      partes.push(p.mods + " mods");
+      $("joinMeta").textContent = partes.join(" · ");
+
+      var srv = $("joinServer");
+      if (p.server) { $("joinServerName").textContent = p.server; srv.hidden = false; }
+      else srv.hidden = true;
+
+      joinEstado("encontrado");
+    }).catch(function(e){
+      /* «No existe» y «no hay internet» piden cosas distintas de quien lee: uno
+         revisa el código, el otro revisa su wifi. Por eso son dos avisos. */
+      var noExiste = /no encontr/i.test(String(e));
+      joinMsg.setAttribute("data-kind", noExiste ? "notfound" : "offline");
+      $("joinMsgTitle").textContent = noExiste ? "Ese código no existe" : "No pude conectar";
+      $("joinMsgSub").textContent = noExiste
+        ? "Revisa cómo está escrito, o pídeselo otra vez a quien te lo pasó."
+        : "Comprueba tu conexión y vuelve a intentarlo.";
+      joinEstado("aviso");
+    });
+  }
+
+  if (joinPanel) {
+    $("joinGo").addEventListener("click", joinBuscar);
+    $("joinRetry").addEventListener("click", joinBuscar);
+    joinCode.addEventListener("keydown", function(e){
+      if (e.key === "Enter") joinBuscar();
+    });
+    $("joinBack").addEventListener("click", function(){
+      joinEstado("pedir"); joinCode.focus(); joinCode.select();
+    });
+
+    $("joinInstall").addEventListener("click", function(){
+      var btn = $("joinInstall");
+      btn.disabled = true;
+      /* La descarga del `.mrpack` emite eventos `install`, así que el panel de
+         lanzamiento ya la enseña; este pasa a un segundo plano. */
+      estadoPrevio = null;
+      setProgress("Descargando el modpack", -1);
+      mostrarEstado("preparando");
+
+      call("catalog_install", { code: ultimoCodigo }).then(function(){
+        joinEstado("pedir");
+        /* `refreshAll` relee pack.json, que `catalog_install` acaba de escribir
+           apuntando a nuestra carpeta y no al disco de quien lo publicó. */
+        return refreshAll().then(function(){ return runPlay(); });
+      }).catch(function(e){
+        showAlert("<b>No se pudo instalar.</b> " + String(e));
+        estadoPrevio = null; mostrarEstado("reposo");
+        joinEstado("encontrado");
+      }).finally(function(){ btn.disabled = false; });
+    });
+
+    joinEstado("pedir");
+  }
 
   /* ================= actualizaciones del launcher =================
      Se comprueba al abrir y se ofrece con un botón, no se instala sola: reemplazar el

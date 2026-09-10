@@ -414,7 +414,228 @@ pub fn engine_windows(root: &Path) -> Option<usize> {
     }
 }
 
-/// Cierra el motor que abrimos para iniciar sesión.
+/// Esconde las ventanas de un proceso y devuelve los títulos de las que escondió.
+///
+/// Al preparar el lanzamiento el motor abre su propio diálogo Qt —«Please wait…», con
+/// barra y un registro de URLs— y no hay forma de desactivarlo: ni por configuración ni
+/// por línea de comandos. Esconderlo por API es lo único que queda. La descarga sigue
+/// corriendo exactamente igual; `SW_HIDE` no cancela nada, solo deja de dibujar.
+///
+/// Va por **PID concreto y no por «todas las del motor» a propósito**: durante el login
+/// el motor enseña su página de Cuentas, y esconderla dejaría al usuario mirando una
+/// ventana que nunca llega. Quien llama decide cuándo procede.
+///
+/// Devuelve los títulos porque son la única pista de qué se tapó. Si algún día el motor
+/// abre ahí un error en vez de un progreso, esto es lo que lo delataría.
+#[cfg(windows)]
+pub fn hide_windows_of(pid: u32) -> Vec<String> {
+    use std::sync::Mutex;
+
+    #[link(name = "user32")]
+    #[allow(non_snake_case)] // los nombres son los de la API, no se traducen
+    extern "system" {
+        fn EnumWindows(cb: extern "system" fn(isize, isize) -> i32, param: isize) -> i32;
+        fn GetWindowThreadProcessId(hwnd: isize, pid: *mut u32) -> u32;
+        fn IsWindowVisible(hwnd: isize) -> i32;
+        fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
+        fn GetWindowTextW(hwnd: isize, buf: *mut u16, len: i32) -> i32;
+    }
+    const SW_HIDE: i32 = 0;
+
+    // `EnumWindows` recibe una función suelta, sin contexto propio, así que el PID
+    // buscado y lo recogido tienen que vivir fuera. El candado evita que dos llamadas
+    // simultáneas se mezclen los datos.
+    static ESTADO: Mutex<(u32, Vec<String>)> = Mutex::new((0, Vec::new()));
+
+    extern "system" fn visitar(hwnd: isize, _p: isize) -> i32 {
+        let mut suyo = 0u32;
+        unsafe { GetWindowThreadProcessId(hwnd, &mut suyo) };
+        if let Ok(mut e) = ESTADO.lock() {
+            if suyo == e.0 && unsafe { IsWindowVisible(hwnd) } != 0 {
+                let mut buf = [0u16; 256];
+                let n = unsafe { GetWindowTextW(hwnd, buf.as_mut_ptr(), 256) }.max(0) as usize;
+                e.1.push(String::from_utf16_lossy(&buf[..n]));
+                unsafe { ShowWindow(hwnd, SW_HIDE) };
+            }
+        }
+        1 // seguir enumerando
+    }
+
+    {
+        let Ok(mut g) = ESTADO.lock() else { return Vec::new() };
+        *g = (pid, Vec::new());
+    }
+    unsafe { EnumWindows(visitar, 0) };
+    ESTADO.lock().map(|g| g.1.clone()).unwrap_or_default()
+}
+
+#[cfg(not(windows))]
+pub fn hide_windows_of(pid: u32) -> Vec<String> {
+    // En macOS haría falta pasar por las APIs de Accesibilidad, que además piden
+    // permiso al usuario. Por ahora el diálogo del motor se ve allí.
+    let _ = pid;
+    Vec::new()
+}
+
+/// ¿Sigue vivo ese proceso?
+///
+/// Por API y no enumerando: esto se llama en bucle mientras se esconde la ventana, y
+/// listar procesos en Windows cuesta un PowerShell entero cada vez.
+#[cfg(windows)]
+pub fn proceso_vivo(pid: u32) -> bool {
+    #[link(name = "kernel32")]
+    #[allow(non_snake_case)] // los nombres son los de la API, no se traducen
+    extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
+        fn GetExitCodeProcess(handle: isize, code: *mut u32) -> i32;
+        fn CloseHandle(handle: isize) -> i32;
+    }
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h == 0 {
+            return false;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(h, &mut code) != 0;
+        CloseHandle(h);
+        ok && code == STILL_ACTIVE
+    }
+}
+
+#[cfg(not(windows))]
+pub fn proceso_vivo(pid: u32) -> bool {
+    let _ = pid;
+    false
+}
+
+/// En qué punto está la partida, para que la interfaz sepa qué enseñar.
+///
+/// Se guarda en un atómico global y no en el estado de Tauri porque quien lo escribe es
+/// un hilo suelto: así el comando que lo lee no cuesta absolutamente nada, y puede
+/// preguntarse tan a menudo como haga falta sin pagar una enumeración de procesos.
+pub mod sesion {
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    pub const INACTIVA: u8 = 0;
+    pub const PREPARANDO: u8 = 1;
+    pub const JUGANDO: u8 = 2;
+
+    static ESTADO: AtomicU8 = AtomicU8::new(INACTIVA);
+
+    pub fn poner(v: u8) {
+        ESTADO.store(v, Ordering::Relaxed);
+    }
+    pub fn actual() -> u8 {
+        ESTADO.load(Ordering::Relaxed)
+    }
+    pub fn nombre() -> &'static str {
+        match actual() {
+            PREPARANDO => "preparando",
+            JUGANDO => "jugando",
+            _ => "inactiva",
+        }
+    }
+}
+
+/// PID de la partida en curso, si la hay.
+///
+/// Cuesta una enumeración de procesos entera, así que se llama lo mínimo: una vez al
+/// pasar de preparar a jugar. A partir de ahí basta preguntar por ese PID, que es
+/// gratis.
+pub fn game_pid(root: &Path) -> Option<u32> {
+    let root = root.to_str()?;
+    procesos()
+        .into_iter()
+        .find(|p| p.args.contains(GAME_MAIN_CLASS) && en_nuestra_carpeta(&p.args, root))
+        .map(|p| p.pid)
+}
+
+/// Vigila una partida de principio a fin: esconde, detecta y publica el estado.
+///
+/// 1. **Preparando** — se esconden las ventanas del motor cada 15 ms. No 300, que era
+///    lo que dejaba al diálogo alcanzar a dibujarse y parpadear; 15 ms es un fotograma
+///    a 60 Hz y `EnumWindows` es lo bastante barato para permitírselo.
+/// 2. **Jugando** — en cuanto aparece el proceso del juego.
+/// 3. **Inactiva** — cuando termina.
+///
+/// El paso a «jugando» lo dispara **que aparezca el juego**, no que muera el motor.
+/// Parece lo mismo y no lo es: `CloseAfterLaunch` debería cerrarlo, pero medido en
+/// esta máquina el motor seguía vivo con Minecraft ya corriendo, y esperándolo la
+/// interfaz se quedaba en la barra de carga para siempre, sin ofrecer detener.
+///
+/// Buscar el juego cuesta una enumeración de procesos entera, así que no se hace en
+/// cada vuelta: una cada dos segundos basta y el resto del tiempo se dedica a esconder.
+pub fn monitor_sesion(root: std::path::PathBuf, pid_motor: u32) {
+    sesion::poner(sesion::PREPARANDO);
+
+    const PASO: u64 = 15; // ms entre intentos de esconder
+    const CADA: u32 = 133; // ~2 s: cada cuántas vueltas se busca el juego
+
+    let limite = std::time::Instant::now() + std::time::Duration::from_secs(60 * 60);
+    let mut vuelta: u32 = 0;
+    let mut pid_juego = None;
+
+    while std::time::Instant::now() < limite {
+        for titulo in hide_windows_of(pid_motor) {
+            println!("[PLAY] escondida ventana del motor: {titulo:?}");
+        }
+
+        if vuelta % CADA == 0 {
+            if let Some(pid) = game_pid(&root) {
+                pid_juego = Some(pid);
+                break;
+            }
+            // Si el motor ya no está y el juego tampoco apareció, el lanzamiento se
+            // fue al traste: no hay nada que vigilar ni nada que esconder.
+            if !proceso_vivo(pid_motor) && vuelta > 0 {
+                break;
+            }
+        }
+        vuelta = vuelta.wrapping_add(1);
+        std::thread::sleep(std::time::Duration::from_millis(PASO));
+    }
+
+    match pid_juego {
+        Some(pid) => {
+            println!("[PLAY] partida en curso, pid {pid}");
+            sesion::poner(sesion::JUGANDO);
+            // Se sigue escondiendo mientras se juega: el motor puede seguir vivo y
+            // sacar su consola al terminar la partida.
+            while proceso_vivo(pid) {
+                let _ = hide_windows_of(pid_motor);
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+            println!("[PLAY] la partida terminó");
+        }
+        None => println!("[PLAY] el motor terminó sin abrir el juego"),
+    }
+    sesion::poner(sesion::INACTIVA);
+}
+
+/// Detiene la partida en curso./// Detiene la partida en curso.
+///
+/// Es exactamente lo contrario de `close_engine`, que protege al juego a toda costa:
+/// aquí se mata precisamente eso, porque lo pidió quien está jugando. Minecraft no
+/// guarda al morir así, de modo que se pierde lo que no estuviera guardado — por eso
+/// esta decisión no se toma sola en ningún otro sitio del programa.
+pub fn stop_game(root: &Path) -> usize {
+    let Some(root) = root.to_str() else { return 0 };
+    let mut parados = 0;
+    for p in procesos() {
+        if p.args.contains(GAME_MAIN_CLASS) && en_nuestra_carpeta(&p.args, root) && matar(p.pid) {
+            parados += 1;
+        }
+    }
+    if parados > 0 {
+        sesion::poner(sesion::INACTIVA);
+    }
+    parados
+}
+
+/// Cierra el motor que abrimos para iniciar sesión./// Cierra el motor que abrimos para iniciar sesión.
 ///
 /// `kill_orphans` no sirve aquí: ese solo toca procesos que ya nadie sostiene, y este
 /// lo acabamos de lanzar nosotros. Se usa cuando la cuenta ya aparece en

@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod catalog;
 pub mod engine;
 pub mod install;
 pub mod pack;
@@ -108,6 +109,20 @@ pub struct PlayArgs {
 /// Deja todo listo y lanza Minecraft.
 #[tauri::command]
 async fn play(app: tauri::AppHandle, args: PlayArgs) -> Result<String, String> {
+    // El estado se marca **antes** de instalar, no después de lanzar. Si no, durante
+    // toda la instalación `session_state` seguía diciendo «inactiva», la interfaz
+    // volvía al botón de Jugar a los pocos segundos y se podía pulsar otra vez.
+    install::sesion::poner(install::sesion::PREPARANDO);
+    let r = play_inner(app, args).await;
+    // Solo un lanzamiento de verdad deja un hilo vigilando; en cualquier otro final
+    // —error, falta de cuenta, o instalar sin jugar— hay que devolverlo a inactiva.
+    if !matches!(r.as_deref(), Ok("launched")) {
+        install::sesion::poner(install::sesion::INACTIVA);
+    }
+    r
+}
+
+async fn play_inner(app: tauri::AppHandle, args: PlayArgs) -> Result<String, String> {
     let root = app
         .path()
         .app_data_dir()
@@ -156,9 +171,27 @@ async fn play(app: tauri::AppHandle, args: PlayArgs) -> Result<String, String> {
     if !mrpack.exists() {
         return Err(format!("no encuentro el modpack en {}", mrpack.display()));
     }
-    install::install_pack(&layout, &args.instance_id, &mrpack, &settings, &emit)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Reinstalar en cada Jugar significaba releer el `.mrpack` entero y reextraerlo
+    // para acabar escribiendo los mismos archivos. El `instance.cfg` ya dice qué
+    // versión hay montada, así que basta preguntárselo.
+    //
+    // `install_only` es la vía de Importar, y ahí sí se instala siempre: es también
+    // el camino para reparar una instancia que se haya quedado a medias.
+    let cfg_actual = std::fs::read_to_string(layout.instance(&args.instance_id).join("instance.cfg"))
+        .unwrap_or_default();
+    if args.install_only || !engine::ya_instalado(&cfg_actual, &args.version) {
+        install::install_pack(&layout, &args.instance_id, &mrpack, &settings, &emit)
+            .await
+            .map_err(|e| e.to_string())?;
+    } else {
+        // El cfg sí se reescribe: la memoria y el servidor pueden haber cambiado en
+        // Ajustes desde la última vez, y eso no justifica reextraer nada.
+        let _ = std::fs::write(
+            layout.instance(&args.instance_id).join("instance.cfg"),
+            engine::instance_cfg(&settings),
+        );
+        emit("Ya está instalado", 1.0);
+    }
 
     if args.install_only {
         emit("Listo", 1.0);
@@ -194,10 +227,22 @@ async fn play(app: tauri::AppHandle, args: PlayArgs) -> Result<String, String> {
     install::set_dock_visibility(&layout.engine_app(), true);
 
     emit("Abriendo Minecraft", 1.0);
-    std::process::Command::new(&bin)
+    let hijo = std::process::Command::new(&bin)
         .args(&launch)
         .spawn()
         .map_err(|e| format!("no pude lanzar el juego: {e}"))?;
+
+    // El motor abre su propio diálogo de progreso al preparar el lanzamiento. Se
+    // esconde en un hilo aparte, sobre el PID que acabamos de lanzar y no sobre «las
+    // ventanas del motor» en general: durante el login su página de Cuentas tiene que
+    // verse, y esta misma función no distingue una de otra.
+    //
+    // El progreso que sustituye a ese diálogo va en nuestra ventana; mientras no esté,
+    // esconderlo deja al usuario sin ver nada durante la descarga.
+    let pid = hijo.id();
+    let raiz = layout.root.clone();
+    std::thread::spawn(move || install::monitor_sesion(raiz, pid));
+
     Ok("launched".into())
 }
 
@@ -251,6 +296,38 @@ async fn open_engine_login(
 fn engine_windows(app: tauri::AppHandle) -> Option<usize> {
     let layout = layout_of(&app).ok()?;
     install::engine_windows(&layout.root)
+}
+
+/// En qué punto está la partida: `"inactiva"`, `"preparando"` o `"jugando"`.
+///
+/// Lo lleva el hilo que vigila la sesión, así que esto es una lectura de un atómico:
+/// la interfaz puede preguntarlo tan seguido como quiera sin coste.
+#[tauri::command]
+fn session_state() -> &'static str {
+    install::sesion::nombre()
+}
+
+/// Aborta la preparación del lanzamiento.
+///
+/// Es lo que sustituye al botón *Abort* del motor, que desapareció al esconderle la
+/// ventana. Mata el motor mientras descarga; la partida, si ya arrancó, no se toca —
+/// para eso está `stop_game`.
+#[tauri::command]
+fn abort_launch(app: tauri::AppHandle) -> Result<usize, String> {
+    let layout = layout_of(&app)?;
+    let n = install::close_engine(&layout.root);
+    install::sesion::poner(install::sesion::INACTIVA);
+    Ok(n)
+}
+
+/// Detiene la partida en curso.
+///
+/// Minecraft no guarda al morir así: se pierde lo que no estuviera guardado. Por eso
+/// solo se llama desde un botón explícito y nunca como efecto secundario de otra cosa.
+#[tauri::command]
+fn stop_game(app: tauri::AppHandle) -> Result<usize, String> {
+    let layout = layout_of(&app)?;
+    Ok(install::stop_game(&layout.root))
 }
 
 /// Cierra la ventana del motor cuando ya cumplió su papel.
@@ -357,6 +434,56 @@ async fn update_install(app: tauri::AppHandle) -> Result<(), String> {
         let _ = app;
         Err("esta plataforma no tiene actualizaciones".into())
     }
+}
+
+/// Resuelve un código —o un link pegado— contra el catálogo público.
+///
+/// Devuelve la ficha del pack para poder enseñar qué es **antes** de descargar nada:
+/// instalar a ciegas algo que llega de un chat no es razonable.
+#[tauri::command]
+async fn catalog_lookup(code: String) -> Result<catalog::PackRemoto, String> {
+    catalog::resolver(&code).await.map_err(|e| e.to_string())
+}
+
+/// Descarga el `.mrpack` del catálogo y lo deja como pack activo.
+///
+/// No instala: solo deja el archivo en nuestra carpeta y apunta `pack.json` a él. La
+/// instalación es la de siempre, que ya sabe respetar mundos y ajustes del jugador.
+///
+/// Y ahí está el arreglo de fondo: `pack.json` guardaba la ruta del disco de quien
+/// importó el pack, así que el launcher no servía en otra máquina. Ahora apunta a la
+/// carpeta de datos de la app, que existe en todas.
+#[tauri::command]
+async fn catalog_install(app: tauri::AppHandle, code: String) -> Result<serde_json::Value, String> {
+    let layout = layout_of(&app)?;
+    let pack = catalog::resolver(&code).await.map_err(|e| e.to_string())?;
+
+    let destino = layout.packs().join(format!("{}.mrpack", pack.id));
+    let emit = |bajado: u64, total: u64| {
+        let frac = if total > 0 { bajado as f32 / total as f32 } else { -1.0 };
+        let _ = app.emit(
+            "install",
+            serde_json::json!({ "paso": "Descargando el modpack", "frac": frac }),
+        );
+    };
+    catalog::descargar_pack(&pack, &destino, &emit)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let json = serde_json::json!({
+        "id": pack.id,
+        "name": pack.name,
+        "version": pack.version,
+        "server": pack.server,
+        "mrpack": destino,
+    });
+    std::fs::create_dir_all(&layout.root).map_err(|e| e.to_string())?;
+    std::fs::write(
+        layout.root.join("pack.json"),
+        serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(json)
 }
 
 /// Crea una cuenta sin conexión con el nombre dado y la deja activa.
@@ -599,6 +726,19 @@ pub fn run() {
                 std::thread::spawn(move || {
                     install::kill_orphans(&layout.root);
                     install::warm_engine(&layout);
+
+                    // Una partida puede seguir viva de una sesión anterior del
+                    // launcher: si alguien lo cerró y volvió a abrirlo con Minecraft
+                    // corriendo, la interfaz tiene que encontrárselo ya en marcha en
+                    // vez de ofrecerle Jugar sobre algo que ya está jugando.
+                    if let Some(pid) = install::game_pid(&layout.root) {
+                        println!("[PLAY] partida ya en curso al abrir, pid {pid}");
+                        install::sesion::poner(install::sesion::JUGANDO);
+                        while install::proceso_vivo(pid) {
+                            std::thread::sleep(std::time::Duration::from_secs(2));
+                        }
+                        install::sesion::poner(install::sesion::INACTIVA);
+                    }
                 });
             }
             Ok(())
@@ -624,6 +764,11 @@ pub fn run() {
             open_engine_login,
             engine_windows,
             close_engine,
+            session_state,
+            abort_launch,
+            stop_game,
+            catalog_lookup,
+            catalog_install,
             offline_create,
             offline_check,
             update_check,

@@ -193,6 +193,18 @@ pub fn instance_cfg(s: &PackSettings) -> String {
     out
 }
 
+/// ¿La instancia ya está montada con esta misma versión del pack?
+///
+/// `ManagedPackVersionID` lo escribimos nosotros al instalar, así que su presencia con
+/// la versión correcta significa que el `.mrpack` ya se extrajo entero alguna vez.
+///
+/// Sin esta comprobación, cada Jugar volvía a leer el `.mrpack` completo —cientos de
+/// megas— y a reextraerlo, para acabar escribiendo exactamente los mismos archivos.
+pub fn ya_instalado(cfg: &str, version: &str) -> bool {
+    let buscado = format!("ManagedPackVersionID={version}");
+    cfg.lines().any(|l| l.trim() == buscado)
+}
+
 /// Flags de la JVM que HotSpot considera experimentales: sin
 /// `-XX:+UnlockExperimentalVMOptions` delante, la máquina virtual **no arranca**
 /// y el motor solo reporta un genérico "Game crashed".
@@ -544,6 +556,24 @@ mod tests {
         assert!(!cfg.contains("JvmArgs="), "no debe escribir args vacíos");
         // La memoria sí es nuestra: eso no choca con nada.
         assert!(cfg.contains("MaxMemAlloc=6144"));
+    }
+
+    #[test]
+    fn reconoce_una_instancia_ya_montada() {
+        let cfg = instance_cfg(&settings());
+        assert!(ya_instalado(&cfg, "4.3.1"), "es la versión que acaba de escribir");
+        assert!(!ya_instalado(&cfg, "4.3.2"), "otra versión sí hay que instalarla");
+        assert!(!ya_instalado("", "4.3.1"), "sin cfg no hay nada montado");
+    }
+
+    #[test]
+    fn no_confunde_una_version_con_otra_que_la_contiene() {
+        // Comparar por `contains` daría por instalada la 4.3.1 teniendo la 4.3.10,
+        // y entonces una actualización real no se aplicaría nunca.
+        let mut s = settings();
+        s.version = "4.3.10".into();
+        assert!(!ya_instalado(&instance_cfg(&s), "4.3.1"));
+        assert!(ya_instalado(&instance_cfg(&s), "4.3.10"));
     }
 
     #[test]
