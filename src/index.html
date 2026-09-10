@@ -506,6 +506,28 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 .mono-i{font-family:var(--font-mono);font-size:11.5px;color:var(--text)}
 
 
+/* Aviso de versión nueva del launcher. Verde, no rojo: no es un fallo, es una
+   invitación — y vive fuera del contenido porque no depende de que haya modpack. */
+.upbar{
+  position:relative;z-index:2;flex:none;
+  display:flex;align-items:center;gap:12px;
+  padding:9px 16px;
+  background:rgba(115,191,105,.10);
+  box-shadow:inset 0 -1px 0 rgba(115,191,105,.22);
+  font-size:12.5px;color:var(--text);
+}
+.upbar-txt{flex:1;line-height:1.4}
+.upbar-txt b{color:var(--green);font-weight:600}
+.upbar-btn{
+  flex:none;padding:6px 14px;border-radius:var(--r-chip);
+  border:1px solid rgba(115,191,105,.35);background:rgba(115,191,105,.16);
+  color:var(--text);font-family:var(--font-body);font-size:12px;font-weight:600;
+  cursor:pointer;transition:background .15s ease;
+}
+.upbar-btn:hover{background:rgba(115,191,105,.26)}
+.upbar-btn:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.upbar-btn[disabled]{opacity:.55;cursor:default}
+
 .alert{
   margin-top:16px;border-radius:var(--r-card);padding:12px 14px;
   background:rgba(255,107,122,.09);
@@ -657,6 +679,11 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       <div class="sync"><span class="pulse" id="syncDot"></span><span id="syncText">comprobando…</span></div>
       <button class="tb-btn" id="guest">Ver lo que verá un amigo</button>
     </div>
+  </div>
+
+  <div class="upbar" id="upbar" hidden>
+    <span class="upbar-txt" id="upbar-txt"></span>
+    <button type="button" class="upbar-btn" id="upbar-btn">Actualizar</button>
   </div>
 
   <div class="shell">
@@ -1659,6 +1686,44 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     dlog("setup: cuenta=" + (hay ? a.name : "ninguna"));
     if (!hay) { spAbrir(); dlog("setup: visible=" + (!setup.hidden)); }
   }).catch(function(e){ dlog("setup: fallo al consultar cuenta: " + String(e)); });
+
+  /* ================= actualizaciones del launcher =================
+     Se comprueba al abrir y se ofrece con un botón, no se instala sola: reemplazar el
+     ejecutable cierra la app, y hacer eso sin avisar en mitad de algo sería peor que
+     la molestia que esto evita.
+
+     Si el updater no está configurado —falta `pubkey` o `endpoints`— `update_check`
+     devuelve null igual que si no hubiera nada nuevo, y aquí no aparece nada. */
+  var upbar = $("upbar"), upTxt = $("upbar-txt"), upBtn = $("upbar-btn");
+
+  if (tauri && tauri.event && tauri.event.listen) {
+    tauri.event.listen("update", function(e){
+      var p = (e && e.payload) || {};
+      /* frac < 0 significa que el servidor no dijo el tamaño: se informa sin
+         porcentaje en vez de inventar uno que se quede clavado. */
+      upTxt.textContent = (p.frac >= 0)
+        ? p.paso + " · " + Math.round(p.frac * 100) + " %"
+        : p.paso + "…";
+    });
+  }
+
+  call("update_check").then(function(u){
+    if (!u || !u.version) return;
+    upTxt.innerHTML = "Hay una versión nueva: <b>" + u.version +
+                      "</b> — tienes la " + (u.actual || "actual") + ".";
+    upbar.hidden = false;
+  }).catch(function(){});
+
+  upBtn.addEventListener("click", function(){
+    upBtn.disabled = true;
+    upTxt.textContent = "Preparando la descarga…";
+    /* En Windows el instalador cierra la app, así que esta promesa normalmente
+       no se resuelve nunca: lo último que se ve es el progreso. */
+    call("update_install").catch(function(e){
+      upTxt.textContent = "No se pudo actualizar: " + String(e);
+      upBtn.disabled = false;
+    });
+  });
 
   refreshAll();
 

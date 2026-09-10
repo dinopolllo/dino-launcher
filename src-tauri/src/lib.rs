@@ -330,6 +330,91 @@ fn open_url(url: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// ¿Hay una versión nueva del launcher?
+///
+/// Devuelve `null` cuando no hay nada que instalar **y también cuando el updater no
+/// está configurado todavía** (sin `pubkey` ni `endpoints` en `tauri.conf.json`).
+/// Se tratan igual a propósito: un launcher sin actualizaciones configuradas debe
+/// verse normal, no enseñar un error que su usuario no puede resolver.
+#[tauri::command]
+async fn update_check(app: tauri::AppHandle) -> Result<Option<serde_json::Value>, String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_updater::UpdaterExt;
+        let Ok(updater) = app.updater() else {
+            return Ok(None); // sin configurar
+        };
+        return match updater.check().await {
+            Ok(Some(u)) => Ok(Some(serde_json::json!({
+                "version": u.version,
+                "actual": u.current_version,
+                "notas": u.body,
+            }))),
+            Ok(None) => Ok(None),
+            // Quedarse sin internet no es un fallo del launcher: se calla y sigue.
+            Err(e) => {
+                println!("[UPDATE] no se pudo comprobar: {e}");
+                Ok(None)
+            }
+        };
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = app;
+        Ok(None)
+    }
+}
+
+/// Descarga e instala la versión nueva.
+///
+/// En Windows el instalador NSIS **cierra el launcher** para poder reemplazarlo, así
+/// que esta llamada normalmente no regresa: lo último que ve la interfaz es el
+/// progreso. Por eso el avance se emite por evento y no como valor de retorno.
+#[tauri::command]
+async fn update_install(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_updater::UpdaterExt;
+        let updater = app.updater().map_err(|e| e.to_string())?;
+        let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
+            return Err("ya no hay ninguna versión nueva".into());
+        };
+
+        let emit = |paso: &str, frac: f32| {
+            let _ = app.emit("update", serde_json::json!({ "paso": paso, "frac": frac }));
+        };
+
+        // `content_length` es opcional: hay servidores que no lo mandan. Sin él se
+        // informa del avance sin porcentaje en vez de inventar uno.
+        let mut bajado: u64 = 0;
+        let mut total: Option<u64> = None;
+        update
+            .download_and_install(
+                |trozo, largo| {
+                    bajado += trozo as u64;
+                    total = largo;
+                    let frac = total.filter(|t| *t > 0).map_or(-1.0, |t| bajado as f32 / t as f32);
+                    let _ = app.emit(
+                        "update",
+                        serde_json::json!({ "paso": "Descargando", "frac": frac }),
+                    );
+                },
+                || emit("Instalando", 1.0),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // En macOS y Linux el proceso sigue vivo tras instalar y hay que reiniciarlo
+        // a mano. En Windows no se llega aquí: el instalador ya cerró la app.
+        app.restart();
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = app;
+        Err("esta plataforma no tiene actualizaciones".into())
+    }
+}
+
 /// Tamaño en disco de una carpeta, en bytes.
 fn dir_size(p: &std::path::Path) -> u64 {
     let Ok(rd) = std::fs::read_dir(p) else { return 0 };
@@ -518,6 +603,14 @@ fn app_paths(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            // El updater se registra aquí y no en la cadena del builder porque en móvil
+            // no existe. Fallar al registrarlo no debe impedir que la app abra: sin él
+            // simplemente no hay actualizaciones.
+            #[cfg(desktop)]
+            if let Err(e) = app.handle().plugin(tauri_plugin_updater::Builder::new().build()) {
+                println!("[UPDATE] no se pudo registrar el updater: {e}");
+            }
+
             let window = app.get_webview_window("main").expect("falta la ventana main");
             // El vidrio nativo solo aporta si la ventana es transparente. Hoy no lo es:
             // la interfaz pinta su propio fondo para verse igual en las tres plataformas.
@@ -559,6 +652,8 @@ pub fn run() {
             ely_configured,
             close_engine,
             open_url,
+            update_check,
+            update_install,
         ])
         .run(tauri::generate_context!())
         .expect("Dino Launcher no pudo arrancar");
