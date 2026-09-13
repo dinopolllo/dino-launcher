@@ -1,7 +1,9 @@
+pub mod admin;
 pub mod auth;
 pub mod catalog;
 pub mod engine;
 pub mod install;
+pub mod library;
 pub mod pack;
 pub mod status;
 
@@ -99,6 +101,10 @@ pub struct PlayArgs {
     pub server: Option<String>,
     pub max_mem: u32,
     pub jvm_args: String,
+    /// Código del catálogo, si el pack vino de ahí. Es lo que permite mirar antes de
+    /// jugar si hay una versión nueva.
+    #[serde(default)]
+    pub code: Option<String>,
     /// Perfil del motor. Si falta, usamos el primero que haya.
     pub profile: Option<String>,
     /// Instalar y verificar, sin abrir el juego.
@@ -151,10 +157,78 @@ async fn play_inner(app: tauri::AppHandle, args: PlayArgs) -> Result<String, Str
         (2048.min(args.max_mem), args.max_mem)
     };
 
+    // Antes de jugar se mira si el pack cambió. Va aquí y no en un botón porque la
+    // idea es que a un amigo no le toque hacer nada: pulsa Jugar y entra con lo
+    // último.
+    //
+    // **Sin red se juega igual.** Un fallo al comprobar no puede impedir entrar a un
+    // mundo: se registra y se sigue con lo que haya instalado.
+    let mut version = args.version.clone();
+    let mut mrpack = std::path::PathBuf::from(&args.mrpack);
+    if let Some(code) = args.code.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        emit("Buscando actualizaciones", -1.0);
+        match catalog::resolver(code).await {
+            Ok(remoto) if remoto.version != version => {
+                println!("[PLAY] hay versión nueva del pack: {} -> {}", version, remoto.version);
+                // Con el id local, no el del catálogo: es el que dice dónde vive este
+                // pack en esta máquina.
+                let destino = layout.packs().join(format!("{}.mrpack", args.instance_id));
+                let bajar = |bajado: u64, total: u64| {
+                    let frac = if total > 0 { bajado as f32 / total as f32 } else { -1.0 };
+                    let _ = app.emit(
+                        "install",
+                        serde_json::json!({ "paso": "Actualizando el modpack", "frac": frac }),
+                    );
+                };
+                match catalog::descargar_pack(&remoto, &destino, &bajar).await {
+                    Ok(()) => {
+                        // Si quien publica cambió el icono con la versión nueva, que
+                        // llegue. Sin red para el icono se juega igual.
+                        if let Err(e) = catalog::descargar_icono(
+                            &remoto,
+                            &layout.pack_icon(&args.instance_id),
+                        )
+                        .await
+                        {
+                            println!("[PLAY] no pude actualizar el icono: {e}");
+                        }
+
+                        // La biblioteca se anota la versión nueva aunque el juego no
+                        // llegue a abrirse, para que la próxima vez parta de aquí. El id
+                        // y el código no se tocan: son de esta máquina, no del catálogo.
+                        let mut b = biblioteca(&layout);
+                        if let Some(antes) = b.buscar(&args.instance_id).cloned() {
+                            b.upsert(library::Instalado {
+                                name: remoto.name.clone(),
+                                version: remoto.version.clone(),
+                                server: remoto.server.clone(),
+                                mrpack: destino.to_string_lossy().into_owned(),
+                                ..antes
+                            });
+                            let _ = guardar_biblioteca(&layout, &b);
+                        }
+                        version = remoto.version.clone();
+                        mrpack = destino;
+                    }
+                    // Igual que sin red: con la versión instalada se puede entrar.
+                    // `descargar_pack` solo escribe después de verificar el hash, así que
+                    // el `.mrpack` de antes sigue intacto. Antes esto cortaba el
+                    // lanzamiento, y no poder jugar es peor que jugar con lo de ayer.
+                    Err(e) => {
+                        println!("[PLAY] no pude bajar la versión nueva ({e}); abro la instalada");
+                        emit("No pude actualizar el modpack: abro la versión instalada", -1.0);
+                    }
+                }
+            }
+            Ok(_) => println!("[PLAY] el modpack ya está al día"),
+            Err(e) => println!("[PLAY] no pude comprobar actualizaciones: {e}"),
+        }
+    }
+
     let settings = engine::PackSettings {
         name: args.name.clone(),
         pack_id: args.instance_id.clone(),
-        version: args.version.clone(),
+        version: version.clone(),
         min_mem,
         max_mem,
         // Un flag experimental sin desbloquear impide que la JVM arranque siquiera.
@@ -167,7 +241,6 @@ async fn play_inner(app: tauri::AppHandle, args: PlayArgs) -> Result<String, Str
     // lo que hace aparecer su ventana cuando algo falla.
     install::apply_silent_config(&layout);
 
-    let mrpack = std::path::PathBuf::from(&args.mrpack);
     if !mrpack.exists() {
         return Err(format!("no encuentro el modpack en {}", mrpack.display()));
     }
@@ -179,7 +252,9 @@ async fn play_inner(app: tauri::AppHandle, args: PlayArgs) -> Result<String, Str
     // el camino para reparar una instancia que se haya quedado a medias.
     let cfg_actual = std::fs::read_to_string(layout.instance(&args.instance_id).join("instance.cfg"))
         .unwrap_or_default();
-    if args.install_only || !engine::ya_instalado(&cfg_actual, &args.version) {
+    // Con una versión nueva, `ya_instalado` deja de coincidir y la instalación se
+    // dispara sola: no hace falta ninguna bandera aparte para forzarla.
+    if args.install_only || !engine::ya_instalado(&cfg_actual, &version) {
         install::install_pack(&layout, &args.instance_id, &mrpack, &settings, &emit)
             .await
             .map_err(|e| e.to_string())?;
@@ -436,6 +511,48 @@ async fn update_install(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 
+/// ¿Se puede publicar desde esta máquina?
+///
+/// Publicar se apoya en el `gh` que quien publica ya tiene autenticado, así que esto
+/// separa al admin de un amigo sin necesidad de inventarse un interruptor: sin `gh`
+/// el panel no tiene nada que hacer y no se enseña.
+#[tauri::command]
+fn admin_available() -> bool {
+    admin::disponible()
+}
+
+/// Lee un `.mrpack` y devuelve el borrador con todo lo deducible.
+#[tauri::command]
+fn admin_read(path: String) -> Result<admin::Borrador, String> {
+    admin::leer_mrpack(std::path::Path::new(&path)).map_err(|e| e.to_string())
+}
+
+/// Lo que ya está publicado, para poder actualizarlo.
+#[tauri::command]
+async fn admin_published() -> Result<Vec<catalog::PackRemoto>, String> {
+    // En un hilo aparte, como `admin_publish`: `gh` es un proceso externo y bloquearía
+    // el runtime asíncrono.
+    tauri::async_runtime::spawn_blocking(|| admin::publicados().map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Publica el pack: sube el archivo y actualiza el catálogo.
+///
+/// Se hace en un hilo aparte porque `gh` es un proceso externo y bloquearía el
+/// runtime asíncrono mientras sube.
+#[tauri::command]
+async fn admin_publish(
+    draft: admin::Borrador,
+    path: String,
+) -> Result<catalog::PackRemoto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        admin::publicar(&draft, std::path::Path::new(&path)).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Resuelve un código —o un link pegado— contra el catálogo público.
 ///
 /// Devuelve la ficha del pack para poder enseñar qué es **antes** de descargar nada:
@@ -454,11 +571,17 @@ async fn catalog_lookup(code: String) -> Result<catalog::PackRemoto, String> {
 /// importó el pack, así que el launcher no servía en otra máquina. Ahora apunta a la
 /// carpeta de datos de la app, que existe en todas.
 #[tauri::command]
-async fn catalog_install(app: tauri::AppHandle, code: String) -> Result<serde_json::Value, String> {
+async fn catalog_install(
+    app: tauri::AppHandle,
+    code: String,
+) -> Result<library::Instalado, String> {
     let layout = layout_of(&app)?;
     let pack = catalog::resolver(&code).await.map_err(|e| e.to_string())?;
 
-    let destino = layout.packs().join(format!("{}.mrpack", pack.id));
+    // El id con el que vive aquí puede no ser el del catálogo: si esa carpeta ya es de
+    // otro pack, instalarle encima le borraría los mundos.
+    let id = biblioteca(&layout).id_libre(&pack.id, Some(&pack.code));
+    let destino = layout.packs().join(format!("{id}.mrpack"));
     let emit = |bajado: u64, total: u64| {
         let frac = if total > 0 { bajado as f32 / total as f32 } else { -1.0 };
         let _ = app.emit(
@@ -470,20 +593,30 @@ async fn catalog_install(app: tauri::AppHandle, code: String) -> Result<serde_js
         .await
         .map_err(|e| e.to_string())?;
 
-    let json = serde_json::json!({
-        "id": pack.id,
-        "name": pack.name,
-        "version": pack.version,
-        "server": pack.server,
-        "mrpack": destino,
-    });
-    std::fs::create_dir_all(&layout.root).map_err(|e| e.to_string())?;
-    std::fs::write(
-        layout.root.join("pack.json"),
-        serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(json)
+    // El icono va aparte y no puede tumbar la instalación: sin él el pack funciona
+    // igual, solo se ve el dino de siempre.
+    if let Err(e) = catalog::descargar_icono(&pack, &layout.pack_icon(&id)).await {
+        println!("[PACKS] no pude bajar el icono de {}: {e}", pack.code);
+    }
+
+    // Releída después de la descarga y no antes: entre una cosa y otra ha pasado una
+    // espera larga, y guardar la biblioteca de hace un minuto perdería lo que hubiera
+    // cambiado mientras.
+    let mut b = biblioteca(&layout);
+    let entrada = library::Instalado {
+        id: id.clone(),
+        code: Some(pack.code.clone()),
+        name: pack.name.clone(),
+        version: pack.version.clone(),
+        server: pack.server.clone(),
+        mrpack: destino.to_string_lossy().into_owned(),
+        // Volver a añadir un pack que ya estaba no puede borrarle la RAM que se ajustó.
+        max_mem: b.buscar(&id).and_then(|p| p.max_mem),
+    };
+    b.upsert(entrada.clone());
+    b.seleccionar(&id);
+    guardar_biblioteca(&layout, &b)?;
+    Ok(entrada)
 }
 
 /// Crea una cuenta sin conexión con el nombre dado y la deja activa.
@@ -530,28 +663,170 @@ fn layout_of(app: &tauri::AppHandle) -> Result<engine::Layout, String> {
         .map_err(|e| format!("no encuentro la carpeta de datos: {e}"))
 }
 
-/// El modpack que este launcher tiene instalado.
+/// La biblioteca leída del disco.
 ///
-/// Dino Launcher es de un solo pack a propósito: es lo que hace que un amigo
-/// abra y juegue. Este archivo es la única fuente de verdad de cuál es.
+/// `packs.json` manda. Si no está, se migra el `pack.json` de cuando solo cabía un
+/// pack: quien ya tiene el launcher instalado no puede encontrarse la biblioteca vacía
+/// con su instancia ahí en el disco. El archivo viejo se deja donde está, que es la
+/// única copia si la migración saliera mal.
+///
+/// Uno ilegible se aparta en vez de ignorarse: seguir como si no hubiera nada haría que
+/// el primer guardado se llevara por delante la lista buena.
+fn biblioteca(layout: &engine::Layout) -> library::Biblioteca {
+    let ruta = layout.root.join("packs.json");
+    let Ok(txt) = std::fs::read_to_string(&ruta) else {
+        let viejo = std::fs::read_to_string(layout.root.join("pack.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .unwrap_or(serde_json::Value::Null);
+        return library::migrar(&viejo);
+    };
+    match library::parse(&txt) {
+        Ok(b) => b,
+        Err(e) => {
+            println!("[PACKS] packs.json ilegible ({e}); lo aparto como packs.json.roto");
+            let _ = std::fs::rename(&ruta, ruta.with_extension("json.roto"));
+            library::Biblioteca::default()
+        }
+    }
+}
+
+fn guardar_biblioteca(layout: &engine::Layout, b: &library::Biblioteca) -> Result<(), String> {
+    std::fs::create_dir_all(&layout.root).map_err(|e| e.to_string())?;
+    std::fs::write(layout.root.join("packs.json"), library::a_json(b)).map_err(|e| e.to_string())
+}
+
+/// El modpack con el que se juega ahora.
+///
+/// Sigue existiendo aparte de `list_packs` porque casi toda la interfaz —el botón de
+/// Jugar, los ajustes, el estado del servidor— habla de uno solo: el elegido.
 #[tauri::command]
 fn get_pack(app: tauri::AppHandle) -> serde_json::Value {
     let Ok(layout) = layout_of(&app) else { return serde_json::json!(null) };
-    std::fs::read_to_string(layout.root.join("pack.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or(serde_json::json!(null))
+    serde_json::to_value(biblioteca(&layout).seleccionado()).unwrap_or(serde_json::Value::Null)
 }
 
+/// Todo lo que hay en la biblioteca, para poder pintarla.
+///
+/// Solo datos baratos: si la instancia está montada y su icono. El tamaño en disco y el
+/// número de mods obligan a recorrer carpetas de gigas, y hacerlo con cada pack cada vez
+/// que se abre la biblioteca se notaría; para eso está `instance_info`, que se pide del
+/// que se esté mirando.
 #[tauri::command]
-fn set_pack(app: tauri::AppHandle, pack: serde_json::Value) -> Result<(), String> {
+fn list_packs(app: tauri::AppHandle) -> serde_json::Value {
+    let Ok(layout) = layout_of(&app) else {
+        return serde_json::json!({ "selected": null, "packs": [] });
+    };
+    let b = biblioteca(&layout);
+    let packs: Vec<serde_json::Value> = b
+        .packs
+        .iter()
+        .map(|p| {
+            let mut v = serde_json::to_value(p).unwrap_or_default();
+            // Montada de verdad es tener `instance.cfg`: la carpeta puede existir a
+            // medias de una instalación que se abortó.
+            v["installed"] =
+                serde_json::json!(layout.instance(&p.id).join("instance.cfg").exists());
+            v["icon"] = serde_json::json!(std::fs::read(layout.pack_icon(&p.id))
+                .ok()
+                .map(|d| install::png_data_url(&d)));
+            v
+        })
+        .collect();
+    // El seleccionado que se devuelve es el efectivo, no el que ponga el archivo: si
+    // apuntaba a uno que ya no está, la interfaz debe marcar el que se va a jugar.
+    serde_json::json!({
+        "selected": b.seleccionado().map(|p| p.id.clone()),
+        "packs": packs,
+    })
+}
+
+/// Mete un pack en la biblioteca y lo deja elegido.
+///
+/// Es la vía de Importar un `.mrpack` del disco. Devuelve la ficha tal como quedó
+/// guardada: el id puede no ser el que venía si esa carpeta ya era de otro pack.
+#[tauri::command]
+fn set_pack(app: tauri::AppHandle, pack: serde_json::Value) -> Result<library::Instalado, String> {
     let layout = layout_of(&app)?;
-    std::fs::create_dir_all(&layout.root).map_err(|e| e.to_string())?;
-    std::fs::write(
-        layout.root.join("pack.json"),
-        serde_json::to_string_pretty(&pack).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())
+    let mut entrada: library::Instalado =
+        serde_json::from_value(pack).map_err(|e| format!("modpack mal formado: {e}"))?;
+    let mut b = biblioteca(&layout);
+    entrada.id = b.id_libre(&entrada.id, entrada.code.as_deref());
+    // La interfaz no manda la RAM al importar; reimportar no debe resetearla.
+    if entrada.max_mem.is_none() {
+        entrada.max_mem = b.buscar(&entrada.id).and_then(|p| p.max_mem);
+    }
+    b.upsert(entrada.clone());
+    b.seleccionar(&entrada.id);
+    guardar_biblioteca(&layout, &b)?;
+    Ok(entrada)
+}
+
+/// Guarda la RAM elegida para un pack. `None` la devuelve a automática.
+#[tauri::command]
+fn set_pack_memory(app: tauri::AppHandle, id: String, mb: Option<u32>) -> Result<(), String> {
+    let layout = layout_of(&app)?;
+    let mut b = biblioteca(&layout);
+    let antes = b
+        .buscar(&id)
+        .cloned()
+        .ok_or_else(|| format!("no tengo ningún modpack con id {id}"))?;
+    // Un cero no es una cantidad de RAM: es la interfaz diciendo «automática».
+    b.upsert(library::Instalado { max_mem: mb.filter(|&m| m > 0), ..antes });
+    guardar_biblioteca(&layout, &b)
+}
+
+/// Cambia con qué pack se juega.
+#[tauri::command]
+fn select_pack(app: tauri::AppHandle, id: String) -> Result<serde_json::Value, String> {
+    let layout = layout_of(&app)?;
+    let mut b = biblioteca(&layout);
+    if !b.seleccionar(&id) {
+        return Err(format!("no tengo ningún modpack con id {id}"));
+    }
+    guardar_biblioteca(&layout, &b)?;
+    Ok(serde_json::to_value(b.seleccionado()).unwrap_or(serde_json::Value::Null))
+}
+
+/// Saca un pack de la biblioteca; con `delete_files`, además borra lo que ocupa.
+///
+/// Son dos cosas distintas a propósito: dentro de la instancia están los mundos del
+/// jugador, y borrarlos no puede ser el efecto secundario de quitar algo de una lista.
+///
+/// Con una partida en marcha no se borra nada: esos archivos están abiertos y el motor
+/// los reescribe al salir.
+#[tauri::command]
+fn remove_pack(app: tauri::AppHandle, id: String, delete_files: bool) -> Result<(), String> {
+    let layout = layout_of(&app)?;
+    if delete_files && install::sesion::actual() != install::sesion::INACTIVA {
+        return Err("hay una sesión abierta: ciérrala antes de borrar el modpack".into());
+    }
+    let mut b = biblioteca(&layout);
+    let fuera = b
+        .quitar(&id)
+        .ok_or_else(|| format!("no tengo ningún modpack con id {id}"))?;
+    // La lista primero: si luego falla un borrado quedan archivos sueltos, que se
+    // arreglan; al revés quedaría una entrada apuntando a una instancia a medio borrar.
+    guardar_biblioteca(&layout, &b)?;
+
+    if delete_files {
+        if let Err(e) = std::fs::remove_dir_all(layout.instance(&fuera.id)) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(format!(
+                    "quité «{}» de la lista, pero no pude borrar sus archivos: {e}",
+                    fuera.name
+                ));
+            }
+        }
+        let _ = std::fs::remove_file(layout.pack_icon(&fuera.id));
+        // El `.mrpack` solo si es la copia que descargamos nosotros. El que alguien
+        // importó de su disco es suyo y no se toca.
+        let origen = std::path::PathBuf::from(&fuera.mrpack);
+        if origen.starts_with(layout.packs()) {
+            let _ = std::fs::remove_file(origen);
+        }
+    }
+    Ok(())
 }
 
 /// La cuenta con la que se va a jugar, leída de `accounts.json` del motor.
@@ -755,6 +1030,10 @@ pub fn run() {
             memory_info,
             get_pack,
             set_pack,
+            list_packs,
+            select_pack,
+            remove_pack,
+            set_pack_memory,
             active_account,
             server_status,
             instance_info,
@@ -767,6 +1046,10 @@ pub fn run() {
             session_state,
             abort_launch,
             stop_game,
+            admin_available,
+            admin_read,
+            admin_published,
+            admin_publish,
             catalog_lookup,
             catalog_install,
             offline_create,
@@ -833,4 +1116,100 @@ struct Glass(bool);
 #[tauri::command]
 fn window_glass(glass: tauri::State<Glass>) -> bool {
     glass.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Carpeta propia para cada test: comparten el temp del sistema, y pisarse daría
+    /// fallos que van y vienen según el orden en que corran.
+    fn carpeta(nombre: &str) -> engine::Layout {
+        let root = std::env::temp_dir().join(format!("dino-biblioteca-{nombre}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        engine::Layout::new(root)
+    }
+
+    fn entrada(id: &str) -> library::Instalado {
+        library::Instalado {
+            id: id.into(),
+            code: None,
+            name: id.into(),
+            version: "1.0.0".into(),
+            server: None,
+            mrpack: format!("/packs/{id}.mrpack"),
+            max_mem: None,
+        }
+    }
+
+    #[test]
+    fn sin_nada_en_disco_la_biblioteca_sale_vacia() {
+        assert!(biblioteca(&carpeta("vacia")).packs.is_empty());
+    }
+
+    #[test]
+    fn el_pack_json_de_antes_se_migra_al_leerlo() {
+        // Este es el camino que pisa todo el que ya tiene el launcher cuando actualice.
+        let l = carpeta("migra");
+        std::fs::write(
+            l.root.join("pack.json"),
+            r#"{ "id": "fo", "name": "FO", "mrpack": "C:/x/fo.mrpack", "version": "1.0.0" }"#,
+        )
+        .unwrap();
+
+        let b = biblioteca(&l);
+        assert_eq!(b.seleccionado().unwrap().id, "fo");
+        // Y el archivo viejo sigue ahí: es la única copia si la migración saliera mal.
+        assert!(l.root.join("pack.json").exists());
+    }
+
+    #[test]
+    fn packs_json_manda_sobre_el_pack_json_viejo() {
+        // Si no, cada arranque resucitaría el pack de antes y se llevaría por delante
+        // todo lo que se hubiera instalado después.
+        let l = carpeta("manda");
+        std::fs::write(
+            l.root.join("pack.json"),
+            r#"{ "id": "viejo", "name": "Viejo", "mrpack": "/x.mrpack" }"#,
+        )
+        .unwrap();
+        let mut b = library::Biblioteca::default();
+        b.upsert(entrada("nuevo"));
+        b.seleccionar("nuevo");
+        guardar_biblioteca(&l, &b).unwrap();
+
+        let leida = biblioteca(&l);
+        assert_eq!(leida.packs.len(), 1);
+        assert_eq!(leida.seleccionado().unwrap().id, "nuevo");
+    }
+
+    #[test]
+    fn un_packs_json_roto_se_aparta_en_vez_de_sobrescribirse() {
+        // Tratarlo como «no hay nada» haría que el siguiente guardado se llevara la
+        // lista buena sin dejar rastro.
+        let l = carpeta("roto");
+        std::fs::write(l.root.join("packs.json"), "{ esto no es json").unwrap();
+
+        assert!(biblioteca(&l).packs.is_empty());
+        assert!(
+            l.root.join("packs.json.roto").exists(),
+            "lo ilegible tiene que quedar recuperable"
+        );
+        assert!(!l.root.join("packs.json").exists());
+    }
+
+    #[test]
+    fn lo_que_se_guarda_se_vuelve_a_leer_igual_del_disco() {
+        let l = carpeta("ida-y-vuelta");
+        let mut b = library::Biblioteca::default();
+        b.upsert(entrada("a"));
+        b.upsert(entrada("b"));
+        b.seleccionar("b");
+        guardar_biblioteca(&l, &b).unwrap();
+
+        let leida = biblioteca(&l);
+        assert_eq!(leida.packs.len(), 2);
+        assert_eq!(leida.seleccionado().unwrap().id, "b");
+    }
 }

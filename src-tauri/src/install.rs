@@ -814,13 +814,20 @@ pub async fn install_pack(
         pack::parse_index(&s)?
     };
 
-    // 0. icono del pack, si lo trae. El formato no lo exige y el motor lo ignora,
-    //    pero es lo que Dino Launcher enseña en vez de un cuadro genérico.
-    if let Ok(mut f) = zip.by_name("icon.png") {
-        let mut buf = Vec::new();
-        if f.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
-            let _ = std::fs::create_dir_all(layout.packs());
-            let _ = std::fs::write(layout.pack_icon(instance_id), buf);
+    // 0. icono del pack, si lo trae y no hay ya uno. El formato no lo exige y el motor
+    //    lo ignora, pero es lo que Dino Launcher enseña en vez de un cuadro genérico.
+    //
+    //    «Si no hay ya uno» porque el que haya puede ser el que eligió quien publicó el
+    //    pack, que el catálogo sirve aparte: el del `.mrpack` es el original y lo
+    //    pisaría en cada instalación. El precio es que reimportar a mano un `.mrpack`
+    //    con otro icono conserva el anterior; quitar el pack borrando archivos lo limpia.
+    if !layout.pack_icon(instance_id).exists() {
+        if let Ok(mut f) = zip.by_name("icon.png") {
+            let mut buf = Vec::new();
+            if f.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
+                let _ = std::fs::create_dir_all(layout.packs());
+                let _ = std::fs::write(layout.pack_icon(instance_id), buf);
+            }
         }
     }
 

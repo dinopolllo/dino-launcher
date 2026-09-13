@@ -5,18 +5,42 @@
 //! un amigo escribe un código, se resuelve contra un archivo público y el `.mrpack`
 //! acaba en su propia carpeta de datos, donde sí existe.
 //!
-//! Vive en el repo público de descargas y se sirve por `raw`, no como asset de una
+//! Vive en el repo público de descargas y se lee de ahí (ver [`fuentes`]), no como asset de una
 //! release: publicar un pack no debe obligar a publicar una versión del launcher, y
 //! actualizar el catálogo tiene que ser un commit y nada más.
 
 use serde::{Deserialize, Serialize};
 
-/// De dónde se lee el catálogo. Se puede apuntar a otro sitio al compilar, que es lo
-/// que permite probar contra un archivo propio sin tocar el de verdad.
-pub const CATALOG_URL: &str = match option_env!("DINO_CATALOG_URL") {
-    Some(u) => u,
-    None => "https://raw.githubusercontent.com/dinopolllo/dino-launcher-releases/main/catalog.json",
-};
+/// De dónde se lee el catálogo, por orden.
+///
+/// **Primero la API de GitHub y luego el CDN.** El CDN (`raw.githubusercontent.com`)
+/// guarda cada archivo cinco minutos, y un parámetro en la URL no se lo salta —medido—:
+/// un pack recién publicado daba «ese código no existe» durante todo ese rato. La API
+/// sirve lo que hay, pero sin autenticar da 60 peticiones por hora por IP, y unos amigos
+/// jugando en la misma red se las reparten. Por eso el CDN queda detrás: un catálogo de
+/// hace cinco minutos es mejor que ninguno.
+///
+/// Al compilar se puede apuntar a un archivo propio con `DINO_CATALOG_URL`, y entonces
+/// es la única fuente: así se prueba sin tocar el de verdad.
+pub fn fuentes() -> Vec<&'static str> {
+    match option_env!("DINO_CATALOG_URL") {
+        Some(u) => vec![u],
+        None => vec![
+            "https://api.github.com/repos/dinopolllo/dino-launcher-releases/contents/catalog.json?ref=main",
+            "https://raw.githubusercontent.com/dinopolllo/dino-launcher-releases/main/catalog.json",
+        ],
+    }
+}
+
+/// Cliente con `User-Agent`.
+///
+/// La API de GitHub responde 403 a lo que llega sin él, y `reqwest` no manda ninguno
+/// por defecto.
+fn cliente() -> Result<reqwest::Client, CatalogError> {
+    Ok(reqwest::Client::builder()
+        .user_agent(concat!("dino-launcher/", env!("CARGO_PKG_VERSION")))
+        .build()?)
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
@@ -34,6 +58,8 @@ pub enum CatalogError {
     HashMalo,
     #[error("descarga fallida ({0})")]
     Estado(u16),
+    #[error("lo descargado no es una imagen")]
+    NoEsImagen,
 }
 
 /// Un modpack publicado.
@@ -92,7 +118,7 @@ pub fn codigo_de_texto(texto: &str) -> String {
     let t = texto.trim();
     // De un link interesa el último tramo: `.../p/DINO-SMP`, `...#DINO-SMP`.
     let ultimo = t
-        .rsplit(|c| c == '/' || c == '#' || c == '?' || c == '=')
+        .rsplit(['/', '#', '?', '='])
         .find(|s| !s.trim().is_empty())
         .unwrap_or(t);
     normalizar_codigo(ultimo)
@@ -114,9 +140,33 @@ pub fn buscar<'a>(cat: &'a Catalogo, codigo: &str) -> Option<&'a PackRemoto> {
         .find(|p| normalizar_codigo(&p.code) == buscado)
 }
 
-/// Trae el catálogo de la red.
+/// Trae el catálogo de la red, probando las fuentes en orden.
+///
+/// Solo se pasa a la siguiente si la anterior **falla**. Si la API responde y el código
+/// no está, no está: preguntarle al CDN daría una respuesta más vieja, no una mejor.
 pub async fn fetch_catalog() -> Result<Catalogo, CatalogError> {
-    let r = reqwest::get(CATALOG_URL).await?;
+    let c = cliente()?;
+    let mut ultimo = None;
+    for url in fuentes() {
+        match leer_catalogo(&c, url).await {
+            Ok(cat) => return Ok(cat),
+            Err(e) => {
+                println!("[CATALOG] {url}: {e}");
+                ultimo = Some(e);
+            }
+        }
+    }
+    Err(ultimo.unwrap_or(CatalogError::NoExiste))
+}
+
+async fn leer_catalogo(c: &reqwest::Client, url: &str) -> Result<Catalogo, CatalogError> {
+    let r = c
+        .get(url)
+        // Con esto la API devuelve el archivo tal cual; sin él, un JSON con el contenido
+        // en base64. Al CDN le da igual.
+        .header(reqwest::header::ACCEPT, "application/vnd.github.raw")
+        .send()
+        .await?;
     if !r.status().is_success() {
         return Err(CatalogError::Estado(r.status().as_u16()));
     }
@@ -143,7 +193,7 @@ pub async fn descargar_pack(
 ) -> Result<(), CatalogError> {
     use futures_util::StreamExt;
 
-    let r = reqwest::get(&pack.mrpack).await?;
+    let r = cliente()?.get(&pack.mrpack).send().await?;
     if !r.status().is_success() {
         return Err(CatalogError::Estado(r.status().as_u16()));
     }
@@ -168,6 +218,47 @@ pub async fn descargar_pack(
     }
     std::fs::write(destino, datos)?;
     Ok(())
+}
+
+/// Descarga el icono publicado del pack.
+///
+/// No sale del `.mrpack`: al publicar se puede cambiar, y el catálogo lo sirve aparte.
+/// Sin traerlo por su lado, el icono que eligió quien publica solo se vería en la ficha
+/// del código y nunca en la biblioteca de quien lo instala.
+///
+/// Devuelve `false` si el pack no tiene icono publicado.
+pub async fn descargar_icono(
+    pack: &PackRemoto,
+    destino: &std::path::Path,
+) -> Result<bool, CatalogError> {
+    let Some(url) = pack.icon.as_deref().filter(|u| !u.trim().is_empty()) else {
+        return Ok(false);
+    };
+    let r = cliente()?.get(url).send().await?;
+    if !r.status().is_success() {
+        return Err(CatalogError::Estado(r.status().as_u16()));
+    }
+    let datos = r.bytes().await?;
+    // Un 200 no garantiza una imagen: un proxy o una página de error también lo dan, y
+    // guardar eso dejaría la tarjeta con un icono roto en vez del dino de siempre.
+    if !es_imagen(&datos) {
+        return Err(CatalogError::NoEsImagen);
+    }
+    if let Some(p) = destino.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    std::fs::write(destino, &datos)?;
+    Ok(true)
+}
+
+/// PNG, JPEG o WebP, por sus primeros bytes.
+///
+/// Los tres, y no solo PNG, porque son los que acepta el selector de icono del panel de
+/// publicar; el archivo se sube como `.png` pero dentro va lo que eligiera el admin.
+fn es_imagen(b: &[u8]) -> bool {
+    b.starts_with(b"\x89PNG\r\n\x1a\n")
+        || b.starts_with(&[0xFF, 0xD8, 0xFF])
+        || (b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP")
 }
 
 fn hex512(bytes: &[u8]) -> String {
@@ -281,6 +372,34 @@ mod tests {
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(datos)).expect("es un zip");
         assert!(z.by_name("modrinth.index.json").is_ok(), "falta el índice");
         let _ = std::fs::remove_file(&destino);
+    }
+
+    #[test]
+    fn reconoce_los_formatos_que_acepta_el_selector_de_icono() {
+        assert!(es_imagen(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"));
+        assert!(es_imagen(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10]));
+        assert!(es_imagen(b"RIFF\x24\0\0\0WEBPVP8 "));
+    }
+
+    #[test]
+    fn una_pagina_de_error_no_se_guarda_como_icono() {
+        // Un 200 con HTML es justo lo que devuelve un portal cautivo o un proxy.
+        assert!(!es_imagen(b"<!DOCTYPE html><html>"));
+        assert!(!es_imagen(b"404: Not Found"));
+        assert!(!es_imagen(b""));
+        assert!(!es_imagen(b"RIFF\x24\0\0\0WAVE"), "un RIFF que no es WebP tampoco");
+    }
+
+    #[test]
+    fn la_api_va_antes_que_el_cdn() {
+        // Leer primero el CDN, que guarda el catálogo cinco minutos, era lo que hacía
+        // que un pack recién publicado diera «ese código no existe».
+        if option_env!("DINO_CATALOG_URL").is_some() {
+            return;
+        }
+        let f = fuentes();
+        assert!(f[0].starts_with("https://api.github.com/"), "primero: {}", f[0]);
+        assert!(f.last().unwrap().starts_with("https://raw.githubusercontent.com/"));
     }
 
     #[test]

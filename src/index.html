@@ -295,6 +295,160 @@ html.win{--r-window:10px}
   text-transform:uppercase;color:var(--text-faint);
   padding:0 10px;margin-bottom:7px;
 }
+/* La cabecera de la biblioteca lleva el `+`, como en Modrinth: es donde se busca
+   «añadir algo» sin tener que leer nada. */
+.nav-label-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-right:6px}
+.nav-add{
+  flex:none;width:20px;height:20px;padding:0;border:0;cursor:pointer;
+  border-radius:6px;display:flex;align-items:center;justify-content:center;
+  color:var(--text-faint);background:transparent;
+  transition:color .16s ease,background .16s ease;
+}
+.nav-add svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round}
+.nav-add:hover{color:var(--text);background:var(--glass-2)}
+.nav-add:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.nav-group{display:flex;flex-direction:column;gap:2px}
+
+/* ---------- biblioteca ----------
+   La cuadrícula es «lo que tengo»; Jugar es «lo que estoy jugando». Dos vistas con
+   un trabajo cada una, en vez de una sola que hace de escaparate y de mando a la vez.
+   `auto-fill` y no `auto-fit`: con un solo pack, `auto-fit` estiraría la tarjeta a lo
+   ancho de la ventana y una tarjeta de 900px no se lee como una tarjeta. */
+.libgrid{
+  display:grid;gap:12px;margin-top:18px;
+  grid-template-columns:repeat(auto-fill,minmax(212px,1fr));
+}
+.packtile{
+  position:relative;
+  display:flex;flex-direction:column;gap:12px;
+  border-radius:var(--r-card);padding:14px;
+  background:var(--glass-0);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+  transition:background .16s ease,box-shadow .16s ease,transform .16s cubic-bezier(.32,.72,0,1);
+}
+.packtile:hover{background:var(--glass-1);transform:translateY(-1.5px)}
+/* La seleccionada se marca con el acento, no con un tamaño distinto: una tarjeta más
+   grande rompería la retícula y costaría más de leer que de encontrar. */
+.packtile[data-state="selected"]{
+  background:var(--glass-1);
+  box-shadow:
+    inset 0 1px 0 var(--specular),
+    inset 0 0 0 1px rgba(115,191,105,.45),
+    0 10px 26px -14px var(--green-glow);
+}
+/* Toda la tarjeta selecciona. Va como un botón estirado por encima y no como un
+   `<button>` envolviendo el contenido, porque dentro hay otro botón —quitar— y un
+   botón dentro de otro no es HTML válido. */
+.tile-main{
+  position:absolute;inset:0;z-index:1;
+  border:0;background:none;cursor:pointer;border-radius:inherit;
+}
+.tile-main:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.tile-head{display:flex;align-items:center;gap:11px;min-width:0}
+.tile-id{min-width:0}
+.tile-name{font-size:13.5px;font-weight:600;line-height:1.2;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile-meta{font-family:var(--font-mono);font-size:9.5px;color:var(--text-faint);margin-top:3px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile-foot{display:flex;align-items:center;gap:8px;min-width:0}
+.tile-badge{
+  flex:none;font-family:var(--font-mono);font-size:9px;letter-spacing:.10em;
+  text-transform:uppercase;border-radius:var(--r-chip);padding:4px 7px;
+  color:var(--text-dim);background:var(--glass-1);
+  box-shadow:inset 0 0 0 1px var(--hairline);
+}
+.packtile[data-state="selected"] .tile-badge{
+  color:#04170A;background:var(--green);box-shadow:none;font-weight:600;
+}
+/* Solo descargada: existe en la lista pero no en el disco. Se dice con palabras en
+   la chapa; bajarle la opacidad a la tarjeta entera la haría parecer desactivada. */
+.packtile[data-state="downloaded"] .tile-badge{color:var(--text-faint)}
+.tile-server{
+  font-family:var(--font-mono);font-size:9.5px;color:var(--text-faint);
+  min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-left:auto;
+}
+.tile-remove{
+  position:absolute;z-index:2;top:9px;right:9px;
+  width:22px;height:22px;padding:0;border:0;cursor:pointer;border-radius:7px;
+  display:flex;align-items:center;justify-content:center;
+  color:var(--text-faint);background:transparent;
+  transition:color .16s ease,background .16s ease;
+}
+.tile-remove svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round}
+.tile-remove:hover{color:#FFD8DD;background:rgba(255,107,122,.18)}
+.tile-remove:focus-visible{outline:2px solid var(--rose);outline-offset:2px}
+
+/* Con una partida abierta, el resto de packs dejan de invitar a jugar: solo hay una
+   sesión a la vez, y una tarjeta que responde al clic estaría prometiendo lo que no
+   puede cumplir. La que juega se queda entera y con el punto vivo. */
+.libgrid[data-session] .packtile:not([data-playing]){opacity:.45}
+.libgrid[data-session] .packtile:not([data-playing]) .tile-main,
+.libgrid[data-session] .packtile:not([data-playing]) .tile-remove{pointer-events:none}
+.libgrid[data-session] .packtile:not([data-playing]):hover{transform:none;background:var(--glass-0)}
+.tile-live{display:none;align-items:center;gap:6px;font-size:10.5px;color:var(--green);font-weight:600}
+.packtile[data-playing] .tile-live{display:flex}
+.packtile[data-playing] .tile-badge{display:none}
+.packtile[data-playing] .dot-live{animation:blink 2.8s ease-in-out infinite}
+
+/* El `+` es una tarjeta más, como en Modrinth: aparece donde ya estás mirando packs,
+   con el mismo tamaño y en el mismo sitio de la retícula. El del rail se queda como
+   atajo desde cualquier vista. */
+.packtile-add{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+  min-height:118px;border-radius:var(--r-card);cursor:pointer;
+  border:1px dashed rgba(255,255,255,.14);background:transparent;
+  color:var(--text-faint);
+  font-family:var(--font-body);font-size:12.5px;font-weight:500;
+  transition:color .16s ease,border-color .16s ease,background .16s ease;
+}
+.packtile-add svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round}
+.packtile-add:hover{color:var(--text);border-color:rgba(115,191,105,.5);background:rgba(115,191,105,.05)}
+.packtile-add:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+
+.lib-empty{
+  grid-column:1/-1;padding:6px 2px 0;
+  font-size:12.5px;color:var(--text-faint);
+}
+
+/* ---------- quitar un pack ----------
+   Dos acciones distintas y separadas, no una casilla y un aceptar: quitar de la lista
+   se deshace volviendo a añadirlo, y borrar los archivos se lleva los mundos del
+   jugador. Con una casilla, las dos caben en el mismo clic distraído; con dos botones
+   hay que elegir cuál se pulsa, y el que no se deshace además se arma. */
+.remove-choices{display:flex;flex-direction:column;gap:10px;margin-top:4px}
+.remove-choice{
+  border-radius:var(--r-card);padding:12px 13px;
+  background:var(--glass-1);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+}
+.remove-choice .rc-t{font-size:12.5px;font-weight:600}
+.remove-choice .rc-s{font-size:11.5px;color:var(--text-dim);margin-top:3px;line-height:1.45}
+.remove-choice .btn,.remove-choice .danger-btn{margin-top:10px;width:100%}
+.remove-choice .danger-btn{border-radius:10px;padding:9px 16px;font-size:13px}
+.remove-choice .rc-s b{color:var(--text);font-weight:600}
+.remove-detail{
+  font-family:var(--font-mono);font-size:10px;color:var(--text-faint);margin-top:5px;
+}
+
+/* Segmentado: importar y publicar son la misma pestaña porque son la misma tarea
+   —poner un modpack en circulación— por dos caminos, y las dos son solo de admin. */
+.seg{
+  display:inline-flex;gap:3px;padding:3px;margin:16px 0 0;
+  border-radius:11px;background:rgba(0,0,0,.26);
+  box-shadow:inset 0 0 0 1px var(--hairline);
+}
+.seg button{
+  border:0;cursor:pointer;border-radius:8px;padding:7px 14px;
+  font-family:var(--font-body);font-size:12.5px;font-weight:600;
+  color:var(--text-dim);background:transparent;
+  transition:color .16s ease,background .16s ease;
+}
+.seg button:hover{color:var(--text)}
+.seg button[aria-selected="true"]{
+  color:var(--text);background:var(--glass-2);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+}
+.seg button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 .nav button{
   display:flex;align-items:center;gap:11px;
   width:100%;padding:9px 10px;
@@ -583,7 +737,9 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 .drop.over{border-color:var(--green);background:rgba(115,191,105,.10)}
 
 /* ---------- primer arranque ---------- */
-.onboard{
+/* `.overlay` y `.overlay-card` son los nombres genéricos; `.onboard` y `.ob-card`
+   se quedan porque el primer arranque ya los usa. Misma regla, no una copia. */
+.onboard,.overlay{
   position:absolute;inset:0;z-index:20;
   background:rgba(3,6,10,.74);
   backdrop-filter:blur(34px) saturate(150%);
@@ -594,7 +750,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 .onboard[hidden]{display:none}
 @keyframes fade{from{opacity:0}to{opacity:1}}
 
-.ob-card{
+.ob-card,.overlay-card{
   width:100%;max-width:450px;
   border-radius:var(--r-panel);padding:28px;
   background:linear-gradient(165deg,rgba(115,191,105,.10),transparent 58%),var(--glass-2);
@@ -766,7 +922,9 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
    vuelve del juego y pulsa por costumbre mata su propia sesión. Por eso en reposo no
    es un slab rojo esperando un clic distraído — es rojo, se ve que es destructivo,
    pero pide un segundo clic para hacerlo. */
-.stop{
+/* `.danger-btn` es el nombre genérico del botón destructivo que se arma; `.stop`
+   se queda porque la sesión de juego ya lo usa. Misma regla, no una copia. */
+.stop,.danger-btn{
   border:0;cursor:pointer;border-radius:14px;
   padding:13px 20px;
   display:flex;align-items:center;justify-content:center;gap:9px;
@@ -777,16 +935,16 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   transition:background .16s ease,color .16s ease,box-shadow .16s ease,
              transform .16s cubic-bezier(.32,.72,0,1);
 }
-.stop svg{width:13px;height:13px;fill:currentColor;flex:none}
-.stop:hover{background:rgba(255,107,122,.18);
+.stop svg,.danger-btn svg{width:13px;height:13px;fill:currentColor;flex:none}
+.stop:hover,.danger-btn:hover{background:rgba(255,107,122,.18);
   box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 0 0 1px rgba(255,107,122,.50)}
-.stop:active{transform:translateY(1px)}
-.stop:focus-visible{outline:2px solid var(--rose);outline-offset:3px}
+.stop:active,.danger-btn:active{transform:translateY(1px)}
+.stop:focus-visible,.danger-btn:focus-visible{outline:2px solid var(--rose);outline-offset:3px}
 
 /* Armado: el siguiente clic sí mata la partida, así que ahora sí es un slab lleno.
    Es el negativo exacto del botón de Jugar —mismo peso, mismo texto oscuro sobre
    color— para que se lea de un vistazo que esto es lo contrario de aquello. */
-.stop[data-armed]{
+.stop[data-armed],.danger-btn[data-armed]{
   color:#2A0206;
   background:linear-gradient(165deg,#FF9AA5,var(--rose) 52%,#E23D50);
   box-shadow:
@@ -797,9 +955,9 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 }
 /* Las dos etiquetas viven en el markup y las cambia el CSS: así el JS solo pone y
    quita `data-armed` y no tiene que saber qué pone el botón en cada estado. */
-.stop .stop-confirm{display:none}
-.stop[data-armed] .stop-label{display:none}
-.stop[data-armed] .stop-confirm{display:inline}
+.stop .stop-confirm,.danger-btn .stop-confirm{display:none}
+.stop[data-armed] .stop-label,.danger-btn[data-armed] .stop-label{display:none}
+.stop[data-armed] .stop-confirm,.danger-btn[data-armed] .stop-confirm{display:inline}
 
 /* ---------- el paso entre los tres estados ----------
    Los dos estados transitorios entran subiendo; el que se va, se va. Sin animación
@@ -863,7 +1021,9 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
    exporta un `.mrpack` y lo arrastra. Meter el código junto a la zona de arrastre
    junta dos públicos que no se parecen; aquí cae en el sitio donde el amigo se
    queda parado la primera vez. */
-.join{margin-top:16px}
+/* El flujo de código vive en un overlay que abre el `+`, no en un panel dentro de
+   Jugar. Añade un pack a la biblioteca; no sustituye a ninguno. */
+.join-close{align-self:center;margin-top:16px}
 .join-ask{display:flex;flex-direction:column;gap:8px}
 .join-field{display:flex;gap:9px;align-items:stretch}
 /* Mono y tracking porque es un código, no una frase: así se lee carácter a carácter
@@ -881,10 +1041,13 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 .join-input:focus{outline:2px solid var(--green);outline-offset:1px}
 .join-hint{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.04em;color:var(--text-faint)}
 
-.join-busy{
+/* `.busyline` es el nombre bueno; `.join-busy` se queda por el markup que ya
+   estaba conectado. Misma regla, no una copia. */
+.join-busy,.busyline{
   display:flex;align-items:center;gap:10px;
   font-size:13px;color:var(--text-dim);padding:6px 0;
 }
+.busyline b{font-family:var(--font-mono);color:var(--text);font-weight:500;letter-spacing:.06em}
 .join-busy b{font-family:var(--font-mono);color:var(--text);font-weight:500;letter-spacing:.06em}
 
 .join-found{display:flex;flex-direction:column;gap:13px}
@@ -932,6 +1095,73 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 .join-msg .ico-offline,.join-msg[data-kind="offline"] .ico-notfound{display:none}
 .join-msg[data-kind="offline"] .ico-offline{display:block}
 .join-msg[data-kind="notfound"] .join-retry{display:none}
+
+/* ---------- publicar modpacks ----------
+   El panel abre en la lista de lo ya publicado y no en un formulario vacío. Publicar
+   por primera vez y actualizar son la misma operación sobre distinto destino, y lo
+   que se tiene delante casi siempre es un catálogo con cosas dentro, no un papel en
+   blanco: la lista es la casa, y crear es una acción desde ella. */
+.pub-empty{
+  padding:20px 4px;text-align:center;
+  font-size:12.5px;color:var(--text-faint);
+}
+.pub-list{display:flex;flex-direction:column;margin:2px 0 16px}
+.pub-row{
+  display:flex;align-items:center;gap:12px;
+  padding:11px 0;border-bottom:1px solid rgba(255,255,255,.055);
+}
+.pub-row:last-child{border-bottom:0}
+.pub-row-body{min-width:0;flex:1}
+.pub-row-name{font-size:13.5px;font-weight:600;line-height:1.2;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pub-row-meta{font-family:var(--font-mono);font-size:10px;color:var(--text-faint);margin-top:3px}
+/* El código va en mono y con tracking: es lo que alguien teclea desde otro sitio,
+   así que tiene que poder leerse carácter a carácter. */
+.pub-code{
+  flex:none;font-family:var(--font-mono);font-size:11.5px;letter-spacing:.10em;
+  color:var(--text);border-radius:var(--r-chip);padding:5px 9px;
+  background:rgba(0,0,0,.30);box-shadow:inset 0 0 0 1px var(--hairline);
+}
+
+/* Actualizar no puede cambiar el código: los amigos ya lo tienen escrito en algún
+   chat. Bloquearlo no basta —hay que decir por qué, o parece que está roto. */
+.field input[readonly]{
+  color:var(--text-dim);background:rgba(0,0,0,.24);cursor:default;
+  box-shadow:inset 0 0 0 1px var(--hairline);
+}
+.field input[readonly]:focus{outline:none}
+.field-note{font-family:var(--font-mono);font-size:9.5px;color:var(--text-faint);margin-top:1px}
+
+.pub-icon{display:flex;align-items:center;gap:13px}
+.pub-icon-body{display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.pub-icon-body .link-min{margin-top:0}
+
+/* ---------- publicado ----------
+   El estado que importa: aquí es donde Yahir copia lo que va a pegar en el chat.
+   Los dos valores son para copiar, no para leer, así que cada uno trae su botón. */
+.pub-done{display:flex;flex-direction:column;gap:9px}
+.copyfield{
+  display:flex;align-items:center;gap:10px;
+  border-radius:10px;padding:8px 9px 8px 12px;
+  background:rgba(0,0,0,.26);box-shadow:inset 0 0 0 1px var(--hairline);
+}
+.copyfield-k{
+  flex:none;font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--text-faint);
+}
+.copyfield code{
+  flex:1;min-width:0;font-family:var(--font-mono);font-size:12px;color:var(--text);
+  letter-spacing:.06em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.copyfield .btn{flex:none;padding:6px 12px;font-size:11.5px}
+/* Las dos etiquetas viven en el markup y las cambia el CSS, igual que en Detener.
+   Vale tanto la clase `.copied` como el atributo `data-copied`: yo documenté el
+   atributo y el JS acabó poniendo la clase, así que el CSS acepta las dos en vez de
+   obligar a cambiar código que ya funciona. */
+.copy-btn .copy-done{display:none}
+.copy-btn.copied .copy-idle,.copy-btn[data-copied] .copy-idle{display:none}
+.copy-btn.copied .copy-done,.copy-btn[data-copied] .copy-done{display:inline}
+.copy-btn.copied,.copy-btn[data-copied]{color:var(--green)}
 
 .steps-list{display:flex;flex-direction:column;margin-top:2px}
 .sl{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:13px}
@@ -985,20 +1215,38 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   <div class="shell">
     <nav class="rail">
       <div class="nav" role="tablist">
-        <div class="nav-label">Biblioteca</div>
+        <!-- El `+` va en la cabecera de la biblioteca, como en Modrinth: es donde se
+             busca «añadir algo». Y como está siempre, es también la única forma de
+             cambiar de modpack teniendo uno puesto — antes no había ninguna. -->
+        <div class="nav-label nav-label-row">
+          <span>Biblioteca</span>
+          <button type="button" class="nav-add" id="navAdd"
+                  title="Añadir o cambiar de modpack" aria-label="Añadir o cambiar de modpack">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
         <button role="tab" aria-selected="true" data-go="jugar">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 3.5v17l14-8.5z" stroke-linejoin="round"/></svg>
           <span>Jugar</span>
+        </button>
+        <button role="tab" aria-selected="false" data-go="biblioteca">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.8"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="1.8"/><rect x="3.5" y="13" width="7.5" height="7.5" rx="1.8"/><rect x="13" y="13" width="7.5" height="7.5" rx="1.8"/></svg>
+          <span>Mis modpacks</span>
         </button>
         <button role="tab" aria-selected="false" data-go="ajustes">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.4M12 18.8v2.4M21.2 12h-2.4M5.2 12H2.8M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7M18.5 18.5l-1.7-1.7M7.2 7.2 5.5 5.5" stroke-linecap="round"/></svg>
           <span>Ajustes</span>
         </button>
-        <div class="nav-label" style="margin-top:16px">Modpack</div>
-        <button role="tab" aria-selected="false" data-go="admin">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01" stroke-linecap="round"/></svg>
-          <span>Importar</span>
-        </button>
+        <!-- Todo el grupo es de admin, etiqueta incluida: un amigo no ve que exista.
+             El arranque lo destapa si hay `gh` autenticado, y el enrutado de
+             `data-go` tiene que rechazar «admin» si no lo hay. -->
+        <div class="nav-group" id="navAdmin" hidden>
+          <div class="nav-label" style="margin-top:16px">Administrar</div>
+          <button role="tab" aria-selected="false" data-go="admin">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01" stroke-linecap="round"/></svg>
+            <span>Importar y publicar</span>
+          </button>
+        </div>
       </div>
 
       <div class="rail-spacer"></div>
@@ -1074,60 +1322,26 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
           </div>
         </div>
 
-        <!-- ===== unirse con un código =====
-             Cuatro estados excluyentes dentro del panel: pedir, buscando, encontrado
-             y aviso. El panel entero se esconde cuando ya hay un pack instalado. -->
-        <div class="panel join" id="join" hidden>
-          <h2>¿Te pasaron un código?</h2>
-          <p class="sub">Escríbelo y te instalo el pack de tus amigos.</p>
-
-          <div class="join-ask" id="joinAsk">
-            <div class="join-field">
-              <input type="text" class="join-input" id="joinCode" placeholder="DINO-SMP"
-                     maxlength="14" spellcheck="false" autocomplete="off"
-                     autocapitalize="characters" aria-label="Código del modpack">
-              <button type="button" class="btn green" id="joinGo">Buscar</button>
-            </div>
-            <div class="join-hint">las mayúsculas y los guiones dan igual</div>
-          </div>
-
-          <div class="join-busy" id="joinBusy" hidden>
-            <span class="spin"></span>
-            <span>Buscando <b id="joinBusyCode"></b>…</span>
-          </div>
-
-          <div class="join-found" id="joinFound" hidden>
-            <div class="packcard">
-              <span class="app-icon" style="--s:52px" id="joinIcon"><canvas data-dino width="22" height="21"></canvas></span>
-              <div class="packcard-body">
-                <div class="pack-title" id="joinName"></div>
-                <div class="metaline" id="joinMeta"></div>
-              </div>
-            </div>
-            <div class="join-server" id="joinServer" hidden>
-              <span class="dot-live"></span><span>Entra a <b id="joinServerName"></b></span>
-            </div>
-            <div class="join-actions">
-              <button type="button" class="btn green" id="joinInstall">Instalar y jugar</button>
-              <button type="button" class="link-min" id="joinBack">no es este</button>
-            </div>
-          </div>
-
-          <div class="join-msg" id="joinMsg" hidden data-kind="notfound">
-            <span class="join-msg-ico">
-              <svg class="ico-notfound" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.4a2.7 2.7 0 0 1 5.2.9c0 1.8-2.6 2.1-2.6 3.9"/><path d="M12 17.4h.01"/></svg>
-              <svg class="ico-offline" viewBox="0 0 24 24"><path d="M3 8.5a15 15 0 0 1 18 0"/><path d="M6.5 12.2a10 10 0 0 1 11 0"/><path d="M10 15.9a4.6 4.6 0 0 1 4 0"/><path d="M12 19.5h.01"/><path d="m3.5 3.5 17 17"/></svg>
-            </span>
-            <div class="join-msg-body">
-              <div class="join-msg-t" id="joinMsgTitle"></div>
-              <div class="join-msg-s" id="joinMsgSub"></div>
-            </div>
-            <button type="button" class="btn join-retry" id="joinRetry">Reintentar</button>
-          </div>
-        </div>
-
         <div class="alert" id="alert" hidden></div>
 
+      </section>
+
+      <!-- ============ BIBLIOTECA ============ -->
+      <section class="view" data-view="biblioteca">
+        <div class="eyebrow">Biblioteca</div>
+        <h1>Mis modpacks</h1>
+        <p class="sub">Elige con cuál juegas: el seleccionado es el que abre el botón de Jugar.</p>
+
+        <!-- Las tarjetas las genera el JS e van ANTES de `#libAdd`, no sustituyendo el
+             `innerHTML` de la cuadrícula: el `+` es parte de la retícula y tiene que
+             quedarse el último. Con una partida abierta, `data-session` en `#libGrid`. -->
+        <div class="libgrid" id="libGrid">
+          <div class="lib-empty" id="libEmpty" hidden>Todavía no tienes ninguno. Pega un código y te lo instalo.</div>
+          <button type="button" class="packtile-add" id="libAdd">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            <span>Añadir un modpack</span>
+          </button>
+        </div>
       </section>
 
 
@@ -1188,10 +1402,19 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
       <!-- ============ PUBLICAR ============ -->
       <section class="view" data-view="admin">
-        <div class="eyebrow">Modpack</div>
-        <h1>Importar un modpack</h1>
-        <p class="sub">Arrastra un <span class="mono-i">.mrpack</span> a la zona de abajo. Se instala con su icono, sus mods y sus configs.</p>
+        <div class="eyebrow">Administrar</div>
+        <h1>Modpacks</h1>
+        <p class="sub">Instala un <span class="mono-i">.mrpack</span> en este equipo, o publícalo para que otros lo instalen con un código.</p>
 
+        <!-- Dos caminos para la misma tarea —poner un modpack en circulación— y los
+             dos solo de admin: por eso una pestaña con un segmentado, y no dos
+             entradas separadas en el rail. -->
+        <div class="seg" role="tablist" id="adminSeg">
+          <button type="button" role="tab" aria-selected="true" data-seg="importar">Importar archivo</button>
+          <button type="button" role="tab" aria-selected="false" data-seg="publicar">Publicar al catálogo</button>
+        </div>
+
+        <div id="adminImport">
         <div class="two" style="margin-top:18px">
           <div class="panel">
             <h2>Archivo</h2>
@@ -1238,12 +1461,200 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
             </div>
           </div>
         </div>
+        </div><!-- /adminImport -->
+
+        <div id="adminPublish" hidden>
+
+        <!-- ---- la casa: lo que ya está publicado ---- -->
+        <div id="pubHome" style="margin-top:18px">
+          <div class="panel">
+            <h2>Publicados</h2>
+            <p class="sub">Sube una versión nueva de cualquiera, o publica uno que no esté.</p>
+            <div class="pub-list" id="pubList"></div>
+            <div class="pub-empty" id="pubEmpty">Todavía no has publicado ninguno.</div>
+            <button type="button" class="btn green" id="pubNew" style="width:100%">Publicar uno nuevo</button>
+          </div>
+        </div>
+
+        <!-- ---- el editor: mismo formulario para crear y para actualizar ---- -->
+        <div id="pubEditor" hidden style="margin-top:18px">
+          <button type="button" class="link-min" id="pubBack" style="margin:0 0 12px">volver al catálogo</button>
+          <div class="two">
+            <div class="panel">
+              <h2 id="pubEditorTitle">Publicar un modpack</h2>
+              <p class="sub" id="pubEditorSub">Elige el .mrpack que quieres compartir.</p>
+
+              <div class="drop" id="pubDrop">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.5 15v3.5a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2V15" stroke-linecap="round"/></svg>
+                <div class="t">Arrastra tu .mrpack aquí</div>
+                <div class="h" id="pubDropHint">solo archivos .mrpack</div>
+              </div>
+
+              <div id="pubFields" hidden>
+                <div class="field">
+                  <label>Código</label>
+                  <input type="text" class="join-input" id="pubCode" placeholder="DINOSMP"
+                         maxlength="14" spellcheck="false" autocomplete="off">
+                  <div class="field-note" id="pubCodeNote" hidden>no se puede cambiar: tus amigos ya lo tienen</div>
+                </div>
+                <div class="field">
+                  <label>Nombre</label>
+                  <input type="text" id="pubName" spellcheck="false">
+                </div>
+                <div class="field">
+                  <label>Servidor del pack</label>
+                  <input type="text" id="pubServer" placeholder="ejemplo.servidor.com" spellcheck="false">
+                </div>
+                <div class="field-switch">
+                  <div>
+                    <div class="fs-t">Entrar directo al servidor</div>
+                    <div class="fs-s">va en la instancia, no en la lista de servidores</div>
+                  </div>
+                  <button class="switch" data-toggle role="switch" aria-checked="true"
+                          aria-label="Entrar directo al servidor" id="pubDirect"><b></b></button>
+                </div>
+                <div class="field">
+                  <label>Icono</label>
+                  <div class="pub-icon">
+                    <span class="app-icon" style="--s:44px" id="pubIcon"><canvas data-dino width="22" height="21"></canvas></span>
+                    <div class="pub-icon-body">
+                      <button type="button" class="btn" id="pubIconPick">Elegir imagen</button>
+                      <button type="button" class="link-min" id="pubIconClear">usar el del pack</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <h2>Cómo se verá</h2>
+              <p class="sub" id="pubPreviewSub">Aparece aquí en cuanto leas un archivo.</p>
+
+              <div id="pubPreview" hidden>
+                <div class="packcard" style="margin-bottom:14px">
+                  <span class="app-icon" style="--s:52px" id="pubPreviewIcon"><canvas data-dino width="22" height="21"></canvas></span>
+                  <div class="packcard-body">
+                    <div class="pack-title" id="pubPreviewName"></div>
+                    <div class="metaline" id="pubPreviewMeta"></div>
+                  </div>
+                </div>
+                <button type="button" class="btn green" id="pubGo" style="width:100%">Publicar</button>
+              </div>
+
+              <div class="busyline" id="pubBusy" hidden>
+                <span class="spin"></span>
+                <span>Publicando <b id="pubBusyCode"></b>…</span>
+              </div>
+
+              <div class="pub-done" id="pubDone" hidden>
+                <div class="copyfield">
+                  <span class="copyfield-k">Código</span>
+                  <code id="pubDoneCode"></code>
+                  <button type="button" class="btn copy-btn" data-copy="pubDoneCode"><span class="copy-idle">Copiar</span><span class="copy-done">Copiado</span></button>
+                </div>
+                <div class="copyfield">
+                  <span class="copyfield-k">Link</span>
+                  <code id="pubDoneLink"></code>
+                  <button type="button" class="btn copy-btn" data-copy="pubDoneLink"><span class="copy-idle">Copiar</span><span class="copy-done">Copiado</span></button>
+                </div>
+                <button type="button" class="btn green" id="pubDoneBack" style="margin-top:5px">Volver al catálogo</button>
+              </div>
+
+              <div class="alert" id="pubError" hidden></div>
+            </div>
+          </div>
+        </div>
+        </div><!-- /adminPublish -->
       </section>
 
     </div>
   </div>
 
   <!-- ============ PRIMER ARRANQUE ============ -->
+  <!-- ===== unirse con un código =====
+       Overlay, no panel dentro de Jugar: lo abre el `+` del rail, que está siempre.
+       Como panel solo salía sin pack instalado y no había forma de cambiar de
+       modpack teniendo uno. Los cuatro estados y todos los ids son los mismos. -->
+  <div class="overlay" id="joinOverlay" hidden>
+    <div class="overlay-card join" id="join">
+      <h2>¿Te pasaron un código?</h2>
+      <p class="sub">Escríbelo y te instalo el pack de tus amigos.</p>
+
+      <div class="join-ask" id="joinAsk">
+        <div class="join-field">
+          <input type="text" class="join-input" id="joinCode" placeholder="DINO-SMP"
+                 maxlength="14" spellcheck="false" autocomplete="off"
+                 autocapitalize="characters" aria-label="Código del modpack">
+          <button type="button" class="btn green" id="joinGo">Buscar</button>
+        </div>
+        <div class="join-hint">las mayúsculas y los guiones dan igual</div>
+      </div>
+
+      <div class="join-busy" id="joinBusy" hidden>
+        <span class="spin"></span>
+        <span>Buscando <b id="joinBusyCode"></b>…</span>
+      </div>
+
+      <div class="join-found" id="joinFound" hidden>
+        <div class="packcard">
+          <span class="app-icon" style="--s:52px" id="joinIcon"><canvas data-dino width="22" height="21"></canvas></span>
+          <div class="packcard-body">
+            <div class="pack-title" id="joinName"></div>
+            <div class="metaline" id="joinMeta"></div>
+          </div>
+        </div>
+        <div class="join-server" id="joinServer" hidden>
+          <span class="dot-live"></span><span>Entra a <b id="joinServerName"></b></span>
+        </div>
+        <div class="join-actions">
+          <button type="button" class="btn green" id="joinInstall">Instalar y jugar</button>
+          <button type="button" class="link-min" id="joinBack">no es este</button>
+        </div>
+      </div>
+
+      <div class="join-msg" id="joinMsg" hidden data-kind="notfound">
+        <span class="join-msg-ico">
+          <svg class="ico-notfound" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.4a2.7 2.7 0 0 1 5.2.9c0 1.8-2.6 2.1-2.6 3.9"/><path d="M12 17.4h.01"/></svg>
+          <svg class="ico-offline" viewBox="0 0 24 24"><path d="M3 8.5a15 15 0 0 1 18 0"/><path d="M6.5 12.2a10 10 0 0 1 11 0"/><path d="M10 15.9a4.6 4.6 0 0 1 4 0"/><path d="M12 19.5h.01"/><path d="m3.5 3.5 17 17"/></svg>
+        </span>
+        <div class="join-msg-body">
+          <div class="join-msg-t" id="joinMsgTitle"></div>
+          <div class="join-msg-s" id="joinMsgSub"></div>
+        </div>
+        <button type="button" class="btn join-retry" id="joinRetry">Reintentar</button>
+      </div>
+      <button type="button" class="link-min join-close" id="joinClose">cerrar</button>
+    </div>
+  </div>
+
+  <!-- ===== quitar un pack =====
+       Dos acciones separadas, no una casilla y un aceptar. Quitar de la lista se
+       deshace; borrar los archivos se lleva los mundos del jugador y no. Con una
+       casilla las dos caben en el mismo clic distraído. -->
+  <div class="overlay" id="removeOverlay" hidden>
+    <div class="overlay-card">
+      <h2 id="removeTitle">Quitar el modpack</h2>
+      <p class="sub">Son dos cosas distintas. Elige cuál.</p>
+      <div class="remove-choices">
+        <div class="remove-choice">
+          <div class="rc-t">Quitar de la lista</div>
+          <div class="rc-s">Deja de aparecer en tu biblioteca. Los archivos se quedan en el disco y puedes volver a añadirlo con su código.</div>
+          <button type="button" class="btn" id="removeKeep">Quitar de la lista</button>
+        </div>
+        <div class="remove-choice">
+          <div class="rc-t">Borrar también los archivos</div>
+          <div class="rc-s">Se va el modpack y <b>todo lo que hay dentro, tus mundos incluidos</b>. Esto no se deshace.</div>
+          <div class="remove-detail" id="removeDetail" hidden></div>
+          <button type="button" class="danger-btn" id="removeDelete">
+            <span class="stop-label">Borrar los archivos</span>
+            <span class="stop-confirm">Confirmar borrado</span>
+          </button>
+        </div>
+      </div>
+      <button type="button" class="link-min join-close" id="removeClose">cancelar</button>
+    </div>
+  </div>
+
   <div class="onboard" id="onboard" hidden>
     <div class="ob-card">
       <div class="ob-dots"><i class="done"></i><i></i><i></i><i></i></div>
@@ -1484,6 +1895,10 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
   tabs.forEach(function(tab){
     tab.addEventListener("click", function(){
+      /* «Administrar» no se rechaza solo por estar oculto: el import y el drop llegan
+         a ella con un `.click()` programático, que no mira si el grupo está escondido. */
+      var admin = $("navAdmin");
+      if (tab.dataset.go === "admin" && admin && admin.hidden) return;
       tabs.forEach(function(t){ t.setAttribute("aria-selected", String(t === tab)); });
       views.forEach(function(v){ v.classList.toggle("on", v.dataset.view === tab.dataset.go); });
       stage.scrollTop = 0;
@@ -1534,9 +1949,11 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   var ram  = document.getElementById("ram");
   var ramv = document.getElementById("ramv");
   function ramUpdate(){
-    var v = Number(ram.value);
+    var v = Number(ram.value), min = Number(ram.min), max = Number(ram.max);
     ramv.innerHTML = v + "<small>GB</small>";
-    ram.style.setProperty("--fill", ((v - 2) / 14 * 100).toFixed(1) + "%");
+    /* Con los límites reales: el máximo es la RAM de la máquina, y un 16 fijo pintaba
+       el relleno pasado del final en cuanto el equipo tenía más. */
+    ram.style.setProperty("--fill", ((v - min) / Math.max(1, max - min) * 100).toFixed(1) + "%");
   }
   ram.addEventListener("input", ramUpdate);
   ramUpdate();
@@ -1635,24 +2052,51 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     if (play) play.disabled = !PACK;
   }
 
+  var RAM_REC = null;   /* la recomendación para esta máquina, en GB */
+
   function renderMemory(){
     return call("memory_info").then(function(m){
       if (!m || !m.total) return;
       var gb = Math.round(m.total / 1024), rec = Math.round(m.max / 1024);
+      RAM_REC = rec;
+      /* Lo elegido a mano para este pack manda; sin nada guardado, la recomendación. */
+      var elegida = (PACK && PACK.max_mem) ? Math.round(PACK.max_mem / 1024) : null;
+      var usar = elegida || rec;
       var slider = $("ram");
       if (slider) {
         slider.max = String(gb);
-        slider.value = String(rec);
+        slider.value = String(usar);
         slider.dispatchEvent(new Event("input"));
       }
       var scale = document.querySelector(".ram-scale");
       if (scale) scale.lastElementChild.textContent = gb + " GB en esta máquina";
       var hint = $("ramHint");
-      if (hint) hint.textContent = "De " + gb + " GB, le tocan " + rec + " al juego; el resto es para el sistema.";
+      if (hint) hint.textContent = elegida
+        ? "Elegiste " + usar + " GB para este pack. Aquí se recomiendan " + rec +
+          ": déjalo en " + rec + " para volver a automático."
+        : "De " + gb + " GB, le tocan " + rec + " al juego; el resto es para el sistema.";
       var chips = $("packChips");
-      if (chips && PACK) chips.innerHTML = '<span class="chip">RAM <b>' + rec + ' GB</b></span>';
+      if (chips && PACK) chips.innerHTML = '<span class="chip">RAM <b>' + usar + ' GB</b></span>';
     });
   }
+
+  /* `change` y no `input`: se guarda al soltar el control, no en cada paso del arrastre.
+     Por `getElementById` y no `$`, porque esto corre al cargar el script. */
+  document.getElementById("ram").addEventListener("change", function(){
+    if (!PACK) return;
+    var gb = Number(this.value);
+    /* Dejarlo en la recomendación es volver a automático: así el pack sigue a la
+       máquina si cambia de RAM, en vez de quedarse clavado en un número que
+       coincidía por casualidad. */
+    var mb = (gb === RAM_REC) ? null : gb * 1024;
+    var id = PACK.id;
+    call("set_pack_memory", { id: id, mb: mb }).then(function(){
+      if (PACK && PACK.id === id) PACK.max_mem = mb;
+      return renderMemory();
+    }).catch(function(e){
+      showAlert("<b>No pude guardar la RAM.</b> " + String(e));
+    });
+  });
 
   function renderInstance(){
     if (!PACK) { renderPack(null); return Promise.resolve(); }
@@ -1733,11 +2177,10 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   function refreshAll(){
     return call("get_pack").then(function(p){
       PACK = p && p.id ? p : null;
-      /* Unirse con un código es para quien todavía no tiene nada instalado. */
-      if (joinPanel) joinPanel.hidden = !!PACK;
       $("kvEngine").textContent = "ElyPrism 11.1.0 · administrado";
       setSync(PACK ? "listo para jugar" : "sin modpack", !!PACK);
-      return Promise.all([renderInstance(), renderAccount(), renderServer(), renderMemory(), renderJava()]);
+      return Promise.all([renderInstance(), renderAccount(), renderServer(),
+                          renderMemory(), renderJava(), renderBiblioteca()]);
     }).catch(function(){});
   }
 
@@ -1776,13 +2219,35 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
   var dz = $("dropZone");
   if (dz && tauri) {
-    tauri.event.listen("tauri://drag-enter", function(){ dz.classList.add("over"); });
-    tauri.event.listen("tauri://drag-leave", function(){ dz.classList.remove("over"); });
-    tauri.event.listen("tauri://drag-drop", function(e){
+    /* El resaltado va en la zona que se ve. Con el segmento de publicar abierto, marcar
+       la de importar —que está escondida— dejaba el arrastre sin ninguna respuesta. */
+    var zonaDrop = function(){
+      var pub = $("adminPublish");
+      return (pub && !pub.hidden && $("pubDrop")) ? $("pubDrop") : dz;
+    };
+    var apagarDrop = function(){
       dz.classList.remove("over");
+      if ($("pubDrop")) $("pubDrop").classList.remove("over");
+    };
+    tauri.event.listen("tauri://drag-enter", function(){ zonaDrop().classList.add("over"); });
+    tauri.event.listen("tauri://drag-leave", apagarDrop);
+    tauri.event.listen("tauri://drag-drop", function(e){
+      apagarDrop();
       var paths = (e.payload && e.payload.paths) || [];
-      if (paths.length) {
-        document.querySelector('[data-go="admin"]').click();
+      if (!paths.length) return;
+      /* Importar y publicar viven en la misma pestaña, y hacen cosas distintas con el
+         mismo archivo. Manda el segmento abierto: ir siempre a importar haría
+         imposible soltar un .mrpack en el panel de publicar. */
+      var admin = $("navAdmin");
+      if (admin && admin.hidden) return;   // sin `gh` no hay dónde soltarlo
+      var enPublicar = $("adminPublish") && !$("adminPublish").hidden;
+      document.querySelector('[data-go="admin"]').click();
+      if (enPublicar) {
+        /* Desde la lista de publicados el editor está cerrado: se abre como pack nuevo
+           antes de leer, o el archivo rellenaría un formulario que no se ve. */
+        if ($("pubEditor").hidden) pubEditor("nuevo");
+        pubLeer(paths[0]);
+      } else {
         takeFile(paths[0]);
       }
     });
@@ -1805,7 +2270,12 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       btnInstall.disabled = true;
       btnInstall.textContent = "Instalando…";
       call("set_pack", { pack: pack })
-        .then(function(){ PACK = pack; return runPlay({ installOnly: true }); })
+        .then(function(guardado){
+          /* Manda lo que devolvió el backend: puede haberle asignado otra carpeta si la
+             que pedía ya era de otro pack, y seguir con la nuestra instalaría encima. */
+          PACK = guardado || pack;
+          return runPlay({ installOnly: true });
+        })
         .then(function(){
           document.querySelector('[data-go="jugar"]').click();
           return refreshAll();
@@ -1844,6 +2314,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     if (bloqueLaunch) bloqueLaunch.hidden = (cual !== "preparando");
     if (bloqueSession)bloqueSession.hidden= (cual !== "jugando");
     if (cual !== "jugando") desarmarStop();
+    marcarSesionEnBiblioteca(cual === "jugando");
   }
 
   function setProgress(paso, frac){
@@ -1900,7 +2371,12 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     });
   }
   document.addEventListener("keydown", function(e){
-    if (e.key === "Escape") desarmarStop();
+    if (e.key !== "Escape") return;
+    desarmarStop();
+    /* Uno por pulsación, y el de quitar primero: es el que puede estar tapando al
+       otro, y el que conviene poder abandonar sin pensárselo. */
+    if (removeOverlay && !removeOverlay.hidden) { cerrarQuitar(); return; }
+    if (joinOverlay && !joinOverlay.hidden) cerrarJoin();
   });
 
   /* ---- seguir al backend ----
@@ -1946,10 +2422,14 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     return call("play", { args: {
       mrpack: PACK.mrpack,
       instance_id: PACK.id,
+      /* Con código, el backend mira si hay versión nueva antes de lanzar. Sin él
+         —un pack importado a mano— no hay contra qué comparar y se juega tal cual. */
+      code: PACK.code || null,
       name: PACK.name,
       version: PACK.version || "1.0.0",
       server: PACK.server || null,
-      max_mem: 0,
+      /* 0 es «decídelo tú según la máquina»; solo va un número si se eligió a mano. */
+      max_mem: PACK.max_mem || 0,
       jvm_args: "",
       install_only: !!opts.installOnly
     }}).then(function(r){
@@ -2163,6 +2643,15 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
   document.getElementById("sp-cerrar").addEventListener("click", spCerrar);
   spAtras.addEventListener("click", function(){ spParar(); spIr("1", 1); });
+
+  /* Cortar la espera del login: se deja de sondear, se cierra el motor y se vuelve a
+     elegir. Sin esto la única salida era cerrar a mano la ventana del motor, que es
+     justo lo que el setup existe para ahorrarle a nadie. */
+  document.getElementById("sp-msa-cancelar").addEventListener("click", function(){
+    spParar();
+    call("close_engine").catch(function(){});
+    spIr("1", 1);
+  });
   spJugar.addEventListener("click", function(){ spCerrar(); runPlay().catch(function(){}); });
   document.addEventListener("keydown", function(e){
     if (e.key === "Escape" && !setup.hidden) spCerrar();
@@ -2176,11 +2665,394 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     if (!hay) { spAbrir(); dlog("setup: visible=" + (!setup.hidden)); }
   }).catch(function(e){ dlog("setup: fallo al consultar cuenta: " + String(e)); });
 
+  /* ================= publicar modpacks (solo admin) =================
+     La pestaña aparece o no según si hay un `gh` autenticado. No es un interruptor
+     decorativo: publicar se apoya en ese `gh`, así que sin él el panel no podría
+     hacer nada aunque se enseñara. */
+  var pubDraft = null;   /* lo leído del .mrpack */
+  var pubPath  = null;   /* ruta del archivo elegido */
+  var pubModo  = "nuevo";
+  var pubFijado = null;  /* al actualizar: el pack que ya estaba publicado */
+
+  function pubVista(cual){
+    $("pubHome").hidden   = (cual !== "home");
+    $("pubEditor").hidden = (cual !== "editor");
+  }
+  function pubEstado(cual){
+    $("pubPreview").hidden = (cual !== "ficha");
+    $("pubBusy").hidden    = (cual !== "publicando");
+    $("pubDone").hidden    = (cual !== "hecho");
+    $("pubError").hidden   = (cual !== "error");
+  }
+
+  function pubCargarLista(){
+    call("admin_published").then(function(packs){
+      var lista = $("pubList");
+      lista.innerHTML = "";
+      $("pubEmpty").hidden = packs.length > 0;
+      packs.forEach(function(p){
+        var fila = document.createElement("div"); fila.className = "pub-row";
+        var cuerpo = document.createElement("div"); cuerpo.className = "pub-row-body";
+        var n = document.createElement("div"); n.className = "pub-row-name";
+        /* `textContent` y no `innerHTML`: estos nombres vienen de un archivo remoto,
+           y pintarlos como HTML sería dejar que el catálogo inyecte marcado. */
+        n.textContent = p.name;
+        var m = document.createElement("div"); m.className = "pub-row-meta";
+        m.textContent = "v" + p.version + (p.mods ? " · " + p.mods + " mods" : "");
+        cuerpo.appendChild(n); cuerpo.appendChild(m);
+
+        var cod = document.createElement("span"); cod.className = "pub-code";
+        cod.textContent = p.code;
+
+        var btn = document.createElement("button");
+        btn.type = "button"; btn.className = "btn"; btn.textContent = "Actualizar";
+        btn.addEventListener("click", function(){ pubEditor("actualizar", p); });
+
+        fila.appendChild(cuerpo); fila.appendChild(cod); fila.appendChild(btn);
+        lista.appendChild(fila);
+      });
+    }).catch(function(){ $("pubEmpty").hidden = false; });
+  }
+
+  function pubEditor(modo, pack){
+    pubModo = modo; pubFijado = pack || null;
+    pubDraft = null; pubPath = null;
+    $("pubEditorTitle").textContent = (modo === "actualizar")
+      ? "Actualizar " + pack.name : "Publicar un modpack";
+    $("pubEditorSub").textContent = (modo === "actualizar")
+      ? "Sube la versión nueva. El código no cambia, así que a nadie se le queda uno viejo."
+      : "Elige el .mrpack que quieres compartir.";
+    $("pubDropHint").textContent = "solo archivos .mrpack";
+    $("pubFields").hidden = true;
+    $("pubPreviewSub").hidden = false;
+    pubEstado(null);
+    pubVista("editor");
+  }
+
+  function pubPintar(){
+    if (!pubDraft) return;
+    $("pubPreviewName").textContent = ($("pubName").value || pubDraft.name);
+    var partes = [];
+    if (pubDraft.minecraft) partes.push("Minecraft " + pubDraft.minecraft);
+    if (pubDraft.loader)    partes.push(pubDraft.loader);
+    if (pubDraft.mods)      partes.push(pubDraft.mods + " mods");
+    partes.push("v" + pubDraft.version);
+    $("pubPreviewMeta").textContent = partes.join(" · ");
+    var url = pubDraft.icon_b64 ? "data:image/png;base64," + pubDraft.icon_b64 : null;
+    setIcon($("pubPreviewIcon"), url);
+    setIcon($("pubIcon"), url);
+  }
+
+  function pubLeer(ruta){
+    pubPath = ruta;
+    $("pubDropHint").textContent = "leyendo…";
+    call("admin_read", { path: ruta }).then(function(b){
+      pubDraft = b;
+      /* Al actualizar mandan el código y el id de lo ya publicado: cambiarlos daría
+         de alta un pack distinto y dejaría a los amigos con el viejo para siempre. */
+      if (pubModo === "actualizar" && pubFijado) {
+        b.code = pubFijado.code;
+        b.id   = pubFijado.id;
+        if (!b.server) b.server = pubFijado.server || null;
+      }
+      $("pubCode").value = b.code || "";
+      $("pubCode").disabled = (pubModo === "actualizar");
+      $("pubCodeNote").hidden = (pubModo !== "actualizar");
+      $("pubName").value = b.name || "";
+      $("pubServer").value = b.server || "";
+      $("pubDropHint").textContent = ruta.split(/[\\/]/).pop();
+      $("pubFields").hidden = false;
+      $("pubPreviewSub").hidden = true;
+      pubPintar();
+      pubEstado("ficha");
+    }).catch(function(e){
+      $("pubDropHint").textContent = "solo archivos .mrpack";
+      $("pubError").textContent = String(e);
+      pubEstado("error");
+    });
+  }
+
+  if ($("pubHome")) {
+    $("pubNew").addEventListener("click", function(){ pubEditor("nuevo"); });
+    $("pubBack").addEventListener("click", function(){ pubVista("home"); pubCargarLista(); });
+    $("pubDoneBack").addEventListener("click", function(){ pubVista("home"); pubCargarLista(); });
+    $("pubName").addEventListener("input", pubPintar);
+
+    /* El icono entra por un input de archivo y no por un diálogo del sistema: así no
+       hace falta añadir un plugin solo para esto. */
+    $("pubIconPick").addEventListener("click", function(){
+      var inp = document.createElement("input");
+      inp.type = "file"; inp.accept = "image/png,image/jpeg,image/webp";
+      inp.addEventListener("change", function(){
+        var f = inp.files && inp.files[0];
+        if (!f || !pubDraft) return;
+        var fr = new FileReader();
+        fr.onload = function(){
+          pubDraft.icon_b64 = String(fr.result).split(",")[1] || null;
+          pubPintar();
+        };
+        fr.readAsDataURL(f);
+      });
+      inp.click();
+    });
+    $("pubIconClear").addEventListener("click", function(){
+      if (!pubDraft || !pubPath) return;
+      /* Volver a leer el archivo es lo único que devuelve el icono original. */
+      call("admin_read", { path: pubPath }).then(function(b){
+        pubDraft.icon_b64 = b.icon_b64 || null;
+        pubPintar();
+      }).catch(function(){});
+    });
+
+    $("pubGo").addEventListener("click", function(){
+      if (!pubDraft || !pubPath) return;
+      var directo = $("pubDirect").getAttribute("aria-checked") === "true";
+      var d = {
+        code: $("pubCode").value,
+        id: pubDraft.id,
+        name: $("pubName").value,
+        version: pubDraft.version,
+        /* Sin «entrar directo» el pack se publica sin servidor: el interruptor no es
+           cosmético, decide si la instancia lleva JoinServerOnLaunch. */
+        server: directo ? ($("pubServer").value || null) : null,
+        minecraft: pubDraft.minecraft,
+        loader: pubDraft.loader,
+        mods: pubDraft.mods,
+        bytes: pubDraft.bytes,
+        sha512: pubDraft.sha512,
+        icon_b64: pubDraft.icon_b64 || null
+      };
+      $("pubBusyCode").textContent = d.code;
+      pubEstado("publicando");
+      call("admin_publish", { draft: d, path: pubPath }).then(function(p){
+        $("pubDoneCode").textContent = p.code;
+        /* El link lleva a las descargas y trae el código detrás de la almohadilla.
+           Pegarlo entero en la casilla de códigos funciona: el backend lo extrae. */
+        $("pubDoneLink").textContent =
+          "https://github.com/dinopolllo/dino-launcher-releases#" + p.code;
+        pubEstado("hecho");
+      }).catch(function(e){
+        $("pubError").textContent = String(e);
+        pubEstado("error");
+      });
+    });
+
+    document.querySelectorAll("[data-copy]").forEach(function(b){
+      b.addEventListener("click", function(){
+        var el = $(b.dataset.copy);
+        if (!el) return;
+        navigator.clipboard.writeText(el.textContent).then(function(){
+          b.classList.add("copied");
+          setTimeout(function(){ b.classList.remove("copied"); }, 1400);
+        }).catch(function(){});
+      });
+    });
+
+    /* Importar y publicar son dos caminos para la misma tarea, y los dos solo de
+       admin: un segmentado dentro de una pestaña, no dos entradas en el rail. */
+    var adminSeg = $("adminSeg");
+    function mostrarSeg(cual){
+      adminSeg.querySelectorAll("[data-seg]").forEach(function(b){
+        b.setAttribute("aria-selected", String(b.dataset.seg === cual));
+      });
+      $("adminImport").hidden  = (cual !== "importar");
+      $("adminPublish").hidden = (cual !== "publicar");
+    }
+    if (adminSeg) {
+      adminSeg.querySelectorAll("[data-seg]").forEach(function(b){
+        b.addEventListener("click", function(){ mostrarSeg(b.dataset.seg); });
+      });
+    }
+
+    /* El grupo entero solo existe para quien puede publicar: sin `gh` autenticado ni
+       siquiera se ve que haya una pestaña. */
+    call("admin_available").then(function(puede){
+      var nav = $("navAdmin");
+      if (nav) nav.hidden = !puede;
+      if (puede) { pubVista("home"); pubCargarLista(); }
+    }).catch(function(){});
+  }
+
+  /* ================= la biblioteca =================
+     La cuadrícula se repinta entera en cada refresco: son unas pocas tarjetas y
+     conciliar nodo a nodo costaría más de mantener de lo que ahorraría. El `+` no se
+     toca —es parte de la retícula, no una tarjeta generada—, así que las tarjetas se
+     insertan antes de él en vez de reescribir el `innerHTML` de la cuadrícula. */
+  var libGrid  = $("libGrid");
+  var libEmpty = $("libEmpty");
+  var libAdd   = $("libAdd");
+
+  function tarjetaPack(p, elegido){
+    var t = document.createElement("div");
+    t.className = "packtile";
+    t.dataset.id = p.id;
+    /* Un solo estado visual. «Elegido» manda; «solo descargada» avisa de que está en
+       la lista pero no en el disco, que es lo que explica la espera al darle a jugar. */
+    t.dataset.state = elegido ? "selected" : (p.installed ? "installed" : "downloaded");
+
+    var main = document.createElement("button");
+    main.type = "button";
+    main.className = "tile-main";
+    main.setAttribute("aria-label", "Jugar con " + p.name);
+    main.addEventListener("click", function(){ elegirPack(p.id); });
+
+    var quitar = document.createElement("button");
+    quitar.type = "button";
+    quitar.className = "tile-remove";
+    quitar.title = "Quitar " + p.name;
+    quitar.setAttribute("aria-label", "Quitar " + p.name);
+    quitar.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+    quitar.addEventListener("click", function(e){
+      /* Sin esto el clic sigue hasta `.tile-main`, que cubre la tarjeta entera, y
+         quitar un pack lo seleccionaría de paso. */
+      e.stopPropagation();
+      abrirQuitar(p);
+    });
+
+    var head = document.createElement("div"); head.className = "tile-head";
+    var ico  = document.createElement("span"); ico.className = "app-icon";
+    ico.style.setProperty("--s", "40px");
+    setIcon(ico, p.icon);
+    var ident = document.createElement("div"); ident.className = "tile-id";
+    var nom   = document.createElement("div"); nom.className = "tile-name";
+    /* `textContent`: estos nombres vienen de un archivo remoto y pintarlos como HTML
+       sería dejar que el catálogo inyecte marcado. */
+    nom.textContent = p.name;
+    var meta = document.createElement("div"); meta.className = "tile-meta";
+    meta.textContent = [p.code, p.version ? "v" + p.version : null]
+      .filter(Boolean).join(" · ");
+    ident.appendChild(nom); ident.appendChild(meta);
+    head.appendChild(ico); head.appendChild(ident);
+
+    var foot  = document.createElement("div"); foot.className = "tile-foot";
+    var chapa = document.createElement("span"); chapa.className = "tile-badge";
+    chapa.textContent = !p.installed ? "sin instalar" : (elegido ? "elegido" : "instalado");
+    var vivo = document.createElement("span"); vivo.className = "tile-live";
+    vivo.innerHTML = '<span class="dot-live"></span><span>jugando</span>';
+    foot.appendChild(chapa); foot.appendChild(vivo);
+    if (p.server) {
+      var srv = document.createElement("span"); srv.className = "tile-server";
+      srv.textContent = p.server;
+      foot.appendChild(srv);
+    }
+
+    t.appendChild(main); t.appendChild(quitar);
+    t.appendChild(head); t.appendChild(foot);
+    return t;
+  }
+
+  function renderBiblioteca(){
+    if (!libGrid) return Promise.resolve();
+    return call("list_packs").then(function(r){
+      var packs = (r && r.packs) || [];
+      libGrid.querySelectorAll(".packtile").forEach(function(n){ n.remove(); });
+      packs.forEach(function(p){
+        libGrid.insertBefore(tarjetaPack(p, p.id === r.selected), libAdd);
+      });
+      libEmpty.hidden = packs.length > 0;
+      marcarSesionEnBiblioteca(estadoPrevio === "jugando");
+      /* Al log, como el resto del arranque: la app no se abre desde una terminal, así
+         que sin esto una biblioteca vacía y una que falló al leerse se ven igual. */
+      dlog("biblioteca: " + packs.length + " packs, elegido=" + (r.selected || "ninguno"));
+    }).catch(function(e){ dlog("biblioteca: no pude leerla: " + e); });
+  }
+
+  /* Con una partida abierta, el resto de tarjetas dejan de responder: solo hay una
+     sesión a la vez, y una tarjeta que acepta el clic estaría prometiendo lo que no
+     puede cumplir. La que juega se queda entera y con el punto vivo. */
+  function marcarSesionEnBiblioteca(jugando){
+    if (!libGrid) return;
+    if (jugando) libGrid.dataset.session = ""; else delete libGrid.dataset.session;
+    libGrid.querySelectorAll(".packtile").forEach(function(t){
+      if (jugando && PACK && t.dataset.id === PACK.id) t.dataset.playing = "";
+      else delete t.dataset.playing;
+    });
+  }
+
+  function elegirPack(id){
+    /* Pulsar el que ya está elegido no es un cambio: es «quiero jugar a este». */
+    if (PACK && PACK.id === id) { document.querySelector('[data-go="jugar"]').click(); return; }
+    call("select_pack", { id: id }).then(refreshAll).then(function(){
+      document.querySelector('[data-go="jugar"]').click();
+    }).catch(function(e){
+      showAlert("<b>No pude cambiar de modpack.</b> " + String(e));
+    });
+  }
+
+  /* ---- quitar un pack ----
+     Dos botones, no una casilla y un aceptar: quitar de la lista se deshace y borrar
+     los archivos no. El de borrar se arma antes, como el de detener la partida. */
+  var removeOverlay = $("removeOverlay");
+  var quitando = null;
+  var borrarTimer = null;
+
+  function desarmarBorrado(){
+    clearTimeout(borrarTimer); borrarTimer = null;
+    var b = $("removeDelete");
+    if (b) b.removeAttribute("data-armed");
+  }
+
+  function abrirQuitar(p){
+    if (!removeOverlay) return;
+    quitando = p;
+    $("removeTitle").textContent = "Quitar " + p.name;
+    $("removeDetail").hidden = true;
+    $("removeDetail").textContent = "";
+    desarmarBorrado();
+    removeOverlay.hidden = false;
+    /* Qué se va exactamente, con números: «tus mundos» en abstracto no frena a nadie. */
+    call("instance_info", { id: p.id }).then(function(i){
+      if (!i || !i.installed) return;
+      $("removeDetail").textContent = humanBytes(i.bytes) + " en disco · " +
+        i.worlds + (i.worlds === 1 ? " mundo" : " mundos");
+      $("removeDetail").hidden = false;
+    }).catch(function(){});
+  }
+
+  function cerrarQuitar(){
+    if (!removeOverlay) return;
+    removeOverlay.hidden = true;
+    quitando = null;
+    desarmarBorrado();
+  }
+
+  function quitarPack(borrar){
+    if (!quitando) return;
+    var id = quitando.id, nombre = quitando.name;
+    cerrarQuitar();
+    call("remove_pack", { id: id, deleteFiles: borrar })
+      .then(refreshAll)
+      .catch(function(e){
+        showAlert("<b>No pude quitar " + nombre + ".</b> " + String(e));
+        refreshAll();
+      });
+  }
+
+  if (removeOverlay) {
+    $("removeClose").addEventListener("click", cerrarQuitar);
+    /* Clic en el fondo, no en la tarjeta: cerrar al pulsar dentro sería perder el
+       diálogo a mitad de decidir. */
+    removeOverlay.addEventListener("click", function(e){
+      if (e.target === removeOverlay) cerrarQuitar();
+    });
+    $("removeKeep").addEventListener("click", function(){ quitarPack(false); });
+    $("removeDelete").addEventListener("click", function(){
+      var b = $("removeDelete");
+      if (!b.hasAttribute("data-armed")) {
+        b.setAttribute("data-armed", "");
+        borrarTimer = setTimeout(desarmarBorrado, 4000);
+        return;
+      }
+      desarmarBorrado();
+      quitarPack(true);
+    });
+  }
+
   /* ================= unirse con un código =================
      Cuatro estados excluyentes: pedir, buscando, encontrado y aviso. El código se
      manda tal cual se escribió; normalizarlo es cosa de Rust, que también acepta que
      peguen el link entero. Aquí no se toca para no tener la regla en dos sitios. */
-  var joinPanel = $("join");
+  var joinOverlay = $("joinOverlay");
   var joinAsk   = $("joinAsk");
   var joinBusy  = $("joinBusy");
   var joinFound = $("joinFound");
@@ -2189,7 +3061,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   var ultimoCodigo = "";
 
   function joinEstado(cual){
-    if (!joinPanel) return;
+    if (!joinOverlay) return;
     joinAsk.hidden   = (cual !== "pedir");
     joinBusy.hidden  = (cual !== "buscando");
     joinFound.hidden = (cual !== "encontrado");
@@ -2205,6 +3077,9 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
     call("catalog_lookup", { code: texto }).then(function(p){
       $("joinName").textContent = p.name;
+      /* Sin icono publicado vuelve el dino: `setIcon` repone el canvas si la búsqueda
+         anterior había dejado una imagen. */
+      setIcon($("joinIcon"), p.icon || null);
       /* Solo se enseña lo que el catálogo trae: inventar un dato que falta sería
          prometer algo que luego no se cumple. */
       var partes = [];
@@ -2231,7 +3106,26 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     });
   }
 
-  if (joinPanel) {
+  /* El `+` está siempre disponible, y es además la única forma de cambiar de modpack
+     teniendo uno puesto: antes el panel se escondía en cuanto había algo instalado. */
+  function abrirJoin(){
+    if (!joinOverlay) return;
+    joinCode.value = "";
+    joinEstado("pedir");
+    joinOverlay.hidden = false;
+    joinCode.focus();
+  }
+  function cerrarJoin(){
+    if (joinOverlay) joinOverlay.hidden = true;
+  }
+
+  if (joinOverlay) {
+    if ($("navAdd")) $("navAdd").addEventListener("click", abrirJoin);
+    if (libAdd) libAdd.addEventListener("click", abrirJoin);
+    $("joinClose").addEventListener("click", cerrarJoin);
+    joinOverlay.addEventListener("click", function(e){
+      if (e.target === joinOverlay) cerrarJoin();
+    });
     $("joinGo").addEventListener("click", joinBuscar);
     $("joinRetry").addEventListener("click", joinBuscar);
     joinCode.addEventListener("keydown", function(e){
@@ -2251,6 +3145,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       mostrarEstado("preparando");
 
       call("catalog_install", { code: ultimoCodigo }).then(function(){
+        cerrarJoin();
         joinEstado("pedir");
         /* `refreshAll` relee pack.json, que `catalog_install` acaba de escribir
            apuntando a nuestra carpeta y no al disco de quien lo publicó. */
