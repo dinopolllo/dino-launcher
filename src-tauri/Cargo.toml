@@ -1,6 +1,6 @@
 [package]
 name = "dino-launcher"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.77"
 
@@ -33,6 +33,10 @@ window-vibrancy = "0.6"
 # El updater solo existe en escritorio; en móvil el sistema se encarga.
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
 tauri-plugin-updater = "2"
+# Los links de invitación (`dinolauncher://join/CODIGO`). Con `deep-link`, el de
+# instancia única le pasa el link al launcher que ya está abierto en vez de abrir otro.
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 [profile.release]
 codegen-units = 1

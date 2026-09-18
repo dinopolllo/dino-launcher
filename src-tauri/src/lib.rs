@@ -395,14 +395,16 @@ fn abort_launch(app: tauri::AppHandle) -> Result<usize, String> {
     Ok(n)
 }
 
-/// Detiene la partida en curso.
+/// Detiene la partida en curso: primero pidiéndole que se cierre y, solo si no
+/// responde, a la fuerza. Ver `install::stop_game`.
 ///
-/// Minecraft no guarda al morir así: se pierde lo que no estuviera guardado. Por eso
-/// solo se llama desde un botón explícito y nunca como efecto secundario de otra cosa.
+/// En un hilo aparte porque puede esperar hasta medio minuto a que Minecraft guarde.
 #[tauri::command]
-fn stop_game(app: tauri::AppHandle) -> Result<usize, String> {
+async fn stop_game(app: tauri::AppHandle) -> Result<usize, String> {
     let layout = layout_of(&app)?;
-    Ok(install::stop_game(&layout.root))
+    tauri::async_runtime::spawn_blocking(move || install::stop_game(&layout.root))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Cierra la ventana del motor cuando ya cumplió su papel.
@@ -511,14 +513,63 @@ async fn update_install(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 
-/// ¿Se puede publicar desde esta máquina?
-///
-/// Publicar se apoya en el `gh` que quien publica ya tiene autenticado, así que esto
-/// separa al admin de un amigo sin necesidad de inventarse un interruptor: sin `gh`
-/// el panel no tiene nada que hacer y no se enseña.
+/// ¿Se desbloqueó ya la pestaña de admin en esta máquina?
 #[tauri::command]
-fn admin_available() -> bool {
-    admin::disponible()
+fn admin_unlocked(app: tauri::AppHandle) -> bool {
+    layout_of(&app).map(|l| admin::desbloqueado(&l.root)).unwrap_or(false)
+}
+
+/// Mira si lo último que se tecleó termina en la clave y, si es así, desbloquea la
+/// pestaña de admin para siempre en esta máquina.
+#[tauri::command]
+fn admin_unlock(app: tauri::AppHandle, texto: String) -> Result<bool, String> {
+    if !admin::termina_en_la_clave(&texto) {
+        return Ok(false);
+    }
+    let layout = layout_of(&app)?;
+    admin::desbloquear(&layout.root).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// Invitación que llegó por link y la interfaz todavía no ha recogido.
+///
+/// Hace falta guardarla porque con el launcher cerrado el link llega **antes** de que
+/// exista la interfaz, y un evento emitido entonces no lo oiría nadie. La interfaz la
+/// pide al arrancar y cada vez que se le avisa de que llegó otra.
+#[derive(Default)]
+struct InvitacionPendiente(std::sync::Mutex<Option<String>>);
+
+/// Recoge los links `dinolauncher://…` que abrieron o despertaron el launcher.
+#[cfg(desktop)]
+fn recibir_invitacion(app: &tauri::AppHandle, urls: &[String]) {
+    let Some(codigo) = urls.iter().find_map(|u| catalog::codigo_de_invitacion(u)) else {
+        return;
+    };
+    println!("[INVITE] invitación a {codigo}");
+    if let Some(st) = app.try_state::<InvitacionPendiente>() {
+        if let Ok(mut g) = st.0.lock() {
+            *g = Some(codigo);
+        }
+    }
+    let _ = app.emit("invitacion", ());
+    enfocar_ventana(app);
+}
+
+/// Trae la ventana al frente: quien pulsa un link espera ver el launcher, no que se
+/// abra detrás del navegador.
+#[cfg(desktop)]
+fn enfocar_ventana(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+/// Entrega la invitación pendiente, una sola vez.
+#[tauri::command]
+fn invitacion_pendiente(estado: tauri::State<'_, InvitacionPendiente>) -> Option<String> {
+    estado.0.lock().ok().and_then(|mut g| g.take())
 }
 
 /// Lee un `.mrpack` y devuelve el borrador con todo lo deducible.
@@ -868,8 +919,12 @@ fn instance_info(app: tauri::AppHandle, id: String) -> Result<serde_json::Value,
     let layout = layout_of(&app)?;
     let dir = layout.instance(&id);
     let mc = dir.join("minecraft");
+    // El icono va aunque la instancia no esté montada: el del catálogo se descarga al
+    // añadir el pack, antes de instalar nada, y sin él aquí la primera partida entera se
+    // veía con el dino genérico.
+    let icon = std::fs::read(layout.pack_icon(&id)).ok().map(|b| install::png_data_url(&b));
     if !dir.exists() {
-        return Ok(serde_json::json!({ "installed": false }));
+        return Ok(serde_json::json!({ "installed": false, "icon": icon }));
     }
     let mods = std::fs::read_dir(mc.join("mods"))
         .map(|rd| rd.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "jar")).count())
@@ -892,7 +947,6 @@ fn instance_info(app: tauri::AppHandle, id: String) -> Result<serde_json::Value,
             }
         }
     }
-    let icon = std::fs::read(layout.pack_icon(&id)).ok().map(|b| install::png_data_url(&b));
 
     Ok(serde_json::json!({
         "installed": true,
@@ -972,7 +1026,18 @@ fn app_paths(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Instancia única **la primera**, como pide el plugin: si va detrás, el segundo
+    // launcher llega a arrancar antes de ceder. Con su función `deep-link`, un link
+    // abierto con el launcher ya en marcha le llega a este en vez de abrir otro.
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            enfocar_ventana(app)
+        }))
+        .plugin(tauri_plugin_deep_link::init());
+    builder
+        .manage(InvitacionPendiente::default())
         .setup(|app| {
             // El updater se registra aquí y no en la cadena del builder porque en móvil
             // no existe. Fallar al registrarlo no debe impedir que la app abra: sin él
@@ -993,6 +1058,26 @@ pub fn run() {
             // depende de si el sistema se lo dio. Por eso el resultado se guarda.
             app.manage(Glass(apply_glass(&window)));
 
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                // Quien registra `dinolauncher://` es el instalador; en desarrollo nadie
+                // ha pasado por él, así que se registra aquí para poder probar links.
+                #[cfg(debug_assertions)]
+                let _ = app.deep_link().register_all();
+                // Con el launcher cerrado, el link llega como argumento al arrancar.
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    let urls: Vec<String> = urls.iter().map(|u| u.to_string()).collect();
+                    recibir_invitacion(app.handle(), &urls);
+                }
+                // Con el launcher abierto, lo trae el plugin de instancia única.
+                let h = app.handle().clone();
+                app.deep_link().on_open_url(move |ev| {
+                    let urls: Vec<String> = ev.urls().iter().map(|u| u.to_string()).collect();
+                    recibir_invitacion(&h, &urls);
+                });
+            }
+
             // Limpiar restos de la sesión anterior y dejar el motor caliente: así
             // refresca los tokens mientras el usuario mira la interfaz, y al pulsar
             // Jugar no aparece su diálogo "Please wait...".
@@ -1008,9 +1093,18 @@ pub fn run() {
                     // vez de ofrecerle Jugar sobre algo que ya está jugando.
                     if let Some(pid) = install::game_pid(&layout.root) {
                         println!("[PLAY] partida ya en curso al abrir, pid {pid}");
+                        // El motor que la lanzó, si sigue vivo, se despide igual que en
+                        // una sesión normal: al acabar la partida es el que podría
+                        // enseñar su ventana.
+                        let motor = install::engine_pid(&layout.root);
                         install::sesion::poner(install::sesion::JUGANDO);
-                        while install::proceso_vivo(pid) {
-                            std::thread::sleep(std::time::Duration::from_secs(2));
+                        while !install::esperar_proceso(pid, 2_000) {
+                            if let Some(m) = motor {
+                                let _ = install::hide_windows_of(m);
+                            }
+                        }
+                        if let Some(m) = motor {
+                            install::despedir_motor(m);
                         }
                         install::sesion::poner(install::sesion::INACTIVA);
                     }
@@ -1046,7 +1140,9 @@ pub fn run() {
             session_state,
             abort_launch,
             stop_game,
-            admin_available,
+            admin_unlocked,
+            admin_unlock,
+            invitacion_pendiente,
             admin_read,
             admin_published,
             admin_publish,
@@ -1091,6 +1187,12 @@ fn apply_glass(window: &tauri::WebviewWindow) -> bool {
         //
         // El color solo lo usa el camino viejo de Windows 10; en 11 el desenfoque lo
         // compone DWM y lo ignora. Es `--ink`, para que los dos caminos tiñan igual.
+        //
+        // En 11 el acrílico tampoco elige entre claro y oscuro: sigue el tema de la
+        // ventana, que por defecto es el de las apps del sistema. Con Windows en claro
+        // salía un vidrio blanquecino y la interfaz oscura encima lo dejaba en un gris
+        // que no dejaba ver nada detrás. Por eso `tauri.conf.json` fija `"theme":
+        // "Dark"`: la interfaz solo existe en oscuro, así que la ventana también.
         window_vibrancy::apply_acrylic(window, Some((3, 6, 10, 180))).is_ok()
             || window_vibrancy::apply_mica(window, Some(true)).is_ok()
     }

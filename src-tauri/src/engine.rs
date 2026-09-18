@@ -265,11 +265,19 @@ pub fn merge_ini(existing: &str, kv: &[(&str, &str)]) -> String {
 ///
 /// `ShowConsoleOnError` viene en `true` de fábrica: es lo que hace aparecer la
 /// ventana del motor cuando el juego falla.
+///
+/// `CloseAfterLaunch` va en **`false`**, al revés de lo que sugiere el nombre. En el
+/// código del motor (`LauncherPartLaunch::on_state`, 11.1.0) no cierra nada: cuando el
+/// juego termina **vuelve a abrir la ventana principal**, y lo hace antes de mirar cómo
+/// terminó. Si terminó mal —un crash, o una partida detenida a la fuerza— el paso de
+/// `QuitAfterGameStop` ya no llega a correr, y el motor se quedaba abierto con su
+/// ventana delante del jugador. En `false` no abre ninguna, y sin ventanas ni partidas
+/// `Application::controllerFinished` lo cierra solo, termine como termine.
 pub const SILENT_ENGINE: [(&str, &str); 5] = [
     ("ShowConsole", "false"),
     ("ShowConsoleOnError", "false"),
     ("AutoCloseConsole", "true"),
-    ("CloseAfterLaunch", "true"),
+    ("CloseAfterLaunch", "false"),
     ("QuitAfterGameStop", "true"),
 ];
 
@@ -602,6 +610,16 @@ mod tests {
         assert!(out.contains("ShowConsole=false"), "no actualizó la clave");
         assert!(out.contains("ShowConsoleOnError=false"), "no añadió la clave nueva");
         assert_eq!(out.matches("ShowConsole=").count(), 1, "duplicó la clave");
+    }
+
+    #[test]
+    fn el_motor_no_vuelve_a_abrir_su_ventana_al_acabar_la_partida() {
+        // Todas las instalaciones anteriores lo tienen escrito en `true`: la mezcla
+        // tiene que darle la vuelta, no solo ponerlo bien en las nuevas.
+        let previo = "[General]\nCloseAfterLaunch=true\nQuitAfterGameStop=true\n";
+        let out = merge_ini(previo, &SILENT_ENGINE);
+        assert!(out.contains("CloseAfterLaunch=false"), "{out}");
+        assert_eq!(out.matches("CloseAfterLaunch=").count(), 1, "duplicó la clave");
     }
 
     #[test]

@@ -511,6 +511,95 @@ pub fn proceso_vivo(pid: u32) -> bool {
     false
 }
 
+/// Espera a que un proceso termine, hasta `ms` milisegundos.
+///
+/// Devuelve `true` si terminó, o si ya no existía. Es la forma de enterarse **en el
+/// mismo instante** en que acaba: sondear con `proceso_vivo` cada tanto deja pasar ese
+/// rato, y en él el motor ya puede haber sacado una ventana.
+#[cfg(windows)]
+pub fn esperar_proceso(pid: u32, ms: u32) -> bool {
+    #[link(name = "kernel32")]
+    #[allow(non_snake_case)] // los nombres son los de la API, no se traducen
+    extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
+        fn WaitForSingleObject(handle: isize, ms: u32) -> u32;
+        fn CloseHandle(handle: isize) -> i32;
+    }
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const WAIT_OBJECT_0: u32 = 0;
+
+    unsafe {
+        let h = OpenProcess(SYNCHRONIZE, 0, pid);
+        if h == 0 {
+            return true; // ya no está
+        }
+        let r = WaitForSingleObject(h, ms);
+        CloseHandle(h);
+        r == WAIT_OBJECT_0
+    }
+}
+
+#[cfg(not(windows))]
+pub fn esperar_proceso(pid: u32, ms: u32) -> bool {
+    let _ = ms;
+    !proceso_vivo(pid)
+}
+
+/// Pide a las ventanas de un proceso que se cierren, como al pulsar su X.
+///
+/// Con Minecraft es la diferencia entre salir guardando y morir sin guardar: su ventana
+/// recibe el mismo `WM_CLOSE` que manda la X, y el juego sale por su camino normal.
+///
+/// Devuelve cuántas aceptaron el mensaje. `PostMessage` y no `SendMessage`: no hay que
+/// quedarse bloqueado mientras el juego guarda.
+#[cfg(windows)]
+pub fn cerrar_ventanas_de(pid: u32) -> usize {
+    use std::sync::Mutex;
+
+    #[link(name = "user32")]
+    #[allow(non_snake_case)] // los nombres son los de la API, no se traducen
+    extern "system" {
+        fn EnumWindows(cb: extern "system" fn(isize, isize) -> i32, param: isize) -> i32;
+        fn GetWindowThreadProcessId(hwnd: isize, pid: *mut u32) -> u32;
+        fn IsWindowVisible(hwnd: isize) -> i32;
+        fn PostMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> i32;
+    }
+    const WM_CLOSE: u32 = 0x0010;
+
+    // Mismo esquema que `hide_windows_of`, con su propio estado: las dos pueden correr a
+    // la vez desde hilos distintos —el que vigila la sesión y el que la detiene—.
+    static ESTADO: Mutex<(u32, Vec<isize>)> = Mutex::new((0, Vec::new()));
+
+    extern "system" fn visitar(hwnd: isize, _p: isize) -> i32 {
+        let mut suyo = 0u32;
+        unsafe { GetWindowThreadProcessId(hwnd, &mut suyo) };
+        if let Ok(mut e) = ESTADO.lock() {
+            if suyo == e.0 && unsafe { IsWindowVisible(hwnd) } != 0 {
+                e.1.push(hwnd);
+            }
+        }
+        1 // seguir enumerando
+    }
+
+    {
+        let Ok(mut g) = ESTADO.lock() else { return 0 };
+        *g = (pid, Vec::new());
+    }
+    unsafe { EnumWindows(visitar, 0) };
+    let ventanas = ESTADO.lock().map(|g| g.1.clone()).unwrap_or_default();
+    ventanas
+        .into_iter()
+        .filter(|&h| unsafe { PostMessageW(h, WM_CLOSE, 0, 0) } != 0)
+        .count()
+}
+
+#[cfg(not(windows))]
+pub fn cerrar_ventanas_de(pid: u32) -> usize {
+    // Sin equivalente directo fuera de Windows: `stop_game` pasa al cierre a la fuerza.
+    let _ = pid;
+    0
+}
+
 /// En qué punto está la partida, para que la interfaz sepa qué enseñar.
 ///
 /// Se guarda en un atómico global y no en el estado de Tauri porque quien lo escribe es
@@ -553,6 +642,31 @@ pub fn game_pid(root: &Path) -> Option<u32> {
         .map(|p| p.pid)
 }
 
+/// Deja que el motor se cierre solo al acabar la partida, sin que se le vea.
+///
+/// Con `CloseAfterLaunch` en `false` no debería abrir nada y se cierra por su cuenta.
+/// Esto es la red por si algo se porta distinto: mientras siga vivo se le esconde cada
+/// 15 ms, lo mismo que al preparar.
+///
+/// **No se le mata nada más acabar la partida.** Justo en ese momento guarda
+/// `instance.cfg` y `accounts.json` —se ve en su log—, y cortarlo a mitad de escribir
+/// las cuentas dejaría al jugador sin sesión. Solo se le fuerza si pasado el margen
+/// sigue ahí.
+pub fn despedir_motor(pid_motor: u32) {
+    let fin = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::time::Instant::now() < fin {
+        for titulo in hide_windows_of(pid_motor) {
+            println!("[PLAY] escondida ventana del motor al terminar: {titulo:?}");
+        }
+        if esperar_proceso(pid_motor, 15) {
+            return;
+        }
+    }
+    if matar(pid_motor) {
+        println!("[PLAY] el motor seguía abierto tras la partida: cerrado a la fuerza");
+    }
+}
+
 /// Vigila una partida de principio a fin: esconde, detecta y publica el estado.
 ///
 /// 1. **Preparando** — se esconden las ventanas del motor cada 15 ms. No 300, que era
@@ -562,9 +676,9 @@ pub fn game_pid(root: &Path) -> Option<u32> {
 /// 3. **Inactiva** — cuando termina.
 ///
 /// El paso a «jugando» lo dispara **que aparezca el juego**, no que muera el motor.
-/// Parece lo mismo y no lo es: `CloseAfterLaunch` debería cerrarlo, pero medido en
-/// esta máquina el motor seguía vivo con Minecraft ya corriendo, y esperándolo la
-/// interfaz se quedaba en la barra de carga para siempre, sin ofrecer detener.
+/// Parece lo mismo y no lo es: el motor sigue vivo mientras se juega —`CloseAfterLaunch`
+/// no lo cierra, pese al nombre; ver `SILENT_ENGINE`—, y esperándolo la interfaz se
+/// quedaba en la barra de carga para siempre, sin ofrecer detener.
 ///
 /// Buscar el juego cuesta una enumeración de procesos entera, así que no se hace en
 /// cada vuelta: una cada dos segundos basta y el resto del tiempo se dedica a esconder.
@@ -602,40 +716,62 @@ pub fn monitor_sesion(root: std::path::PathBuf, pid_motor: u32) {
         Some(pid) => {
             println!("[PLAY] partida en curso, pid {pid}");
             sesion::poner(sesion::JUGANDO);
-            // Se sigue escondiendo mientras se juega: el motor puede seguir vivo y
-            // sacar su consola al terminar la partida.
-            while proceso_vivo(pid) {
+            // Se **espera** al proceso del juego en vez de sondearlo cada dos segundos:
+            // así se sabe en el mismo instante en que termina, y no dos segundos después,
+            // que era margen de sobra para que el motor enseñara su ventana. Entre medias
+            // se sigue escondiendo lo que el motor saque.
+            while !esperar_proceso(pid, 2_000) {
                 let _ = hide_windows_of(pid_motor);
-                std::thread::sleep(std::time::Duration::from_secs(2));
             }
             println!("[PLAY] la partida terminó");
+            despedir_motor(pid_motor);
         }
         None => println!("[PLAY] el motor terminó sin abrir el juego"),
     }
     sesion::poner(sesion::INACTIVA);
 }
 
-/// Detiene la partida en curso./// Detiene la partida en curso.
+/// Cuánto se espera a que Minecraft se cierre por su cuenta antes de forzarlo.
 ///
-/// Es exactamente lo contrario de `close_engine`, que protege al juego a toda costa:
-/// aquí se mata precisamente eso, porque lo pidió quien está jugando. Minecraft no
-/// guarda al morir así, de modo que se pierde lo que no estuviera guardado — por eso
-/// esta decisión no se toma sola en ningún otro sitio del programa.
+/// Guardar un mundo grande tarda; cortar antes de tiempo sería perder justo lo que se
+/// estaba guardando.
+const CIERRE_LIMPIO_MS: u32 = 30_000;
+
+/// Detiene la partida en curso.
+///
+/// **Primero se le pide que se cierre, como al pulsar su X**: Minecraft guarda el mundo y
+/// sale con normalidad. Matar el proceso directamente —lo que se hacía antes— no guardaba
+/// nada, y ese final a la fuerza era además el que el motor tomaba por un crash.
+///
+/// Solo si no responde en `CIERRE_LIMPIO_MS` se corta. Y entonces se limpia también el
+/// `crash_assistant` del pack, que salta con cualquier final anormal: aquí no hubo
+/// ningún crash que contar.
+///
+/// Sigue sin llamarse nunca por su cuenta: cerrar la partida de alguien solo pasa porque
+/// lo pidió quien está jugando.
 pub fn stop_game(root: &Path) -> usize {
-    let Some(root) = root.to_str() else { return 0 };
-    let mut parados = 0;
-    for p in procesos() {
-        if p.args.contains(GAME_MAIN_CLASS) && en_nuestra_carpeta(&p.args, root) && matar(p.pid) {
-            parados += 1;
-        }
+    let Some(pid) = game_pid(root) else { return 0 };
+
+    let pedidas = cerrar_ventanas_de(pid);
+    println!("[PLAY] pido a la partida que se cierre ({pedidas} ventana/s)");
+    if pedidas > 0 && esperar_proceso(pid, CIERRE_LIMPIO_MS) {
+        return 1;
     }
-    if parados > 0 {
-        sesion::poner(sesion::INACTIVA);
+
+    println!("[PLAY] la partida no se cerró sola: la corto");
+    if !matar(pid) {
+        return 0;
     }
-    parados
+    let _ = esperar_proceso(pid, 5_000);
+    let limpiados = kill_orphans(root);
+    if limpiados > 0 {
+        println!("[PLAY] limpiados {limpiados} procesos que dejó el cierre a la fuerza");
+    }
+    sesion::poner(sesion::INACTIVA);
+    1
 }
 
-/// Cierra el motor que abrimos para iniciar sesión./// Cierra el motor que abrimos para iniciar sesión.
+/// Cierra el motor que abrimos para iniciar sesión.
 ///
 /// `kill_orphans` no sirve aquí: ese solo toca procesos que ya nadie sostiene, y este
 /// lo acabamos de lanzar nosotros. Se usa cuando la cuenta ya aparece en
@@ -745,10 +881,22 @@ pub fn apply_silent_config(layout: &Layout) {
 /// Windows), así que basta con buscarlo dentro de una línea que además apunte a
 /// nuestra raíz: el ElyPrism que alguien tenga instalado aparte no coincide.
 fn engine_running(root: &Path) -> bool {
-    let Some(root) = root.to_str() else { return false };
-    procesos().iter().any(|p| {
-        en_nuestra_carpeta(&p.args, root) && p.args.to_lowercase().contains("elyprismlauncher")
-    })
+    engine_pid(root).is_some()
+}
+
+/// PID del motor que corre sobre nuestra carpeta, si hay uno.
+///
+/// Nunca el de la partida: su línea de comandos también apunta a nuestra carpeta.
+pub fn engine_pid(root: &Path) -> Option<u32> {
+    let root = root.to_str()?;
+    procesos()
+        .into_iter()
+        .find(|p| {
+            !p.args.contains(GAME_MAIN_CLASS)
+                && en_nuestra_carpeta(&p.args, root)
+                && p.args.to_lowercase().contains("elyprismlauncher")
+        })
+        .map(|p| p.pid)
 }
 
 /// Arranca el motor en segundo plano, sin `--launch`, para que refresque los

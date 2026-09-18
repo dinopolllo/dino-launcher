@@ -44,8 +44,11 @@
   --ink:#03060A;
   --ink-2:#050A0C;
   /* La tinción de la ventana cuando hay vidrio detrás. Es `--ink` con alfa: el
-     mismo color, para que encender el vidrio aclare la ventana sin virarla. */
-  --window-tint:rgba(3,6,10,.52);
+     mismo color, para que encender el vidrio aclare la ventana sin virarla. Es baja
+     a propósito: el acrílico de Windows ya trae su propia capa de luminosidad, pensada
+     para que el texto se lea encima. Con más tinta se oscurecía dos veces y la ventana
+     parecía opaca, que es justo lo que no se quería. */
+  --window-tint:rgba(3,6,10,.30);
 
   /* glass material */
   --glass-0:rgba(255,255,255,.030);
@@ -187,14 +190,23 @@ body{
    que sea que haya abierto. Por eso la interfaz nace opaca y se aclara después. */
 html.glass .app{background-color:var(--window-tint)}
 
+/* Sobre vidrio el fondo deja de ser casi negro y pasa a ser lo que haya detrás
+   desenfocado, que puede ser azul claro. Medido sobre la ventana real, el texto tenue
+   quedaba a 1.5:1 en la barra lateral —ilegible— y el atenuado a 2.4:1. El HIG de
+   Apple pide colores «vibrantes» sobre materiales: los dos tonos secundarios suben de
+   luminancia solo con vidrio (a ~3.2:1 y ~4.8:1 en el mismo sitio). Sin vidrio el
+   fondo es el de siempre y la paleta original ya contrastaba. */
+html.glass{--text-dim:#B4C4B8;--text-faint:#8FA093}
+
 /* El mesh es lo que el vidrio tiñe. Translúcida la ventana, el mesh pinta sobre el
    escritorio y no sobre negro: al mismo valor taparía justo lo que deja pasar. */
-html.glass .mesh{opacity:.62}
+html.glass .mesh{opacity:.42}
 
 /* La regla de Apple para Liquid Glass: la transparencia es una preferencia del
    sistema, no del diseño. Reducida, el vidrio se va y vuelve el fondo opaco. */
 @media (prefers-reduced-transparency:reduce){
   html.glass .app{background-color:var(--ink)}
+  html.glass{--text-dim:#8B9C90;--text-faint:#56685C}
 }
 
 .titlebar{
@@ -202,7 +214,6 @@ html.glass .mesh{opacity:.62}
   height:48px;flex:none;
   display:flex;align-items:center;gap:12px;
   padding:0 16px;
-  border-bottom:1px solid rgba(255,255,255,.05);
 }
 .lights{display:flex;gap:8px}
 .lights button{width:11px;height:11px;border-radius:50%;display:block;border:0;padding:0;
@@ -269,25 +280,28 @@ html.win{--r-window:10px}
   box-shadow:0 0 9px var(--green-glow);animation:blink 2.8s ease-in-out infinite}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
 
-.tb-btn{
-  border:0;cursor:pointer;border-radius:8px;padding:6px 11px;
-  font-family:var(--font-body);font-size:11.5px;font-weight:500;color:var(--text-dim);
-  background:var(--glass-1);
-  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
-  transition:color .16s ease,background .16s ease;
-}
-.tb-btn:hover{color:var(--text);background:var(--glass-2)}
-.tb-btn:focus-visible{outline:2px solid var(--green);outline-offset:2px}
-
 /* ---------- rail + stage ---------- */
 .shell{position:relative;z-index:2;flex:1;display:flex;min-height:0}
 
+/* La barra lateral es la capa de navegación, y es lo único que va en vidrio de
+   verdad: el HIG de Apple pone Liquid Glass en la navegación y lo saca del contenido.
+   Flota —separada de los bordes, con esquinas propias— en vez de ser una franja
+   pegada con una línea: la separación la da la forma, no un borde.
+   Radio 18 con relleno 8 para que los botones de dentro, a 10, sean concéntricos. */
 .rail{
   width:198px;flex:none;
-  padding:14px 12px;
+  margin:2px 0 10px 10px;
+  padding:12px 8px;
+  border-radius:18px;
   display:flex;flex-direction:column;gap:18px;
-  border-right:1px solid rgba(255,255,255,.05);
   min-height:0;
+  background:linear-gradient(180deg,rgba(255,255,255,.075),rgba(255,255,255,.03) 45%,rgba(255,255,255,.04));
+  backdrop-filter:blur(24px) saturate(160%);
+  -webkit-backdrop-filter:blur(24px) saturate(160%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.16),
+    inset 0 0 0 1px rgba(255,255,255,.07),
+    0 14px 34px -18px rgba(0,0,0,.7);
 }
 .nav{display:flex;flex-direction:column;gap:2px}
 .nav-label{
@@ -297,16 +311,21 @@ html.win{--r-window:10px}
 }
 /* La cabecera de la biblioteca lleva el `+`, como en Modrinth: es donde se busca
    «añadir algo» sin tener que leer nada. */
-.nav-label-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-right:6px}
-.nav-add{
-  flex:none;width:20px;height:20px;padding:0;border:0;cursor:pointer;
-  border-radius:6px;display:flex;align-items:center;justify-content:center;
+.nav-label-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-right:8px}
+/* Lo que se ilumina es del tamaño del glifo; lo que responde al clic es mayor.
+   Van con `.nav` delante a propósito: el `+` es un `<button>` dentro de `.nav`, así que
+   `.nav button` —ancho 100%, relleno y hover de fila— le ganaba en especificidad, y su
+   hover iluminaba toda la fila de «Biblioteca» (164px) en vez del glifo. */
+.nav .nav-add{
+  position:relative;flex:none;width:16px;height:16px;padding:0;border:0;cursor:pointer;
+  border-radius:50%;display:flex;align-items:center;justify-content:center;
   color:var(--text-faint);background:transparent;
   transition:color .16s ease,background .16s ease;
 }
-.nav-add svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round}
-.nav-add:hover{color:var(--text);background:var(--glass-2)}
-.nav-add:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.nav .nav-add::after{content:"";position:absolute;inset:-8px}
+.nav .nav-add svg{width:10px;height:10px;fill:none;stroke:currentColor;stroke-width:2.6;stroke-linecap:round}
+.nav .nav-add:hover{color:var(--text);background:rgba(255,255,255,.08)}
+.nav .nav-add:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 .nav-group{display:flex;flex-direction:column;gap:2px}
 
 /* ---------- biblioteca ----------
@@ -452,7 +471,7 @@ html.win{--r-window:10px}
 .nav button{
   display:flex;align-items:center;gap:11px;
   width:100%;padding:9px 10px;
-  border:0;border-radius:11px;
+  border:0;border-radius:10px;
   background:transparent;color:var(--text-dim);
   font-family:var(--font-body);font-size:13.5px;font-weight:500;
   cursor:pointer;text-align:left;
@@ -469,22 +488,18 @@ html.win{--r-window:10px}
 
 .rail-spacer{flex:1}
 
+/* Dentro de la barra de vidrio, una tarjeta con su propio borde sería vidrio sobre
+   vidrio. Es una fila separada por una línea, como el perfil al pie de una barra. */
 .account{
-  border-radius:var(--r-card);padding:10px;
+  margin:0 2px;padding:12px 8px 2px;
   display:flex;flex-direction:column;gap:9px;
-  background:var(--glass-0);
-  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+  border-top:1px solid rgba(255,255,255,.07);
 }
 .account-row{display:flex;align-items:center;gap:9px}
 .account canvas{width:30px;height:30px;border-radius:7px;image-rendering:pixelated;flex:none}
 .account-name{font-weight:600;font-size:13px;line-height:1.15}
 .account-kind{font-family:var(--font-mono);font-size:9.5px;color:var(--text-faint);letter-spacing:.04em}
 
-.toggle-row{
-  display:flex;align-items:center;justify-content:space-between;gap:8px;
-  padding-top:9px;border-top:1px solid rgba(255,255,255,.055);
-}
-.toggle-row span{font-size:11.5px;color:var(--text-dim)}
 .switch{
   width:34px;height:19px;border-radius:99px;border:0;cursor:pointer;padding:2px;
   background:var(--glass-2);box-shadow:inset 0 0 0 1px var(--hairline);
@@ -497,7 +512,11 @@ html.win{--r-window:10px}
 .switch:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 
 /* ---------- stage ---------- */
-.stage{flex:1;min-width:0;overflow-y:auto;padding:24px 26px 28px}
+.stage{flex:1;min-width:0;overflow-y:auto;padding:24px 26px 28px;
+  /* Borde de scroll, como el de Apple: sin línea bajo la barra de título, lo que sube
+     se desvanece al llegar arriba en vez de cortarse en seco. */
+  -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 20px);
+  mask-image:linear-gradient(to bottom,transparent 0,#000 20px)}
 .stage::-webkit-scrollbar{width:9px}
 .stage::-webkit-scrollbar-thumb{background:rgba(255,255,255,.09);border-radius:99px;
   border:2px solid transparent;background-clip:padding-box}
@@ -597,8 +616,13 @@ h2{font-family:var(--font-display);font-weight:700;font-size:16px;letter-spacing
 }
 
 /* ---------- panels / ajustes / admin ---------- */
-.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-@media (max-width:880px){.two{grid-template-columns:1fr}}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+/* `minmax(0,…)` y no `1fr` a secas: `1fr` no encoge por debajo de su contenido, y la
+   ruta de la instancia, en una sola línea, ensanchaba su columna hasta dejar Memoria
+   y Java en 185px. Ajustes reparte 5:7 porque a la izquierda van controles compactos
+   y a la derecha pares clave-valor con rutas largas. */
+.two-settings{grid-template-columns:minmax(0,5fr) minmax(0,7fr)}
+@media (max-width:880px){.two,.two-settings{grid-template-columns:minmax(0,1fr)}}
 
 .panel{
   border-radius:var(--r-panel);padding:18px;
@@ -648,7 +672,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   background:rgba(0,0,0,.32);
   box-shadow:inset 0 0 0 1px var(--hairline);
   font-family:var(--font-mono);font-size:11px;line-height:1.7;
-  color:var(--text-dim);word-break:break-all;
+  color:var(--text-dim);overflow-wrap:anywhere;
 }
 .args b{color:var(--green);font-weight:400}
 
@@ -659,6 +683,9 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 .kv-row .k{font-size:12.5px;color:var(--text-dim);flex:none;width:112px}
 .kv-row .v{font-family:var(--font-mono);font-size:11.5px;color:var(--text);
   flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* La ruta se parte en vez de cortarse: lo que importa de una ruta es el final, que
+   es justo lo que se come una elipsis. */
+.kv-row .v.v-wrap{white-space:normal;overflow-wrap:anywhere;line-height:1.45}
 
 .field-switch{
   display:flex;align-items:center;gap:12px;margin-top:14px;
@@ -806,6 +833,58 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   padding:6px 8px;border-radius:6px}
 .ob-skip:hover{color:var(--text-dim)}
 .ob-skip:focus-visible{outline:2px solid var(--green);outline-offset:1px}
+
+/* ---------- la invitación ----------
+   Es la continuación de la página web del link: quien pulsa «Abrir en Dino Launcher»
+   tiene que encontrarse la misma tarjeta —centrada, el icono arriba, «te invitaron a
+   jugar», el nombre grande, el botón verde en cápsula— y no una pantalla nueva que
+   tenga que volver a leer. Va con `.invite` para no tocar el setup de primera vez,
+   que comparte `.ob-card`, `.ob-step` y `.ob-foot`. */
+.ob-card.invite{
+  max-width:420px;border-radius:30px;padding:26px 28px 20px;
+  text-align:center;
+  background:linear-gradient(180deg,rgba(255,255,255,.09),rgba(255,255,255,.035) 42%,rgba(255,255,255,.045));
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.20),
+    inset 0 0 0 1px rgba(255,255,255,.08),
+    0 44px 90px -34px rgba(0,0,0,.9),
+    0 12px 32px -16px rgba(0,0,0,.6);
+}
+/* El progreso son tres rayas cortas y centradas: dicen en qué paso vas sin ocupar el
+   ancho entero como si fueran una barra de carga. */
+.invite .ob-dots{width:84px;align-self:center;margin-bottom:26px}
+.invite .ob-step{align-items:center;gap:0}
+/* La tarjeta no cambia de tamaño entre pasos: «Preparando» tiene la mitad de
+   contenido que los otros dos, y encogerla y volverla a crecer era un tirón.
+   Cambia lo de dentro, no el marco. */
+.ob-card.invite{min-height:452px}
+.invite .ob-step.on{flex:1;justify-content:center}
+.invite .ob-step > .app-icon{margin-bottom:20px}
+.invite-eyebrow{
+  font-family:var(--font-mono);font-size:10.5px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--text-faint);
+}
+.invite .ob-title{
+  margin-top:7px;font-size:30px;line-height:1.08;letter-spacing:-.022em;
+  text-wrap:balance;overflow-wrap:anywhere;
+}
+.invite .chips{justify-content:center;margin-top:14px}
+.invite .ob-body{margin-top:14px;max-width:34ch;text-wrap:pretty}
+.invite .bar{width:100%;margin-top:22px}
+.invite .bar-meta{width:100%}
+.invite .server{align-self:stretch;min-width:0;margin-top:16px}
+.invite .server-top,.invite .server-stats{justify-content:center}
+/* El pie es el de una alerta de Apple: la acción principal ancha arriba, y debajo,
+   en pequeño, la de salir. Sin línea de separación: la separa el aire. */
+.invite .ob-foot{
+  flex-direction:column;align-items:stretch;gap:4px;
+  margin-top:26px;padding-top:0;border-top:0;
+}
+.invite .ob-foot .btn{
+  padding:14px 20px;border-radius:999px;
+  font-family:var(--font-display);font-weight:700;font-size:15.5px;
+}
+.invite .ob-skip{align-self:center;margin-top:6px}
 
 .code{display:flex;gap:7px;justify-content:center;padding:4px 0 0}
 .code span{
@@ -1162,16 +1241,10 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 .copy-btn.copied .copy-idle,.copy-btn[data-copied] .copy-idle{display:none}
 .copy-btn.copied .copy-done,.copy-btn[data-copied] .copy-done{display:inline}
 .copy-btn.copied,.copy-btn[data-copied]{color:var(--green)}
+/* «Copiar link» de cada pack publicado: el enlace de invitación sin tener que volver
+   a publicar para verlo. */
+.pub-row .btn.copied{color:var(--green)}
 
-.steps-list{display:flex;flex-direction:column;margin-top:2px}
-.sl{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:13px}
-.sl .ico{width:16px;height:16px;flex:none;display:flex;align-items:center;justify-content:center}
-.sl .ico svg{width:14px;height:14px;stroke-width:2.4}
-.sl.done{color:var(--text-dim)} .sl.done .ico{color:var(--green)}
-.sl.now{color:var(--text);font-weight:600}
-.sl.wait{color:var(--text-faint)}
-.sl .amt{margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--text-faint);
-  font-variant-numeric:tabular-nums}
 .spin{width:13px;height:13px;border-radius:50%;border:2px solid rgba(115,191,105,.22);
   border-top-color:var(--green);animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -1180,7 +1253,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   body{padding:0}
   .app{height:100vh;border-radius:0;max-width:none}
   .rail{width:62px;padding:14px 8px}
-  .nav button span,.nav-label,.account-name,.account-kind,.toggle-row span{display:none}
+  .nav button span,.nav-label,.account-name,.account-kind{display:none}
   .nav button{justify-content:center;padding:11px}
   .account{align-items:center}
   .hero{grid-template-columns:1fr}
@@ -1203,7 +1276,6 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     </div>
     <div class="tb-right">
       <div class="sync"><span class="pulse" id="syncDot"></span><span id="syncText">comprobando…</span></div>
-      <button class="tb-btn" id="guest">Ver lo que verá un amigo</button>
     </div>
   </div>
 
@@ -1234,7 +1306,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
           <span>Mis modpacks</span>
         </button>
         <button role="tab" aria-selected="false" data-go="ajustes">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.4M12 18.8v2.4M21.2 12h-2.4M5.2 12H2.8M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7M18.5 18.5l-1.7-1.7M7.2 7.2 5.5 5.5" stroke-linecap="round"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linejoin="round"><path d="M10.26 5.01 L10.71 2.18 L13.29 2.18 L13.74 5.01 L15.71 5.83 L18.03 4.15 L19.85 5.97 L18.17 8.29 L18.99 10.26 L21.82 10.71 L21.82 13.29 L18.99 13.74 L18.17 15.71 L19.85 18.03 L18.03 19.85 L15.71 18.17 L13.74 18.99 L13.29 21.82 L10.71 21.82 L10.26 18.99 L8.29 18.17 L5.97 19.85 L4.15 18.03 L5.83 15.71 L5.01 13.74 L2.18 13.29 L2.18 10.71 L5.01 10.26 L5.83 8.29 L4.15 5.97 L5.97 4.15 L8.29 5.83Z"/><circle cx="12" cy="12" r="3"/></svg>
           <span>Ajustes</span>
         </button>
         <!-- Todo el grupo es de admin, etiqueta incluida: un amigo no ve que exista.
@@ -1258,10 +1330,6 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
             <div class="account-name">…</div>
             <div class="account-kind"></div>
           </div>
-        </div>
-        <div class="toggle-row">
-          <span>Modo offline</span>
-          <button class="switch" data-toggle role="switch" aria-checked="false" aria-label="Modo offline"><b></b></button>
         </div>
       </div>
     </nav>
@@ -1352,7 +1420,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
         <h1>Ajustes</h1>
         <p class="sub">Vienen configurados desde el pack. Puedes cambiarlos y se conservan entre actualizaciones.</p>
 
-        <div class="two" style="margin-top:18px">
+        <div class="two two-settings" style="margin-top:18px">
           <div class="panel">
             <h2>Memoria y Java</h2>
             <p class="sub" id="ramHint">Se reparte según la RAM de esta máquina.</p>
@@ -1380,7 +1448,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
             <p class="sub">Dino administra Prism por debajo. No necesitas abrirlo nunca.</p>
 
             <div class="kv">
-              <div class="kv-row"><div class="k">Instancia</div><div class="v" id="kvPath">—</div></div>
+              <div class="kv-row"><div class="k">Instancia</div><div class="v v-wrap" id="kvPath">—</div></div>
               <div class="kv-row"><div class="k">Motor</div><div class="v" id="kvEngine">—</div></div>
               <div class="kv-row"><div class="k">Loader</div><div class="v" id="kvLoader">—</div></div>
               <div class="kv-row"><div class="k">En disco</div><div class="v" id="kvSize">—</div></div>
@@ -1655,72 +1723,48 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     </div>
   </div>
 
+  <!-- ===== invitación =====
+       La abre un link `dinolauncher://join/CODIGO`; el que se comparte es la página de
+       invitación, que es la que abre el launcher. Todo lo de dentro sale del catálogo y
+       de la instalación real, y los ids son el contrato con el JS. La cuenta no se pide
+       aquí: al darle a Jugar, el camino de siempre ya abre el setup si falta. -->
   <div class="onboard" id="onboard" hidden>
-    <div class="ob-card">
-      <div class="ob-dots"><i class="done"></i><i></i><i></i><i></i></div>
+    <div class="ob-card invite">
+      <div class="ob-dots"><i class="done"></i><i></i><i></i></div>
 
       <div class="ob-step on" data-ob="1">
-        <span class="app-icon" style="--s:62px"><canvas data-dino width="22" height="21"></canvas></span>
-        <div class="ob-from">Te invitaron a jugar</div>
-        <h2 class="ob-title">Dino SMP</h2>
-        <p class="ob-body">Todo viene listo: los mods, los shaders, los controles y el servidor.
-          No tienes que instalar nada por tu cuenta.</p>
-        <div class="chips">
-          <span class="chip">Minecraft <b>1.21.4</b></span>
-          <span class="chip">Fabric <b>142 mods</b></span>
-          <span class="chip">Descarga <b>1.24 GB</b></span>
-        </div>
+        <span class="app-icon" style="--s:76px" id="obIcon"><canvas data-dino width="22" height="21"></canvas></span>
+        <div class="invite-eyebrow">Te invitaron a jugar</div>
+        <h2 class="ob-title" id="obName"></h2>
+        <div class="chips" id="obChips"></div>
+        <p class="ob-body" id="obBody"></p>
       </div>
 
       <div class="ob-step" data-ob="2">
-        <h2 class="ob-title">Conecta tu cuenta</h2>
-        <p class="ob-body">Abre <span class="mono-i">microsoft.com/link</span> en tu navegador
-          y escribe este código:</p>
-        <div class="code">
-          <span>K</span><span>D</span><span>Q</span><span>P</span>
-          <span class="sep">–</span>
-          <span>J</span><span>X</span><span>B</span><span>M</span>
-        </div>
-        <div class="hint">expira en 14:52</div>
-        <div class="note">
-          <b>Solo se pide una vez.</b> Después puedes entrar en modo offline cuando quieras —
-          sin internet, en LAN, o si los servicios de Mojang se caen.
-        </div>
+        <div class="invite-eyebrow">Un momento</div>
+        <h2 class="ob-title">Preparando todo</h2>
+        <!-- Indeterminada mientras no haya dato: para pasarla a determinada, `--frac` y
+             fuera `data-indeterminate`. Ningún número fijo: se quedaría clavado. -->
+        <div class="bar" id="obBar" data-indeterminate><b></b></div>
+        <div class="bar-meta"><span id="obPct"></span><span id="obAmt"></span></div>
       </div>
 
       <div class="ob-step" data-ob="3">
-        <h2 class="ob-title">Preparando todo</h2>
-        <!-- Indeterminada de partida: los «68 %» y «842 MB / 1.24 GB» que había aquí
-             eran fijos y nadie los actualizaba, así que se quedaban clavados durante
-             una instalación real. Prefiero no decir nada a decir un número falso.
-             Para pasarla a determinada: poner `--frac` y quitar `data-indeterminate`. -->
-        <div class="bar" id="obBar" data-indeterminate><b></b></div>
-        <div class="bar-meta"><span id="obPct"></span><span id="obAmt"></span></div>
-        <div class="steps-list">
-          <div class="sl done"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg></span>Java 21 (Temurin)<span class="amt">46 MB</span></div>
-          <div class="sl done"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg></span>Fabric 0.16.9<span class="amt">3 MB</span></div>
-          <div class="sl now"><span class="ico"><span class="spin"></span></span>Descargando mods<span class="amt">96 / 142</span></div>
-          <div class="sl wait"><span class="ico">·</span>Configs, controles y shaders<span class="amt">18 MB</span></div>
-          <div class="sl wait"><span class="ico">·</span>Añadiendo mcpvp.club</div>
-        </div>
-      </div>
-
-      <div class="ob-step" data-ob="4">
-        <span class="app-icon" style="--s:62px"><canvas data-dino width="22" height="21"></canvas></span>
+        <span class="app-icon" style="--s:76px" id="obReadyIcon"><canvas data-dino width="22" height="21"></canvas></span>
+        <div class="invite-eyebrow">Todo instalado</div>
         <h2 class="ob-title">Listo para jugar</h2>
-        <p class="ob-body">El servidor ya está en tu lista. Dale a Jugar y entras directo —
-          sin buscar la IP ni configurar nada.</p>
-        <div class="server">
-          <div class="server-top"><span class="dot-live"></span>mcpvp.club</div>
-          <div class="server-stats"><span>24 ms</span><span>4 274 / 14 000</span></div>
+        <p class="ob-body" id="obReadyBody"></p>
+        <div class="server" id="obServer" hidden>
+          <div class="server-top"><span class="dot-live"></span><span id="obServerName"></span></div>
+          <div class="server-stats" id="obServerStats"></div>
         </div>
       </div>
 
+      <!-- Sin «Atrás»: instalar no se deshace volviendo un paso, y el botón vivía
+           escondido pero ocupando su hueco. -->
       <div class="ob-foot">
-        <button class="ob-skip" id="ob-exit">Salir de la vista</button>
-        <span class="grow"></span>
-        <button class="btn" id="ob-back">Atrás</button>
-        <button class="btn green" id="ob-next">Comenzar</button>
+        <button class="btn green" id="ob-next">Instalar</button>
+        <button class="ob-skip" id="ob-exit">Ahora no</button>
       </div>
     </div>
   </div>
@@ -1958,39 +2002,205 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   ram.addEventListener("input", ramUpdate);
   ramUpdate();
 
-  /* ================= first-run walkthrough ================= */
+  /* ================= invitación por link =================
+     La vista que antes solo se enseñaba de muestra con «Ver lo que verá un amigo»,
+     ahora de verdad. La abre un link `dinolauncher://join/CODIGO`, que llega a Rust
+     tanto con el launcher cerrado como abierto; la interfaz lo recoge siempre con
+     `invitacion_pendiente`. Tres pasos: qué es, instalarlo con su progreso real, y
+     listo. La cuenta no se pide aquí: al darle a Jugar, el camino de siempre ya abre el
+     setup si falta, y así el login no queda repetido en dos sitios. */
+  var INVITE_URL = "https://dinopolllo.github.io/dino-launcher-releases/invitar/#";
+
+  /* Copiar al portapapeles sin fallar en silencio. La API moderna puede no estar o
+     negarse; entonces se copia por el camino viejo, un textarea seleccionado. Devuelve
+     si se copió, para que el botón no diga «Copiado» cuando no es verdad. */
+  function copiarTexto(texto){
+    function viejo(){
+      var t = document.createElement("textarea");
+      t.value = texto; t.setAttribute("readonly", "");
+      t.style.position = "fixed"; t.style.top = "-1000px"; t.style.opacity = "0";
+      document.body.appendChild(t);
+      t.select();
+      var hecho = false;
+      try { hecho = document.execCommand("copy"); } catch (e) {}
+      document.body.removeChild(t);
+      return hecho;
+    }
+    if (navigator.clipboard) {
+      return navigator.clipboard.writeText(texto).then(function(){ return true; }, viejo);
+    }
+    return Promise.resolve(viejo());
+  }
   var ob      = document.getElementById("onboard");
   var obSteps = Array.prototype.slice.call(ob.querySelectorAll("[data-ob]"));
   var obDots  = Array.prototype.slice.call(ob.querySelectorAll(".ob-dots i"));
   var obNext  = document.getElementById("ob-next");
-  var obBack  = document.getElementById("ob-back");
-  var LABELS  = { 1:"Comenzar", 2:"Ya lo escribí", 3:"Continuar", 4:"Jugar" };
+  var LABELS  = { 1: "Instalar", 2: "Preparando…", 3: "Jugar" };
   var cur = 1;
+  var INVITACION = null;     /* la ficha del catálogo del pack al que se invitó */
+  var obInstalando = false;
 
   function renderOb(){
     obSteps.forEach(function(s){ s.classList.toggle("on", Number(s.dataset.ob) === cur); });
     obDots.forEach(function(d, i){ d.classList.toggle("done", i < cur); });
-    obBack.style.visibility = cur === 1 ? "hidden" : "visible";
     obNext.textContent = LABELS[cur];
+    obNext.disabled = (cur === 2);
+    obNext.removeAttribute("data-cerrar");
   }
   function closeOb(){ ob.hidden = true; }
 
-  document.getElementById("guest").addEventListener("click", function(){
-    cur = 1; renderOb();
-    document.querySelector(".ob-foot").hidden = false;
-    var sl = document.querySelector('[data-ob="3"] .steps-list');
-    if (sl) sl.hidden = false;
-    ob.hidden = false; obNext.focus();
+  function chip(etiqueta, valor){
+    var c = document.createElement("span");
+    c.className = "chip";
+    c.appendChild(document.createTextNode(etiqueta + " "));
+    var b = document.createElement("b");
+    b.textContent = valor;
+    c.appendChild(b);
+    return c;
+  }
+
+  /* Lo que viene del catálogo es texto remoto: siempre `textContent`, nunca HTML. */
+  function pintarInvitacion(p){
+    document.getElementById("obName").textContent = p.name;
+    setIcon(document.getElementById("obIcon"), p.icon || null);
+    setIcon(document.getElementById("obReadyIcon"), p.icon || null);
+    document.getElementById("obBody").textContent = p.server
+      ? "Todo viene listo: los mods, la configuración y el servidor. No tienes que instalar nada por tu cuenta."
+      : "Todo viene listo: los mods y la configuración. No tienes que instalar nada por tu cuenta.";
+    var chips = document.getElementById("obChips");
+    chips.innerHTML = "";
+    if (p.minecraft) chips.appendChild(chip("Minecraft", p.minecraft));
+    if (p.loader) {
+      var partes = p.loader.split(" ");
+      chips.appendChild(chip(partes[0], p.mods ? p.mods + " mods" : (partes[1] || "")));
+    } else if (p.mods) {
+      chips.appendChild(chip("Mods", String(p.mods)));
+    }
+    /* Sin chip de tamaño: el catálogo solo sabe lo que pesa el .mrpack, no lo que
+       descargan sus mods, y un número que no es el real es peor que ninguno. */
+  }
+
+  function abrirInvitacion(codigo){
+    call("catalog_lookup", { code: codigo }).then(function(p){
+      /* Al log: es lo único que queda para saber qué pasó con una invitación en la
+         máquina de un amigo. */
+      dlog("invitación: " + p.code + " (" + p.name + ")");
+      INVITACION = p;
+      pintarInvitacion(p);
+      var foot = ob.querySelector(".ob-foot");
+      if (foot) foot.hidden = false;
+      /* Si ya lo tiene, invitarle a instalarlo otra vez no tiene sentido: se elige y se
+         salta directo a «listo». */
+      return call("list_packs").then(function(r){
+        var suyo = ((r && r.packs) || []).filter(function(x){ return x.code === p.code; })[0];
+        ob.hidden = false;
+        if (suyo) return call("select_pack", { id: suyo.id }).then(refreshAll).then(mostrarListo);
+        cur = 1; renderOb(); obNext.focus();
+      });
+    }, function(e){
+      dlog("invitación: no pude resolver " + codigo + ": " + String(e));
+      /* El cuadro del código ya distingue «no existe» de «sin conexión»: mejor que
+         repetirlo aquí, se le pasa el código y que lo cuente él. */
+      closeOb();
+      abrirJoin();
+      joinCode.value = codigo;
+      joinBuscar();
+    });
+  }
+
+  function prepararInvitacion(){
+    if (!INVITACION || obInstalando) return;
+    /* Con una partida abierta no se instala otro pack: instalar marca la sesión como
+       «preparando» y al acabar la devolvería a «inactiva» con el juego corriendo. */
+    if (estadoPrevio === "jugando" || estadoPrevio === "preparando") {
+      document.getElementById("obBody").textContent =
+        "Hay una partida abierta: ciérrala y vuelve a darle a Instalar.";
+      return;
+    }
+    obInstalando = true;
+    cur = 2; renderOb();
+    progresoInvitacion("Descargando el modpack", -1);
+    call("catalog_install", { code: INVITACION.code })
+      .then(refreshAll)
+      .then(function(){ return runPlay({ installOnly: true }); })
+      .then(function(){ obInstalando = false; mostrarListo(); })
+      .catch(function(e){
+        obInstalando = false;
+        document.getElementById("obPct").textContent = "";
+        document.getElementById("obAmt").textContent = "No se pudo instalar: " + String(e);
+        obNext.disabled = false;
+        obNext.textContent = "Cerrar";
+        obNext.setAttribute("data-cerrar", "");
+      });
+  }
+
+  /* Lo llama el mismo aviso `install` que mueve la barra de la vista de Jugar. */
+  function progresoInvitacion(paso, frac){
+    if (!obInstalando) return;
+    var bar = document.getElementById("obBar");
+    var pct = document.getElementById("obPct");
+    if (typeof frac === "number" && frac >= 0) {
+      bar.removeAttribute("data-indeterminate");
+      bar.style.setProperty("--frac", Math.round(frac * 100) + "%");
+      pct.textContent = Math.round(frac * 100) + " %";
+    } else {
+      bar.setAttribute("data-indeterminate", "");
+      pct.textContent = "";
+    }
+    if (paso) document.getElementById("obAmt").textContent = paso;
+  }
+
+  function mostrarListo(){
+    var p = INVITACION;
+    cur = 3; renderOb();
+    var srv = document.getElementById("obServer");
+    if (!p || !p.server) {
+      srv.hidden = true;
+      document.getElementById("obReadyBody").textContent = "Todo instalado. Dale a Jugar cuando quieras.";
+      return;
+    }
+    srv.hidden = false;
+    document.getElementById("obServerName").textContent = p.server;
+    document.getElementById("obServerStats").innerHTML = "";
+    document.getElementById("obReadyBody").textContent =
+      "Dale a Jugar y entras directo al servidor, sin buscar la IP ni configurar nada.";
+    call("server_status", { addr: p.server }).then(function(st){
+      var stats = document.getElementById("obServerStats");
+      stats.innerHTML = "";
+      var partes = (!st || !st.online) ? ["no responde"] : [
+        st.ping_ms != null ? st.ping_ms + " ms" : "",
+        st.players != null
+          ? st.players.toLocaleString("es-MX") + " / " + (st.max_players || 0).toLocaleString("es-MX")
+          : ""
+      ];
+      partes.forEach(function(t){
+        var sp = document.createElement("span");
+        sp.textContent = t;
+        stats.appendChild(sp);
+      });
+    }).catch(function(){});
+  }
+
+  obNext.addEventListener("click", function(){
+    if (obNext.hasAttribute("data-cerrar")) { closeOb(); return; }
+    if (cur === 1) prepararInvitacion();
+    else if (cur === 3) { closeOb(); runPlay().catch(function(){}); }
   });
   document.getElementById("ob-exit").addEventListener("click", closeOb);
-  obNext.addEventListener("click", function(){
-    if (cur < 4){ cur++; renderOb(); } else { closeOb(); }
-  });
-  obBack.addEventListener("click", function(){ if (cur > 1){ cur--; renderOb(); } });
   document.addEventListener("keydown", function(e){
     if (e.key === "Escape" && !ob.hidden) closeOb();
   });
   renderOb();
+
+  /* Con el launcher ya abierto, Rust avisa de que llegó un link. La invitación en sí se
+     recoge siempre del mismo sitio, así que no puede abrirse dos veces. */
+  if (window.__TAURI__) {
+    window.__TAURI__.event.listen("invitacion", function(){
+      window.__TAURI__.core.invoke("invitacion_pendiente").then(function(c){
+        if (c) abrirInvitacion(c);
+      });
+    });
+  }
 
 
   /* ================= estado real: pack, cuenta, servidor, instancia ================= */
@@ -2314,6 +2524,8 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     if (bloqueLaunch) bloqueLaunch.hidden = (cual !== "preparando");
     if (bloqueSession)bloqueSession.hidden= (cual !== "jugando");
     if (cual !== "jugando") desarmarStop();
+    /* Una partida nueva vuelve a poder detenerse aunque la anterior se cerrara con él. */
+    if (cual === "jugando" && sessionStop) sessionStop.disabled = false;
     marcarSesionEnBiblioteca(cual === "jugando");
   }
 
@@ -2332,6 +2544,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     tauri.event.listen("install", function(e){
       var p = e.payload || {};
       setProgress(p.paso, p.frac);
+      progresoInvitacion(p.paso, p.frac);
     });
   }
 
@@ -2366,8 +2579,14 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
         return;
       }
       desarmarStop();
-      /* Minecraft no guarda al morir así: se pierde lo que no estuviera guardado. */
-      call("stop_game").catch(function(e){ console.error(e); });
+      /* Se le pide a Minecraft que se cierre como con su X: guarda y sale, y solo si no
+         responde se corta. Puede tardar lo que tarde en guardar, así que el botón se
+         bloquea hasta que cambie la sesión: un segundo clic volvería a pedirlo. */
+      sessionStop.disabled = true;
+      call("stop_game").catch(function(e){
+        console.error(e);
+        sessionStop.disabled = false;
+      });
     });
   }
   document.addEventListener("keydown", function(e){
@@ -2433,6 +2652,12 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       jvm_args: "",
       install_only: !!opts.installOnly
     }}).then(function(r){
+      /* Llegar aquí es que la instalación ya terminó, así que lo que escribió —el icono
+         que traiga el pack, la instancia montada— ya está en disco. Sin repintar, la
+         primera partida entera se veía con el dino genérico y la tarjeta seguía
+         diciendo «sin instalar». */
+      renderInstance();
+      renderBiblioteca();
       if (r === "login") {
         /* Ya no se deja al usuario frente a la ventana del motor sin contexto:
            el setup pregunta primero qué cuenta tiene y guía la que elija. */
@@ -2659,16 +2884,26 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
   /* Primera vez: si no hay cuenta, el setup sale solo. Es justo el momento en que
      antes te aparecía el launcher del motor sin que lo hubieras pedido. */
-  call("active_account").then(function(a){
-    var hay = !!(a && a.name);
-    dlog("setup: cuenta=" + (hay ? a.name : "ninguna"));
-    if (!hay) { spAbrir(); dlog("setup: visible=" + (!setup.hidden)); }
+  /* Salvo que se haya abierto con una invitación: entonces manda ella, y la cuenta se
+     pide al darle a Jugar, que es cuando hace falta. Si no, un amigo recién instalado
+     que abre el link se encontraría el setup tapando la invitación. */
+  call("invitacion_pendiente").then(function(codigo){
+    if (codigo) {
+      dlog("invitación al arrancar: " + codigo);
+      abrirInvitacion(codigo);
+      return;
+    }
+    return call("active_account").then(function(a){
+      var hay = !!(a && a.name);
+      dlog("setup: cuenta=" + (hay ? a.name : "ninguna"));
+      if (!hay) { spAbrir(); dlog("setup: visible=" + (!setup.hidden)); }
+    });
   }).catch(function(e){ dlog("setup: fallo al consultar cuenta: " + String(e)); });
 
   /* ================= publicar modpacks (solo admin) =================
-     La pestaña aparece o no según si hay un `gh` autenticado. No es un interruptor
-     decorativo: publicar se apoya en ese `gh`, así que sin él el panel no podría
-     hacer nada aunque se enseñara. */
+     La pestaña está escondida tras una clave (ver más abajo). Publicar se apoya además
+     en el `gh` autenticado: la clave decide quién ve el panel; el `gh`, quién puede
+     publicar de verdad. */
   var pubDraft = null;   /* lo leído del .mrpack */
   var pubPath  = null;   /* ruta del archivo elegido */
   var pubModo  = "nuevo";
@@ -2704,11 +2939,27 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
         var cod = document.createElement("span"); cod.className = "pub-code";
         cod.textContent = p.code;
 
+        /* El link de invitación de cualquier pack ya publicado. Antes solo salía justo
+           después de publicar: para volver a pasarlo había que publicar otra vez. */
+        var link = document.createElement("button");
+        link.type = "button"; link.className = "btn"; link.textContent = "Copiar link";
+        var reponer;
+        link.addEventListener("click", function(){
+          copiarTexto(INVITE_URL + p.code).then(function(hecho){
+            if (!hecho) return;
+            link.textContent = "Copiado"; link.classList.add("copied");
+            clearTimeout(reponer);
+            reponer = setTimeout(function(){
+              link.textContent = "Copiar link"; link.classList.remove("copied");
+            }, 1600);
+          });
+        });
+
         var btn = document.createElement("button");
         btn.type = "button"; btn.className = "btn"; btn.textContent = "Actualizar";
         btn.addEventListener("click", function(){ pubEditor("actualizar", p); });
 
-        fila.appendChild(cuerpo); fila.appendChild(cod); fila.appendChild(btn);
+        fila.appendChild(cuerpo); fila.appendChild(cod); fila.appendChild(link); fila.appendChild(btn);
         lista.appendChild(fila);
       });
     }).catch(function(){ $("pubEmpty").hidden = false; });
@@ -2826,10 +3077,11 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       pubEstado("publicando");
       call("admin_publish", { draft: d, path: pubPath }).then(function(p){
         $("pubDoneCode").textContent = p.code;
-        /* El link lleva a las descargas y trae el código detrás de la almohadilla.
-           Pegarlo entero en la casilla de códigos funciona: el backend lo extrae. */
-        $("pubDoneLink").textContent =
-          "https://github.com/dinopolllo/dino-launcher-releases#" + p.code;
+        /* El link es la página de invitación, que abre el launcher con un clic: los
+           chats no hacen pulsable un `dinolauncher://`, y una página https sí. Lleva el
+           código detrás de la almohadilla, así que pegarlo entero en el + también
+           funciona: el backend lo extrae. */
+        $("pubDoneLink").textContent = INVITE_URL + p.code;
         pubEstado("hecho");
       }).catch(function(e){
         $("pubError").textContent = String(e);
@@ -2841,10 +3093,11 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       b.addEventListener("click", function(){
         var el = $(b.dataset.copy);
         if (!el) return;
-        navigator.clipboard.writeText(el.textContent).then(function(){
+        copiarTexto(el.textContent).then(function(hecho){
+          if (!hecho) return;
           b.classList.add("copied");
           setTimeout(function(){ b.classList.remove("copied"); }, 1400);
-        }).catch(function(){});
+        });
       });
     });
 
@@ -2864,12 +3117,36 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       });
     }
 
-    /* El grupo entero solo existe para quien puede publicar: sin `gh` autenticado ni
-       siquiera se ve que haya una pestaña. */
-    call("admin_available").then(function(puede){
+    /* La pestaña de admin está escondida hasta que se teclea la clave en cualquier parte
+       de la ventana que no sea un campo de texto. No hay botón ni pista: quien no la
+       sabe no ve que exista. La comprueba Rust contra un hash, así que la clave no viaja
+       escrita en el launcher que se reparte. Basta con escribirla una vez por máquina. */
+    var abrirAdmin = function(){
       var nav = $("navAdmin");
-      if (nav) nav.hidden = !puede;
-      if (puede) { pubVista("home"); pubCargarLista(); }
+      if (nav) nav.hidden = false;
+      pubVista("home"); pubCargarLista();
+    };
+    call("admin_unlocked").then(function(ya){
+      if (ya) { abrirAdmin(); return; }
+      var tecleado = "", espera = null;
+      var escuchar = function(e){
+        var t = e.target;
+        if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+        if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
+        tecleado = (tecleado + e.key).slice(-32);
+        clearTimeout(espera);
+        /* Se pregunta al dejar de teclear, no a cada tecla. */
+        espera = setTimeout(function(){
+          call("admin_unlock", { texto: tecleado }).then(function(ok){
+            if (!ok) return;
+            document.removeEventListener("keydown", escuchar);
+            tecleado = "";
+            abrirAdmin();
+            document.querySelector('[data-go="admin"]').click();
+          }).catch(function(){});
+        }, 350);
+      };
+      document.addEventListener("keydown", escuchar);
     }).catch(function(){});
   }
 

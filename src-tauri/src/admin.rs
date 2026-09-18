@@ -6,6 +6,9 @@
 //! limita solo — sin `gh` autenticado no hay nada que hacer ahí, y un amigo no lo
 //! tiene.
 //!
+//! La pestaña está además escondida tras una clave (ver [`termina_en_la_clave`]). No
+//! se solapan: el `gh` decide quién **puede** publicar; la clave, quién ve el panel.
+//!
 //! Los metadatos (versión, Minecraft, loader, número de mods, tamaño, hash) salen del
 //! propio `.mrpack`. Escribirlos a mano se desincroniza a la primera.
 
@@ -263,6 +266,55 @@ fn gh(args: &[&str], entrada: Option<&str>) -> Result<String, AdminError> {
         ));
     }
     Ok(String::from_utf8_lossy(&salida.stdout).into_owned())
+}
+
+/// SHA-256 de la clave que desbloquea la pestaña de admin.
+///
+/// Se guarda el hash y no la clave: el launcher se reparte, y la clave en claro viajaría
+/// dentro del ejecutable a la vista de cualquiera que lo abriera con un editor.
+///
+/// **Esto esconde el panel; no lo protege.** Una clave tan corta se saca de su hash por
+/// fuerza bruta, y da igual: quien decide de verdad quién publica es el `gh` autenticado
+/// con permiso sobre el repo. Sin él, desbloquear solo enseña una pestaña que no puede
+/// subir nada.
+const CLAVE_SHA256: &str = "162392b2b0c217ad359165633a18b15edac7ce4bdfa77da21923a59bde6b53c5";
+
+fn sha256_hex(texto: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(texto.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// ¿Termina lo tecleado con la clave?
+///
+/// La clave se escribe sin campo ni botón, en cualquier parte de la ventana, así que lo
+/// que llega es lo último que se tecleó y puede traer otras teclas delante.
+pub fn termina_en_la_clave(tecleado: &str) -> bool {
+    let letras: Vec<char> = tecleado.chars().collect();
+    // Con tope: esto se llama según se teclea, y mirar cada sufijo de un texto
+    // arbitrariamente largo no tiene ningún sentido.
+    let desde = letras.len().saturating_sub(64);
+    (desde..letras.len()).any(|i| sha256_hex(&letras[i..].iter().collect::<String>()) == CLAVE_SHA256)
+}
+
+fn marca(root: &std::path::Path) -> std::path::PathBuf {
+    root.join("admin")
+}
+
+/// Deja anotado en esta máquina que el panel ya se desbloqueó, para no pedirlo más.
+pub fn desbloquear(root: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(root)?;
+    std::fs::write(marca(root), CLAVE_SHA256)
+}
+
+/// ¿Se desbloqueó ya en esta máquina?
+///
+/// La marca guarda el hash y no un simple «sí» para que un archivo con ese nombre creado
+/// por cualquier otro motivo no enseñe el panel. No es más que eso: el hash va en el
+/// propio ejecutable.
+pub fn desbloqueado(root: &std::path::Path) -> bool {
+    std::fs::read_to_string(marca(root))
+        .map(|t| t.trim() == CLAVE_SHA256)
+        .unwrap_or(false)
 }
 
 /// ¿Se puede publicar desde esta máquina?
@@ -544,6 +596,32 @@ mod tests {
     #[test]
     fn un_catalogo_ilegible_no_se_pisa_a_ciegas() {
         assert!(merge_catalogo("{roto", &pack("X", "1")).is_err());
+    }
+
+    #[test]
+    fn la_clave_desbloquea_aunque_lleve_teclas_delante() {
+        assert!(termina_en_la_clave("dinoGOD"));
+        assert!(termina_en_la_clave("asdf jkl dinoGOD"));
+    }
+
+    #[test]
+    fn la_clave_tiene_que_estar_entera_y_con_sus_mayusculas() {
+        for texto in ["", "dinoGO", "dinogod", "DINOGOD", "dinoGODx", "dino GOD"] {
+            assert!(!termina_en_la_clave(texto), "{texto:?} no debería desbloquear");
+        }
+    }
+
+    #[test]
+    fn el_desbloqueo_queda_guardado_en_la_maquina() {
+        let root = std::env::temp_dir().join("dino-admin-marca");
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(!desbloqueado(&root));
+        desbloquear(&root).unwrap();
+        assert!(desbloqueado(&root));
+        // Un archivo con ese nombre pero otro contenido no cuenta.
+        std::fs::write(marca(&root), "si").unwrap();
+        assert!(!desbloqueado(&root));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// El catálogo tal como quedó publicado el 2026-09-13: dos códigos con el mismo id.

@@ -124,6 +124,17 @@ pub fn codigo_de_texto(texto: &str) -> String {
     normalizar_codigo(ultimo)
 }
 
+/// Saca el código de un link de invitación: `dinolauncher://join/CODIGO`.
+///
+/// Solo del protocolo del launcher: cualquier otra cosa que llegue como argumento al
+/// arrancar no es una invitación. Y un link sin código —`dinolauncher://join/`— tampoco,
+/// en vez de acabar buscando un pack llamado «JOIN» que diría que no existe.
+pub fn codigo_de_invitacion(url: &str) -> Option<String> {
+    let resto = url.trim().strip_prefix("dinolauncher://")?;
+    let codigo = codigo_de_texto(resto);
+    (!codigo.is_empty() && codigo != "JOIN").then_some(codigo)
+}
+
 pub fn parse_catalog(json: &str) -> Result<Catalogo, CatalogError> {
     let c: Catalogo = serde_json::from_str(json)?;
     if c.format_version != 1 {
@@ -300,6 +311,32 @@ mod tests {
             "DINO-SMP",
         ] {
             assert_eq!(codigo_de_texto(link), "DINOSMP", "falló con {link:?}");
+        }
+    }
+
+    #[test]
+    fn el_link_de_invitacion_da_el_codigo() {
+        for link in [
+            "dinolauncher://join/AMEN",
+            "dinolauncher://join/amen/",
+            "dinolauncher://AMEN",
+            "dinolauncher://join?c=Amen",
+        ] {
+            assert_eq!(codigo_de_invitacion(link).as_deref(), Some("AMEN"), "falló con {link:?}");
+        }
+    }
+
+    #[test]
+    fn lo_que_no_es_una_invitacion_no_da_codigo() {
+        // Otro protocolo, o el nuestro sin nada detrás: ninguno es una invitación.
+        for texto in [
+            "https://github.com/x/y#AMEN",
+            "AMEN",
+            "dinolauncher://",
+            "dinolauncher://join/",
+            "--flag",
+        ] {
+            assert!(codigo_de_invitacion(texto).is_none(), "{texto:?} no es una invitación");
         }
     }
 
