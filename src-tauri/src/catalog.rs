@@ -210,24 +210,40 @@ pub async fn descargar_pack(
     }
     let total = r.content_length().unwrap_or(pack.bytes);
 
-    let mut datos: Vec<u8> = Vec::with_capacity(total as usize);
+    if let Some(p) = destino.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    // A disco según llega, no a memoria: un modpack pesa cientos de megas y tenerlo
+    // entero en RAM solo para comprobarlo es un pico que no hace falta en la máquina de
+    // nadie. Se escribe con otro nombre y solo se renombra si el hash cuadra, así que
+    // un `.mrpack` a medias nunca llega a ocupar el sitio del bueno.
+    use sha2::{Digest, Sha512};
+    use std::io::Write;
+    let parcial = destino.with_extension("parcial");
+    let mut f = std::fs::File::create(&parcial)?;
+    let mut h = Sha512::new();
+    let mut bajado: u64 = 0;
+
     let mut stream = r.bytes_stream();
     while let Some(trozo) = stream.next().await {
         let trozo = trozo?;
-        datos.extend_from_slice(&trozo);
-        progreso(datos.len() as u64, total);
+        h.update(&trozo);
+        f.write_all(&trozo)?;
+        bajado += trozo.len() as u64;
+        progreso(bajado, total);
     }
+    f.flush()?;
+    drop(f);
 
     if let Some(esperado) = pack.sha512.as_deref() {
-        if hex512(&datos) != esperado.to_lowercase() {
+        let hex: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        if hex != esperado.to_lowercase() {
+            let _ = std::fs::remove_file(&parcial);
             return Err(CatalogError::HashMalo);
         }
     }
 
-    if let Some(p) = destino.parent() {
-        std::fs::create_dir_all(p)?;
-    }
-    std::fs::write(destino, datos)?;
+    std::fs::rename(&parcial, destino)?;
     Ok(())
 }
 
@@ -272,6 +288,7 @@ fn es_imagen(b: &[u8]) -> bool {
         || (b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP")
 }
 
+#[allow(dead_code)] // queda para comparar en los tests
 fn hex512(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha512};
     let mut h = Sha512::new();

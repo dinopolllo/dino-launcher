@@ -9,6 +9,9 @@
 //! La pestaña está además escondida tras una clave (ver [`termina_en_la_clave`]). No
 //! se solapan: el `gh` decide quién **puede** publicar; la clave, quién ve el panel.
 //!
+//! El `.mrpack` va como **adjunto de una release** del repo de descargas, no por la API
+//! de contenidos: ver [`subir_pack`]. El catálogo y el icono, que son pequeños, sí.
+//!
 //! Los metadatos (versión, Minecraft, loader, número de mods, tamaño, hash) salen del
 //! propio `.mrpack`. Escribirlos a mano se desincroniza a la primera.
 
@@ -82,6 +85,29 @@ pub fn slug(nombre: &str) -> String {
     if out.is_empty() { "pack".into() } else { out }
 }
 
+/// Hash del archivo leyéndolo a trozos.
+///
+/// Un `.mrpack` puede pesar cientos de megas: cargarlo entero en memoria solo para
+/// medirlo no hace falta, y ahora que no se manda en base64 tampoco hay ningún otro
+/// motivo para tenerlo todo dentro.
+fn hex512_de_archivo(ruta: &std::path::Path) -> std::io::Result<String> {
+    use sha2::{Digest, Sha512};
+    use std::io::Read;
+
+    let mut f = std::fs::File::open(ruta)?;
+    let mut h = Sha512::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+#[allow(dead_code)] // lo usan los tests
 fn hex512(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha512};
     let mut h = Sha512::new();
@@ -337,26 +363,141 @@ fn sha_remoto(ruta: &str) -> Option<String> {
 }
 
 /// Sube un archivo y devuelve el commit que lo dejó, para poder enlazarlo fijo.
-fn subir(ruta: &str, contenido_b64: &str, mensaje: &str) -> Result<String, AdminError> {
-    let mut cuerpo = serde_json::json!({ "message": mensaje, "content": contenido_b64 });
-    if let Some(sha) = sha_remoto(ruta) {
-        cuerpo["sha"] = serde_json::json!(sha);
+/// ¿Es un fallo de los que GitHub mismo pide reintentar?
+///
+/// Su validación de reglas se queda a veces sin tiempo y responde «Timed out validating
+/// rule, please try again». Lo que **no** se reintenta es un rechazo con motivo —un
+/// archivo demasiado grande, un permiso que falta—: repetirlo daría lo mismo.
+fn merece_reintento(e: &AdminError) -> bool {
+    let AdminError::Gh(msg) = e else { return false };
+    let m = msg.to_lowercase();
+    ["timed out", "timeout", "please try again", "502", "503", "504"]
+        .iter()
+        .any(|p| m.contains(p))
+}
+
+/// Repite lo que falló por algo temporal, esperando cada vez un poco más.
+fn con_reintentos<T>(
+    intentos: u32,
+    mut f: impl FnMut() -> Result<T, AdminError>,
+) -> Result<T, AdminError> {
+    let intentos = intentos.max(1);
+    let mut espera = std::time::Duration::from_secs(2);
+    for intento in 1..=intentos {
+        match f() {
+            Err(e) if intento < intentos && merece_reintento(&e) => {
+                println!("[PUB] {e} — reintento {intento} de {intentos}");
+                std::thread::sleep(espera);
+                espera *= 3;
+            }
+            otro => return otro,
+        }
     }
-    // Por stdin y no por argumentos: un `.mrpack` en base64 desborda el límite de
-    // longitud de la línea de comandos en cuanto el pack crece un poco.
-    let commit = gh(
-        &[
-            "api",
-            "-X",
-            "PUT",
-            &format!("repos/{RELEASES_REPO}/contents/{ruta}"),
-            "--input",
-            "-",
-            "--jq",
-            ".commit.sha",
-        ],
-        Some(&cuerpo.to_string()),
-    )?;
+    unreachable!("la última vuelta siempre devuelve")
+}
+
+fn tag_de_pack(id: &str) -> String {
+    format!("pack-{id}")
+}
+
+/// Nombre del archivo adjunto, con el principio del hash dentro.
+///
+/// Así **cada contenido tiene su propia URL**: publicar una versión nueva no reescribe
+/// el archivo que otro está descargando en ese momento, y ninguna caché puede servir
+/// algo viejo bajo la misma dirección.
+fn nombre_de_asset(id: &str, sha512: &str) -> String {
+    format!("{id}-{}.mrpack", sha512.get(..8).unwrap_or("sinhash"))
+}
+
+fn url_de_asset(tag: &str, nombre: &str) -> String {
+    format!("https://github.com/{RELEASES_REPO}/releases/download/{tag}/{nombre}")
+}
+
+/// Sube el `.mrpack` como adjunto de una release del repo de descargas.
+///
+/// **No por la API de contenidos.** Esa tiene un tope de 100 MB, manda el archivo en
+/// base64 —un tercio más de peso— y dejaría cada versión del pack en el historial del
+/// repo para siempre. Un modpack de 257 MB la tumbó con «Repository rule violations
+/// found: Timed out validating rule» (2026-09-25). Un adjunto de release admite hasta
+/// 2 GB y vive fuera del historial.
+fn subir_pack(archivo: &std::path::Path, id: &str, sha512: &str, nombre_pack: &str) -> Result<String, AdminError> {
+    let tag = tag_de_pack(id);
+    let nombre = nombre_de_asset(id, sha512);
+
+    // `gh` sube el archivo con el nombre que tenga en el disco, así que hace falta uno
+    // que ya se llame así. Un enlace duro no copia los megas; si el temporal cae en otro
+    // disco no queda más remedio que copiar.
+    let dir = std::env::temp_dir().join("dino-publicar");
+    std::fs::create_dir_all(&dir)?;
+    let copia = dir.join(&nombre);
+    let _ = std::fs::remove_file(&copia);
+    if std::fs::hard_link(archivo, &copia).is_err() {
+        std::fs::copy(archivo, &copia)?;
+    }
+    let ruta = copia.to_string_lossy().into_owned();
+
+    let existe = gh(
+        &["release", "view", &tag, "--repo", RELEASES_REPO, "--json", "tagName"],
+        None,
+    )
+    .is_ok();
+    if !existe {
+        // `--latest=false` porque estas releases son packs, no versiones del launcher:
+        // sin eso, la página de invitación acabaría ofreciendo un modpack a quien va a
+        // descargarse el launcher.
+        let titulo = format!("Modpack: {nombre_pack}");
+        con_reintentos(3, || {
+            gh(
+                &[
+                    "release", "create", &tag,
+                    "--repo", RELEASES_REPO,
+                    "--title", &titulo,
+                    "--notes", "Archivos de modpack que reparte Dino Launcher.",
+                    "--latest=false",
+                ],
+                None,
+            )
+            .map(|_| ())
+        })?;
+    }
+
+    let subida = con_reintentos(3, || {
+        gh(
+            &["release", "upload", &tag, &ruta, "--repo", RELEASES_REPO, "--clobber"],
+            None,
+        )
+        .map(|_| ())
+    });
+    let _ = std::fs::remove_file(&copia);
+    subida?;
+
+    Ok(url_de_asset(&tag, &nombre))
+}
+
+fn subir(ruta: &str, contenido_b64: &str, mensaje: &str) -> Result<String, AdminError> {
+    // El `sha` se relee en cada intento a propósito: si el anterior llegó a escribir y
+    // solo se perdió la respuesta, repetir con el viejo sería un conflicto seguro.
+    let commit = con_reintentos(3, || {
+        let mut cuerpo = serde_json::json!({ "message": mensaje, "content": contenido_b64 });
+        if let Some(sha) = sha_remoto(ruta) {
+            cuerpo["sha"] = serde_json::json!(sha);
+        }
+        // Por stdin y no por argumentos: el contenido en base64 desborda el límite de
+        // longitud de la línea de comandos en cuanto crece un poco.
+        gh(
+            &[
+                "api",
+                "-X",
+                "PUT",
+                &format!("repos/{RELEASES_REPO}/contents/{ruta}"),
+                "--input",
+                "-",
+                "--jq",
+                ".commit.sha",
+            ],
+            Some(&cuerpo.to_string()),
+        )
+    })?;
     let commit = commit.trim().to_string();
     if commit.len() < 7 || commit == "null" {
         return Err(AdminError::Gh(format!("GitHub no devolvió el commit al subir {ruta}")));
@@ -472,9 +613,16 @@ pub fn publicar(b: &Borrador, mrpack: &std::path::Path) -> Result<PackRemoto, Ad
     // encima del de otro pack sin ocasión de darse cuenta.
     let id = id_para_publicar(&catalogo_remoto()?, &b.id, &codigo)?;
 
-    let datos = std::fs::read(mrpack)?;
-    let ruta_pack = format!("packs/{id}.mrpack");
-    let commit_pack = subir(&ruta_pack, &b64(&datos), &format!("{} {}", b.name, b.version))?;
+    // 2 GB es el tope de un adjunto de release. Mejor decirlo antes de subir nada que
+    // después de esperar media hora.
+    let peso = std::fs::metadata(mrpack)?.len();
+    if peso > 2_000_000_000 {
+        return Err(AdminError::Campo(
+            "El .mrpack pasa de 2 GB, que es lo máximo que acepta GitHub.".into(),
+        ));
+    }
+    let hash = hex512_de_archivo(mrpack)?;
+    let url_pack = subir_pack(mrpack, &id, &hash, b.name.trim())?;
 
     let icono = match &b.icon_b64 {
         Some(png) => {
@@ -490,10 +638,10 @@ pub fn publicar(b: &Borrador, mrpack: &std::path::Path) -> Result<PackRemoto, Ad
         id,
         name: b.name.trim().to_string(),
         version: b.version.clone(),
-        mrpack: url_fijada(&commit_pack, &ruta_pack),
+        mrpack: url_pack,
         server: b.server.clone().filter(|s| !s.trim().is_empty()),
-        sha512: Some(hex512(&datos)),
-        bytes: datos.len() as u64,
+        sha512: Some(hash),
+        bytes: peso,
         minecraft: (!b.minecraft.is_empty()).then(|| b.minecraft.clone()),
         loader: (!b.loader.is_empty()).then(|| b.loader.clone()),
         mods: b.mods,
@@ -635,6 +783,72 @@ mod tests {
     const SOLO_DINOSMP: &str = r#"{ "formatVersion": 1, "packs": [
         { "code": "DINOSMP", "id": "dinosmp", "name": "Dino SMP", "version": "1.0.0",
           "mrpack": "https://e/x.mrpack" } ] }"#;
+
+    #[test]
+    fn se_reintenta_lo_que_github_llama_temporal() {
+        // El mensaje exacto que devolvió al publicar un pack de 257 MB.
+        let real = AdminError::Gh(
+            "gh: Repository rule violations found Timed out validating rule, please try again (HTTP 409)".into(),
+        );
+        assert!(merece_reintento(&real));
+        assert!(merece_reintento(&AdminError::Gh("502 Bad Gateway".into())));
+    }
+
+    #[test]
+    fn no_se_reintenta_lo_que_no_va_a_cambiar() {
+        // Repetir un rechazo con motivo solo hace esperar al que publica.
+        for msg in ["Not Found (HTTP 404)", "file is too large", "Bad credentials"] {
+            assert!(!merece_reintento(&AdminError::Gh(msg.into())), "{msg}");
+        }
+        assert!(!merece_reintento(&AdminError::SinGh));
+    }
+
+    #[test]
+    fn el_reintento_para_en_cuanto_sale_bien() {
+        let mut vueltas = 0;
+        let r = con_reintentos(3, || {
+            vueltas += 1;
+            if vueltas < 2 {
+                Err(AdminError::Gh("timed out".into()))
+            } else {
+                Ok(vueltas)
+            }
+        });
+        assert_eq!(r.unwrap(), 2);
+    }
+
+    #[test]
+    fn el_reintento_no_insiste_para_siempre() {
+        let mut vueltas = 0;
+        let r: Result<(), _> = con_reintentos(2, || {
+            vueltas += 1;
+            Err(AdminError::Gh("timed out".into()))
+        });
+        assert!(r.is_err());
+        assert_eq!(vueltas, 2, "insistió de más");
+    }
+
+    #[test]
+    fn cada_contenido_tiene_su_propia_url() {
+        // Si dos versiones compartieran nombre, quien estuviera descargando la vieja se
+        // encontraría la nueva a mitad, y el hash del catálogo ya no cuadraría.
+        let a = nombre_de_asset("dinosmp", &"a".repeat(128));
+        let b = nombre_de_asset("dinosmp", &"b".repeat(128));
+        assert_ne!(a, b);
+        assert!(a.starts_with("dinosmp-") && a.ends_with(".mrpack"), "{a}");
+        let u = url_de_asset(&tag_de_pack("dinosmp"), &a);
+        assert!(u.contains("/releases/download/pack-dinosmp/"), "{u}");
+        assert!(!u.contains(' '), "una URL con espacios se rompe al compartirla");
+    }
+
+    #[test]
+    fn el_hash_por_trozos_da_lo_mismo_que_de_golpe() {
+        let ruta = std::env::temp_dir().join("dino-hash-trozos.bin");
+        let datos: Vec<u8> = (0..(3 << 20)).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&ruta, &datos).unwrap();
+        assert_eq!(hex512_de_archivo(&ruta).unwrap(), hex512(&datos));
+        let _ = std::fs::remove_file(&ruta);
+    }
 
     #[test]
     fn un_pack_nuevo_no_hereda_el_id_de_otro_aunque_venga_del_mismo_archivo() {
