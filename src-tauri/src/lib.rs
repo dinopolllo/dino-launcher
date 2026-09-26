@@ -304,6 +304,12 @@ async fn play_inner(app: tauri::AppHandle, args: PlayArgs) -> Result<String, Str
     emit("Abriendo Minecraft", 1.0);
     let hijo = std::process::Command::new(&bin)
         .args(&launch)
+        // El motor identifica su «instancia única» por el directorio de trabajo del
+        // proceso, no por su carpeta de datos (`ApplicationId::fromPathAndVersion`, con
+        // un FIXME de ellos mismos al lado). Heredar el nuestro es arriesgarse a que el
+        // lanzamiento acabe en el ElyPrism que el usuario ya tuviera abierto; con el
+        // suyo propio, nadie más puede coincidir.
+        .current_dir(layout.engine())
         .spawn()
         .map_err(|e| format!("no pude lanzar el juego: {e}"))?;
 
@@ -358,6 +364,10 @@ async fn open_engine_login(
 
     std::process::Command::new(&bin)
         .args(&args)
+        // Su propio directorio de trabajo, como al jugar: el motor identifica su
+        // instancia única por ahí, y heredar el nuestro puede mandar esto al ElyPrism
+        // que el usuario ya tuviera abierto.
+        .current_dir(layout.engine())
         .spawn()
         .map_err(|e| format!("no pude abrir el motor: {e}"))?;
     Ok(modo.into())
@@ -371,6 +381,15 @@ async fn open_engine_login(
 fn engine_windows(app: tauri::AppHandle) -> Option<usize> {
     let layout = layout_of(&app).ok()?;
     install::engine_windows(&layout.root)
+}
+
+/// Título de la ventana con la que el motor está preguntando algo, si la hay.
+///
+/// La interfaz lo consulta mientras prepara: una ventana del motor que espera respuesta
+/// no se esconde, y hay que decir por qué está ahí en vez de dejar una barra parada.
+#[tauri::command]
+fn engine_question() -> Option<String> {
+    install::sesion::pregunta()
 }
 
 /// En qué punto está la partida: `"inactiva"`, `"preparando"` o `"jugando"`.
@@ -1138,6 +1157,7 @@ pub fn run() {
             engine_windows,
             close_engine,
             session_state,
+            engine_question,
             abort_launch,
             stop_game,
             admin_unlocked,

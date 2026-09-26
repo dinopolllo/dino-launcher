@@ -273,13 +273,58 @@ pub fn merge_ini(existing: &str, kv: &[(&str, &str)]) -> String {
 /// `QuitAfterGameStop` ya no llega a correr, y el motor se quedaba abierto con su
 /// ventana delante del jugador. En `false` no abre ninguna, y sin ventanas ni partidas
 /// `Application::controllerFinished` lo cierra solo, termine como termine.
-pub const SILENT_ENGINE: [(&str, &str); 5] = [
+pub const SILENT_ENGINE: [(&str, &str); 7] = [
     ("ShowConsole", "false"),
     ("ShowConsoleOnError", "false"),
     ("AutoCloseConsole", "true"),
     ("CloseAfterLaunch", "false"),
     ("QuitAfterGameStop", "true"),
+    // Java lo administramos nosotros: sin estas dos, el motor abre su asistente de
+    // primer arranque a preguntar por él (`Application::createSetupWizard`, 11.1.0).
+    ("AutomaticJavaDownload", "true"),
+    ("IgnoreJavaWizard", "true"),
 ];
+
+/// Ajustes que solo se ponen **si faltan**.
+///
+/// El asistente de primer arranque también se abre con el idioma vacío o con un tema que
+/// el motor no reconoce, y en una carpeta de datos recién creada —la nuestra, en la
+/// máquina de cualquier amigo— se cumplen las dos cosas. Para evitarlo basta con que
+/// **haya** un valor; cuál, es gusto de quien lo tenga puesto, así que a quien ya eligió
+/// no se le pisa.
+pub const ENGINE_DEFAULTS: [(&str, &str); 3] = [
+    ("Language", "es_ES"),
+    ("ApplicationTheme", "system"),
+    ("IconTheme", "pe_colored"),
+];
+
+/// La configuración muda completa, tal como se escribe en el `.cfg` del motor.
+pub fn config_muda(previo: &str) -> String {
+    merge_ini(&merge_ini_si_falta(previo, &ENGINE_DEFAULTS), &SILENT_ENGINE)
+}
+
+/// Como `merge_ini`, pero sin tocar las claves que ya traigan valor.
+pub fn merge_ini_si_falta(existing: &str, kv: &[(&str, &str)]) -> String {
+    let faltan: Vec<(&str, &str)> = kv
+        .iter()
+        .copied()
+        .filter(|(k, _)| {
+            !existing.lines().any(|l| match l.trim().split_once('=') {
+                Some((clave, valor)) => clave.trim() == *k && !valor.trim().is_empty(),
+                None => false,
+            })
+        })
+        .collect();
+    merge_ini(existing, &faltan)
+}
+
+/// Launchers de los que el motor ofrece migrar datos, con el nombre exacto con el que
+/// los busca (`Application::handleDataMigration`, 11.1.0).
+///
+/// Encontrar uno de ellos instalado dispara un diálogo modal —«It looks like you used X
+/// before. Do you want to migrate your data…»— que hay que desactivar **antes** de
+/// arrancar el motor: ver `install::apply_silent_config`.
+pub const MIGRACIONES: [&str; 3] = ["PolyMC", "MultiMC", "Prism Launcher"];
 
 /// RAM física de la máquina, en MiB. Sin dependencias: cada sistema tiene su vía.
 pub fn total_memory_mb() -> Option<u32> {
@@ -610,6 +655,43 @@ mod tests {
         assert!(out.contains("ShowConsole=false"), "no actualizó la clave");
         assert!(out.contains("ShowConsoleOnError=false"), "no añadió la clave nueva");
         assert_eq!(out.matches("ShowConsole=").count(), 1, "duplicó la clave");
+    }
+
+    #[test]
+    fn la_config_apaga_todas_las_paginas_del_asistente() {
+        // Cada una de estas claves es una página del asistente de primer arranque. Si
+        // falta una, en la máquina de un amigo aparece una ventana modal del motor y
+        // nada avanza hasta que alguien la contesta.
+        let out = config_muda("");
+        for clave in [
+            "Language=es_ES",
+            "AutomaticJavaDownload=true",
+            "IgnoreJavaWizard=true",
+            "ApplicationTheme=system",
+            "IconTheme=pe_colored",
+        ] {
+            assert!(out.contains(clave), "falta {clave}");
+        }
+    }
+
+    #[test]
+    fn no_le_pisamos_al_motor_lo_que_ya_eligio() {
+        // Solo hace falta que el idioma y el tema tengan algo; cuál, no es cosa nuestra.
+        let previo = "[General]\nLanguage=es_MX\nApplicationTheme=dark\n";
+        let out = config_muda(previo);
+        assert!(out.contains("Language=es_MX"), "le cambió el idioma");
+        assert!(out.contains("ApplicationTheme=dark"), "le cambió el tema");
+        assert!(out.contains("IconTheme=pe_colored"), "el que faltaba sí se pone");
+        // Lo que sí imponemos siempre, porque de ello depende que no se le vea.
+        assert!(out.contains("ShowConsoleOnError=false"));
+    }
+
+    #[test]
+    fn un_valor_vacio_cuenta_como_que_falta() {
+        // `Language=` sin nada detrás es justo lo que abre el asistente.
+        let out = config_muda("[General]\nLanguage=\n");
+        assert!(out.contains("Language=es_ES"), "{out}");
+        assert_eq!(out.matches("Language=").count(), 1, "duplicó la clave");
     }
 
     #[test]

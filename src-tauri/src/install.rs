@@ -427,6 +427,20 @@ pub fn engine_windows(root: &Path) -> Option<usize> {
 ///
 /// Devuelve los títulos porque son la única pista de qué se tapó. Si algún día el motor
 /// abre ahí un error en vez de un progreso, esto es lo que lo delataría.
+/// ¿Es una ventana del motor que se puede esconder sin dejar a nadie esperando?
+///
+/// Las suyas llevan el nombre del launcher detrás de un guion —«Please wait... - Nombre
+/// 11.1.0», «Nombre - Nombre 11.1.0»—, mientras que sus preguntas son `QMessageBox`
+/// tituladas solo con ese nombre.
+///
+/// **Ante la duda no se esconde.** Tapar una pregunta deja al motor esperando una
+/// respuesta que nadie puede dar, y eso no se nota: se ve como una descarga que no
+/// avanza nunca. Que se vea una ventana ajena de más es mucho más barato que eso.
+pub fn se_puede_esconder(titulo: &str) -> bool {
+    let t = titulo.trim().to_lowercase();
+    !t.is_empty() && (t.starts_with("please wait") || t.contains(" - "))
+}
+
 #[cfg(windows)]
 pub fn hide_windows_of(pid: u32) -> Vec<String> {
     use std::sync::Mutex;
@@ -445,7 +459,7 @@ pub fn hide_windows_of(pid: u32) -> Vec<String> {
     // `EnumWindows` recibe una función suelta, sin contexto propio, así que el PID
     // buscado y lo recogido tienen que vivir fuera. El candado evita que dos llamadas
     // simultáneas se mezclen los datos.
-    static ESTADO: Mutex<(u32, Vec<String>)> = Mutex::new((0, Vec::new()));
+    static ESTADO: Mutex<(u32, Vec<(isize, String)>)> = Mutex::new((0, Vec::new()));
 
     extern "system" fn visitar(hwnd: isize, _p: isize) -> i32 {
         let mut suyo = 0u32;
@@ -454,8 +468,7 @@ pub fn hide_windows_of(pid: u32) -> Vec<String> {
             if suyo == e.0 && unsafe { IsWindowVisible(hwnd) } != 0 {
                 let mut buf = [0u16; 256];
                 let n = unsafe { GetWindowTextW(hwnd, buf.as_mut_ptr(), 256) }.max(0) as usize;
-                e.1.push(String::from_utf16_lossy(&buf[..n]));
-                unsafe { ShowWindow(hwnd, SW_HIDE) };
+                e.1.push((hwnd, String::from_utf16_lossy(&buf[..n])));
             }
         }
         1 // seguir enumerando
@@ -466,7 +479,25 @@ pub fn hide_windows_of(pid: u32) -> Vec<String> {
         *g = (pid, Vec::new());
     }
     unsafe { EnumWindows(visitar, 0) };
-    ESTADO.lock().map(|g| g.1.clone()).unwrap_or_default()
+    let ventanas = ESTADO.lock().map(|g| g.1.clone()).unwrap_or_default();
+
+    // Se decide **después** de enumerar y no dentro del recorrido: lo que no se esconde
+    // hay que poder contarlo, y desde la función suelta no hay a dónde llevarlo.
+    let mut escondidas = Vec::new();
+    let mut preguntas = Vec::new();
+    for (hwnd, titulo) in ventanas {
+        if se_puede_esconder(&titulo) {
+            unsafe { ShowWindow(hwnd, SW_HIDE) };
+            escondidas.push(titulo);
+        } else {
+            preguntas.push(titulo);
+        }
+    }
+    // La interfaz lo cuenta para que nadie se quede mirando una barra parada sin saber
+    // que hay una ventana del motor esperándole. Se limpia solo: cuando la contestan,
+    // la ventana deja de estar y aquí deja de aparecer.
+    sesion::preguntando(preguntas.into_iter().next());
+    escondidas
 }
 
 #[cfg(not(windows))]
@@ -620,6 +651,24 @@ pub mod sesion {
     pub fn actual() -> u8 {
         ESTADO.load(Ordering::Relaxed)
     }
+    /// Ventana del motor que está esperando una respuesta, si la hay.
+    static PREGUNTA: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+    pub fn preguntando(titulo: Option<String>) {
+        if let Ok(mut g) = PREGUNTA.lock() {
+            if *g != titulo {
+                if let Some(t) = &titulo {
+                    println!("[PLAY] el motor está preguntando algo: {t:?}");
+                }
+                *g = titulo;
+            }
+        }
+    }
+
+    pub fn pregunta() -> Option<String> {
+        PREGUNTA.lock().ok().and_then(|g| g.clone())
+    }
+
     pub fn nombre() -> &'static str {
         match actual() {
             PREPARANDO => "preparando",
@@ -872,7 +921,23 @@ pub fn apply_silent_config(layout: &Layout) {
     let cfg = layout.engine().join("elyprismlauncher.cfg");
     let _ = std::fs::create_dir_all(layout.engine());
     let previo = std::fs::read_to_string(&cfg).unwrap_or_default();
-    let _ = std::fs::write(&cfg, engine::merge_ini(&previo, &engine::SILENT_ENGINE));
+    let _ = std::fs::write(&cfg, engine::config_muda(&previo));
+
+    // Y las marcas de «no migrar». Si el motor encuentra la carpeta de otro launcher en
+    // la máquina —y el suyo propio, instalado aparte, cuenta como uno— pregunta con un
+    // diálogo modal si quiere traerse esos datos a la nuestra. Escondido, ese diálogo
+    // dejó a un amigo con la descarga girando para siempre (2026-09-25): el motor
+    // esperaba una respuesta que nadie podía darle.
+    //
+    // El archivo es el mismo que escribe el motor cuando alguien contesta que no, así
+    // que esto es decirle que no de antemano. Y es lo que queremos: su carpeta es suya,
+    // la nuestra la administramos nosotros.
+    for nombre in engine::MIGRACIONES {
+        let marca = layout.engine().join(format!("{nombre}_nomigrate.txt"));
+        if !marca.exists() {
+            let _ = std::fs::write(&marca, b"");
+        }
+    }
 }
 
 /// ¿Ya hay un motor corriendo sobre nuestra carpeta de datos?
@@ -929,6 +994,7 @@ pub fn warm_engine(layout: &Layout) {
     apply_silent_config(layout);
     let _ = std::process::Command::new(&bin)
         .args(["--dir", &layout.engine().to_string_lossy()])
+        .current_dir(layout.engine())
         .spawn();
 }
 
@@ -1065,6 +1131,39 @@ mod tests {
     /// La misma raíz tal como la escribe Windows.
     #[cfg(windows)]
     const ROOT_WIN: &str = r"C:\Users\Pici\AppData\Roaming\gg.dinolab.launcher";
+
+    #[test]
+    fn una_pregunta_del_motor_nunca_se_esconde() {
+        // El diálogo de migración que dejó colgado a un amigo: un `QMessageBox` titulado
+        // solo con el nombre del launcher.
+        for titulo in ["PineconeMC", "Update In Progress", "Error", ""] {
+            assert!(!se_puede_esconder(titulo), "{titulo:?} podría estar preguntando algo");
+        }
+    }
+
+    #[test]
+    fn el_dialogo_de_progreso_y_la_ventana_principal_si_se_esconden() {
+        // Los títulos reales vistos en el log de una partida.
+        for titulo in [
+            "Please wait... - PineconeMC 11.1.0",
+            "PineconeMC - PineconeMC 11.1.0",
+        ] {
+            assert!(se_puede_esconder(titulo), "{titulo:?} es del motor y estorba");
+        }
+    }
+
+    #[test]
+    fn la_config_muda_desactiva_las_migraciones() {
+        let root = std::env::temp_dir().join("dino-nomigrate");
+        let _ = std::fs::remove_dir_all(&root);
+        let layout = Layout::new(&root);
+        apply_silent_config(&layout);
+        for nombre in engine::MIGRACIONES {
+            let marca = layout.engine().join(format!("{nombre}_nomigrate.txt"));
+            assert!(marca.exists(), "sin marca para {nombre}: el motor preguntaría");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn jamas_matamos_una_partida_en_curso() {

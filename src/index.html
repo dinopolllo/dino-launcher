@@ -2602,8 +2602,26 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
      Se sondea siempre, no solo tras pulsar Jugar: la partida puede seguir viva de una
      sesión anterior del launcher, y al abrirlo hay que encontrarla ya en marcha. */
   var estadoPrevio = null;
+  var preguntaPrevia = null;
+
+  /* Una ventana del motor que espera respuesta no se esconde: taparla dejaría la
+     preparación colgada para siempre, que es justo lo que le pasó a un amigo con el
+     diálogo de migración. Si aparece una, aquí se explica por qué hay una ventana ajena
+     delante, en vez de dejar la barra girando sin decir nada. */
+  function vigilarPregunta(){
+    call("engine_question").then(function(t){
+      if (t === preguntaPrevia) return;
+      preguntaPrevia = t;
+      if (t) setProgress("El motor te está preguntando algo: respóndele en su ventana", -1);
+    }).catch(function(){});
+  }
+
   function seguirSesion(){
     call("session_state").then(function(st){
+      /* Se consulta aunque el estado no cambie: la pregunta asoma en mitad de la
+         preparación, no al pasar de un estado a otro. */
+      if (st === "preparando") vigilarPregunta();
+      else preguntaPrevia = null;
       if (st === estadoPrevio) return;
       estadoPrevio = st;
       if (st === "jugando") {
