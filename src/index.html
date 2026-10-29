@@ -2330,6 +2330,18 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       if (info.minecraft) meta.push("MC " + info.minecraft);
       meta.push(info.mods + " mods");
       meta.push(humanBytes(info.bytes));
+    } else if (PACK && CATALOGO && (CATALOGO.loader || CATALOGO.mods || CATALOGO.bytes)) {
+      /* Sin instalar, lo que sabe qué es el pack es el catálogo. Antes aquí solo ponía
+         «no instalado todavía», que es no decir nada justo cuando alguien está
+         decidiendo si instalarlo.
+         Y el tamaño vive en esta línea, no dentro del botón: el ancho de un botón debe
+         depender de su propio vocabulario —Jugar, Instalar, Actualizar, tres palabras
+         fijas— y no del catálogo, porque con `1fr auto` lo que crece el botón lo paga
+         el título. */
+      if (CATALOGO.loader) meta.push(CATALOGO.loader);
+      if (CATALOGO.minecraft) meta.push("MC " + CATALOGO.minecraft);
+      if (CATALOGO.mods) meta.push(CATALOGO.mods + " mods");
+      if (CATALOGO.bytes) meta.push(humanBytes(CATALOGO.bytes) + " por descargar");
     } else {
       meta.push(PACK ? "no instalado todavía" : "importa un .mrpack para empezar");
     }
@@ -2351,15 +2363,20 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     if (!play || !playLabel) return Promise.resolve();
     if (!PACK) { playLabel.textContent = "Jugar"; return Promise.resolve(); }
     return call("pack_state", { id: PACK.id }).then(function(e){
+      CATALOGO = e || null;
       var txt = ({ instalar: "Instalar", actualizar: "Actualizar" })[e && e.estado] || "Jugar";
-      /* El tamaño solo cuando hay descarga por delante: en «Jugar» no aporta nada. */
-      if (e && e.bytes) txt += " · " + humanBytes(e.bytes);
       playLabel.textContent = txt;
-      dlog("botón: " + txt + " (" + ((e && e.estado) || "?") + ")");
+      /* La ficha depende de esto cuando no hay nada instalado, y las dos consultas van
+         en paralelo: se repinta con lo que ya hubiera del disco. */
+      renderPack(INSTANCIA);
+      dlog("botón: " + txt + " (" + ((e && e.estado) || "?") +
+           (e && e.bytes ? ", " + humanBytes(e.bytes) : "") + ")");
     }).catch(function(){ playLabel.textContent = "Jugar"; });
   }
 
-  var RAM_REC = null;   /* la recomendación para esta máquina, en GB */
+  var RAM_REC = null;     /* la recomendación para esta máquina, en GB */
+  var INSTANCIA = null;   /* lo último que dijo el disco sobre la instancia */
+  var CATALOGO = null;    /* lo último que dijo el catálogo sobre el pack */
 
   function renderMemory(){
     return call("memory_info").then(function(m){
@@ -2406,8 +2423,9 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   });
 
   function renderInstance(){
-    if (!PACK) { renderPack(null); return Promise.resolve(); }
+    if (!PACK) { INSTANCIA = null; CATALOGO = null; renderPack(null); return Promise.resolve(); }
     return call("instance_info", { id: PACK.id }).then(function(info){
+      INSTANCIA = info;
       renderPack(info);
       if (!info || !info.installed) return;
       $("kvPath").textContent = String(info.path).replace(/^\/Users\/[^/]+/, "~");

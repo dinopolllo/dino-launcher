@@ -900,6 +900,7 @@ async fn pack_state(app: tauri::AppHandle, id: String) -> serde_json::Value {
 
     let mut estado = if instalado { "jugar" } else { "instalar" };
     let mut bytes = 0u64;
+    let mut ficha = serde_json::json!({});
     let mut version = pack.version.clone();
 
     if let Some(code) = pack.code.as_deref().filter(|c| !c.trim().is_empty()) {
@@ -914,12 +915,26 @@ async fn pack_state(app: tauri::AppHandle, id: String) -> serde_json::Value {
                 if !instalado || estado == "actualizar" {
                     bytes = remoto.bytes;
                 }
+                ficha = serde_json::json!({
+                    "minecraft": remoto.minecraft,
+                    "loader": remoto.loader,
+                    "mods": remoto.mods,
+                });
             }
             Err(e) => println!("[PACK] sin catálogo para {code}: {e}"),
         }
     }
 
-    serde_json::json!({ "estado": estado, "bytes": bytes, "version": version })
+    // La ficha va aquí porque es lo único que sabe qué es un pack que **todavía no está
+    // instalado**: en el disco no hay nada que leer, y es justo el momento en que
+    // alguien decide si quiere instalarlo.
+    let mut salida = serde_json::json!({ "estado": estado, "bytes": bytes, "version": version });
+    if let (Some(dest), Some(src)) = (salida.as_object_mut(), ficha.as_object()) {
+        for (k, v) in src {
+            dest.insert(k.clone(), v.clone());
+        }
+    }
+    salida
 }
 
 /// Cambia con qué pack se juega.
