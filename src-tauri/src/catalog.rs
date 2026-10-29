@@ -202,30 +202,116 @@ pub async fn descargar_pack(
     destino: &std::path::Path,
     progreso: &(dyn Fn(u64, u64) + Send + Sync),
 ) -> Result<(), CatalogError> {
-    use futures_util::StreamExt;
-
-    let r = cliente()?.get(&pack.mrpack).send().await?;
-    if !r.status().is_success() {
-        return Err(CatalogError::Estado(r.status().as_u16()));
-    }
-    let total = r.content_length().unwrap_or(pack.bytes);
-
     if let Some(p) = destino.parent() {
         std::fs::create_dir_all(p)?;
     }
-    // A disco según llega, no a memoria: un modpack pesa cientos de megas y tenerlo
-    // entero en RAM solo para comprobarlo es un pico que no hace falta en la máquina de
-    // nadie. Se escribe con otro nombre y solo se renombra si el hash cuadra, así que
-    // un `.mrpack` a medias nunca llega a ocupar el sitio del bueno.
-    use sha2::{Digest, Sha512};
-    use std::io::Write;
-    let parcial = destino.with_extension("parcial");
-    let mut f = std::fs::File::create(&parcial)?;
-    let mut h = Sha512::new();
-    let mut bajado: u64 = 0;
+    let parcial = ruta_parcial(pack, destino);
+    let mut ya = std::fs::metadata(&parcial).map(|m| m.len()).unwrap_or(0);
 
+    // Un resto más grande que el archivo entero no es el principio de nada: sobra.
+    if pack.bytes > 0 && ya >= pack.bytes {
+        let _ = std::fs::remove_file(&parcial);
+        ya = 0;
+    }
+
+    // Dos intentos como mucho: si el servidor rechaza el tramo que pedimos —porque lo
+    // que había sobra o ya no cuadra—, se tira ese resto y se baja entero.
+    for intento in 0..2 {
+        let desde = if intento == 0 { ya } else { 0 };
+        match bajar(pack, &parcial, desde, progreso).await {
+            Err(CatalogError::Estado(416)) if intento == 0 => {
+                println!("[PACK] lo que había a medias ya no sirve: lo bajo entero");
+                let _ = std::fs::remove_file(&parcial);
+            }
+            Err(e) => return Err(e),
+            Ok(hex) => {
+                if let Some(esperado) = pack.sha512.as_deref() {
+                    if hex != esperado.to_lowercase() {
+                        // Un resto dañado no se reaprovecha: se quita para que el
+                        // siguiente intento empiece limpio en vez de repetir el fallo.
+                        let _ = std::fs::remove_file(&parcial);
+                        return Err(CatalogError::HashMalo);
+                    }
+                }
+                std::fs::rename(&parcial, destino)?;
+                return Ok(());
+            }
+        }
+    }
+    Err(CatalogError::Estado(416))
+}
+
+/// Dónde se guarda lo que se va bajando.
+///
+/// El nombre lleva el principio del hash esperado, así que **solo se reanuda lo que es
+/// de esta versión**: un resto de la anterior no se puede mezclar con esta. Sin hash en
+/// el catálogo no hay forma de comprobar nada, y entonces tampoco se reanuda.
+fn ruta_parcial(pack: &PackRemoto, destino: &std::path::Path) -> std::path::PathBuf {
+    match pack.sha512.as_deref().and_then(|h| h.get(..8)) {
+        Some(h) => destino.with_extension(format!("{h}.parcial")),
+        None => destino.with_extension("parcial"),
+    }
+}
+
+/// Baja el archivo a `parcial`, continuando desde `desde`, y devuelve su hash completo.
+///
+/// Se escribe a disco según llega y se va hasheando por el camino: un modpack pesa
+/// cientos de megas y tenerlo entero en RAM solo para comprobarlo es un pico que no
+/// hace falta en la máquina de nadie.
+async fn bajar(
+    pack: &PackRemoto,
+    parcial: &std::path::Path,
+    desde: u64,
+    progreso: &(dyn Fn(u64, u64) + Send + Sync),
+) -> Result<String, CatalogError> {
+    use futures_util::StreamExt;
+    use sha2::{Digest, Sha512};
+    use std::io::{Read, Write};
+
+    let mut req = cliente()?.get(&pack.mrpack);
+    // Reanudar es lo que separa «se cortó internet y vuelvo a empezar los 386 MB» de
+    // «sigo donde iba». El servidor puede no admitirlo: entonces responde 200 con el
+    // archivo entero y aquí se empieza de cero sin más.
+    if desde > 0 {
+        req = req.header(reqwest::header::RANGE, format!("bytes={desde}-"));
+    }
+    let r = req.send().await?;
+    if !r.status().is_success() {
+        return Err(CatalogError::Estado(r.status().as_u16()));
+    }
+    let continua = desde > 0 && r.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+    let total = if continua {
+        desde + r.content_length().unwrap_or(0)
+    } else {
+        r.content_length().unwrap_or(pack.bytes)
+    };
+
+    let mut h = Sha512::new();
+    let mut bajado = 0u64;
+    let mut f = if continua {
+        // El hash se siembra con lo que ya había en disco: una lectura local contra
+        // volver a bajarlo todo.
+        let mut previo = std::fs::File::open(parcial)?;
+        let mut buf = vec![0u8; 1 << 20];
+        loop {
+            let n = previo.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            h.update(&buf[..n]);
+        }
+        bajado = desde;
+        println!("[PACK] reanudo la descarga en {desde} B");
+        std::fs::OpenOptions::new().append(true).open(parcial)?
+    } else {
+        std::fs::File::create(parcial)?
+    };
+
+    progreso(bajado, total);
     let mut stream = r.bytes_stream();
     while let Some(trozo) = stream.next().await {
+        // Lo ya escrito se queda en disco: es justo lo que permite reanudar en vez de
+        // volver a empezar si esto falla a la mitad.
         let trozo = trozo?;
         h.update(&trozo);
         f.write_all(&trozo)?;
@@ -233,18 +319,7 @@ pub async fn descargar_pack(
         progreso(bajado, total);
     }
     f.flush()?;
-    drop(f);
-
-    if let Some(esperado) = pack.sha512.as_deref() {
-        let hex: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
-        if hex != esperado.to_lowercase() {
-            let _ = std::fs::remove_file(&parcial);
-            return Err(CatalogError::HashMalo);
-        }
-    }
-
-    std::fs::rename(&parcial, destino)?;
-    Ok(())
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// Descarga el icono publicado del pack.
@@ -454,6 +529,24 @@ mod tests {
         let f = fuentes();
         assert!(f[0].starts_with("https://api.github.com/"), "primero: {}", f[0]);
         assert!(f.last().unwrap().starts_with("https://raw.githubusercontent.com/"));
+    }
+
+    #[test]
+    fn lo_que_se_baja_a_medias_lleva_el_hash_en_el_nombre() {
+        // Así un resto de la versión anterior no se puede confundir con el principio de
+        // la nueva: son archivos distintos.
+        let mut p = buscar(&parse_catalog(CAT).unwrap(), "dinosmp").unwrap().clone();
+        let destino = std::path::Path::new("/packs/dinosmp.mrpack");
+        p.sha512 = Some("abcdef0123456789".into());
+        let a = ruta_parcial(&p, destino);
+        p.sha512 = Some("0123456789abcdef".into());
+        let b = ruta_parcial(&p, destino);
+        assert_ne!(a, b);
+        assert!(a.to_string_lossy().ends_with(".parcial"), "{a:?}");
+
+        // Sin hash no se reanuda nada, así que basta con un nombre fijo.
+        p.sha512 = None;
+        assert!(ruta_parcial(&p, destino).to_string_lossy().ends_with(".parcial"));
     }
 
     #[test]

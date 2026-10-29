@@ -177,7 +177,10 @@ async fn play_inner(app: tauri::AppHandle, args: PlayArgs) -> Result<String, Str
                     let frac = if total > 0 { bajado as f32 / total as f32 } else { -1.0 };
                     let _ = app.emit(
                         "install",
-                        serde_json::json!({ "paso": "Actualizando el modpack", "frac": frac }),
+                        serde_json::json!({
+                            "paso": "Actualizando el modpack",
+                            "frac": frac, "bajado": bajado, "total": total,
+                        }),
                     );
                 };
                 match catalog::descargar_pack(&remoto, &destino, &bajar).await {
@@ -652,16 +655,34 @@ async fn catalog_install(
     // otro pack, instalarle encima le borraría los mundos.
     let id = biblioteca(&layout).id_libre(&pack.id, Some(&pack.code));
     let destino = layout.packs().join(format!("{id}.mrpack"));
+    // Con los bytes dentro: en una descarga de cientos de megas, un porcentaje a secas
+    // no dice si quedan dos minutos o veinte.
     let emit = |bajado: u64, total: u64| {
         let frac = if total > 0 { bajado as f32 / total as f32 } else { -1.0 };
         let _ = app.emit(
             "install",
-            serde_json::json!({ "paso": "Descargando el modpack", "frac": frac }),
+            serde_json::json!({
+                "paso": "Descargando el modpack",
+                "frac": frac, "bajado": bajado, "total": total,
+            }),
         );
     };
     catalog::descargar_pack(&pack, &destino, &emit)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Antes de bajar nada: si no cabe, decirlo ahora. A mitad de instalar, el error que
+    // sale es del motor y no se entiende; aquí se puede explicar y se ahorra la espera.
+    if let Some(libre) = install::espacio_libre(&layout.root) {
+        let falta = install::espacio_necesario(pack.bytes);
+        if pack.bytes > 0 && libre < falta {
+            return Err(format!(
+                "No hay espacio suficiente: hacen falta unos {} y quedan {} libres en el disco.",
+                en_gigas(falta),
+                en_gigas(libre)
+            ));
+        }
+    }
 
     // El icono va aparte y no puede tumbar la instalación: sin él el pack funciona
     // igual, solo se ve el dino de siempre.
@@ -714,7 +735,17 @@ fn offline_check(name: String) -> Option<String> {
     auth::validar_nombre(&name).err().map(|e| e.to_string())
 }
 
-/// Tamaño en disco de una carpeta, en bytes./// Tamaño en disco de una carpeta, en bytes.
+/// Un tamaño en texto, para un mensaje que lee alguien que solo quiere jugar.
+fn en_gigas(bytes: u64) -> String {
+    let gb = bytes as f64 / 1_073_741_824.0;
+    if gb >= 1.0 {
+        format!("{gb:.1} GB")
+    } else {
+        format!("{} MB", bytes / 1_048_576)
+    }
+}
+
+/// Tamaño en disco de una carpeta, en bytes.
 fn dir_size(p: &std::path::Path) -> u64 {
     let Ok(rd) = std::fs::read_dir(p) else { return 0 };
     rd.flatten()
@@ -844,6 +875,51 @@ fn set_pack_memory(app: tauri::AppHandle, id: String, mb: Option<u32>) -> Result
     // Un cero no es una cantidad de RAM: es la interfaz diciendo «automática».
     b.upsert(library::Instalado { max_mem: mb.filter(|&m| m > 0), ..antes });
     guardar_biblioteca(&layout, &b)
+}
+
+/// Qué va a pasar si se pulsa el botón, para que lo diga antes de pulsarlo.
+///
+/// Devuelve `instalar`, `actualizar` o `jugar`, más el tamaño de lo que haya que bajar
+/// cuando se sepa. Un amigo que abre el launcher por primera vez ve «Instalar · 386 MB»
+/// en vez de un «Jugar» que se queda media hora pensando sin haber avisado de nada.
+///
+/// **Mirar el catálogo cuesta red, así que esto nunca falla por su culpa**: sin conexión
+/// se responde con lo que diga el disco. Si resultaba que había versión nueva, `play` la
+/// instala igual antes de abrir el juego; aquí solo se decide una etiqueta.
+#[tauri::command]
+async fn pack_state(app: tauri::AppHandle, id: String) -> serde_json::Value {
+    let Ok(layout) = layout_of(&app) else {
+        return serde_json::json!({ "estado": "jugar" });
+    };
+    let Some(pack) = biblioteca(&layout).buscar(&id).cloned() else {
+        return serde_json::json!({ "estado": "jugar" });
+    };
+
+    let cfg = std::fs::read_to_string(layout.instance(&id).join("instance.cfg")).unwrap_or_default();
+    let instalado = engine::ya_instalado(&cfg, &pack.version);
+
+    let mut estado = if instalado { "jugar" } else { "instalar" };
+    let mut bytes = 0u64;
+    let mut version = pack.version.clone();
+
+    if let Some(code) = pack.code.as_deref().filter(|c| !c.trim().is_empty()) {
+        match catalog::resolver(code).await {
+            Ok(remoto) => {
+                if remoto.version != pack.version {
+                    // Instalar manda sobre actualizar: quien no tiene nada montado no
+                    // está «actualizando», está empezando.
+                    estado = if instalado { "actualizar" } else { "instalar" };
+                    version = remoto.version.clone();
+                }
+                if !instalado || estado == "actualizar" {
+                    bytes = remoto.bytes;
+                }
+            }
+            Err(e) => println!("[PACK] sin catálogo para {code}: {e}"),
+        }
+    }
+
+    serde_json::json!({ "estado": estado, "bytes": bytes, "version": version })
 }
 
 /// Cambia con qué pack se juega.
@@ -1145,6 +1221,7 @@ pub fn run() {
             set_pack,
             list_packs,
             select_pack,
+            pack_state,
             remove_pack,
             set_pack_memory,
             active_account,

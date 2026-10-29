@@ -175,6 +175,19 @@ jobs:
           mkdir -p dist
           find recogido -type f ! -name 'frag-*.json' -exec cp {} dist/ \;
 
+          # Copias con nombre fijo, sin la versión dentro. Son las que puede enlazar
+          # cualquiera —`releases/latest/download/<nombre>`— sin que el enlace se rompa
+          # al publicar la siguiente versión: es lo que permite que la página de
+          # invitación ofrezca el instalador de verdad en vez de mandar a buscarlo a
+          # GitHub. Los nombres con versión se quedan como están, que son los que firma
+          # el updater y los que nombra `latest.json`.
+          for f in dist/dino-launcher_*_x64-setup.exe; do
+            [ -e "$f" ] && cp "$f" dist/DinoLauncher-Windows-setup.exe
+          done
+          for f in dist/dino-launcher_*_universal.dmg; do
+            [ -e "$f" ] && cp "$f" dist/DinoLauncher-macOS.dmg
+          done
+
           # Un solo latest.json con las dos plataformas dentro. Si ninguna se firmó,
           # no se escribe: es preferible no publicar manifiesto a publicar uno vacío,
           # que dejaría a los instalados comprobando algo que nunca les sirve.

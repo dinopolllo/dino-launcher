@@ -508,6 +508,50 @@ pub fn hide_windows_of(pid: u32) -> Vec<String> {
     Vec::new()
 }
 
+/// Espacio libre en el disco donde vive esa carpeta, en bytes.
+///
+/// `None` cuando no se puede saber. Entonces no se bloquea nada: un aviso que no se
+/// puede comprobar no vale lo que cuesta impedir una instalación que quizá cabía.
+#[cfg(windows)]
+pub fn espacio_libre(dir: &Path) -> Option<u64> {
+    #[link(name = "kernel32")]
+    #[allow(non_snake_case)] // los nombres son los de la API, no se traducen
+    extern "system" {
+        fn GetDiskFreeSpaceExW(dir: *const u16, libre: *mut u64, total: *mut u64, libre_total: *mut u64) -> i32;
+    }
+    // La carpeta puede no existir todavía; el disco sí, y es lo que se mide. Se sube
+    // hasta el primer antepasado que exista.
+    let mut d = dir.to_path_buf();
+    while !d.exists() {
+        if !d.pop() {
+            return None;
+        }
+    }
+    let ancho: Vec<u16> = d.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
+    let (mut libre, mut total, mut libre_total) = (0u64, 0u64, 0u64);
+    let ok = unsafe { GetDiskFreeSpaceExW(ancho.as_ptr(), &mut libre, &mut total, &mut libre_total) };
+    (ok != 0).then_some(libre)
+}
+
+#[cfg(not(windows))]
+pub fn espacio_libre(dir: &Path) -> Option<u64> {
+    let _ = dir;
+    None
+}
+
+/// Cuánto disco hace falta para un `.mrpack` de `bytes`.
+///
+/// El archivo se guarda, se extrae, y encima el motor baja los mods y los assets del
+/// juego, que pesan más que el propio pack. Tres veces y medio el tamaño es una cuenta
+/// prudente sacada del pack de prueba: 386 MB de `.mrpack` acabaron en algo más de
+/// 1,2 GB instalados.
+///
+/// Más vale avisar de menos: parar una instalación que sí cabía es peor que dejarla
+/// empezar y que falle el motor, que al menos deja su error.
+pub fn espacio_necesario(bytes: u64) -> u64 {
+    bytes.saturating_mul(7) / 2
+}
+
 /// ¿Sigue vivo ese proceso?
 ///
 /// Por API y no enumerando: esto se llama en bucle mientras se esconde la ventana, y
@@ -1163,6 +1207,27 @@ mod tests {
             assert!(marca.exists(), "sin marca para {nombre}: el motor preguntaría");
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn el_espacio_que_pedimos_es_el_del_pack_con_margen() {
+        // Lo instalado pesa más que el .mrpack: se guarda, se extrae y el motor baja
+        // además los assets del juego.
+        let pack = 386 * 1024 * 1024;
+        let falta = espacio_necesario(pack);
+        assert!(falta > pack * 3 && falta < pack * 4, "pedimos {falta} para un pack de {pack}");
+        assert_eq!(espacio_necesario(0), 0);
+        // Sin desbordar con un pack absurdo: eso haría pasar la comprobación siempre.
+        assert!(espacio_necesario(u64::MAX) > 0);
+    }
+
+    #[test]
+    fn el_disco_de_esta_maquina_se_puede_medir() {
+        // Si esto devolviera None aquí, el aviso no serviría de nada en Windows.
+        let libre = espacio_libre(&std::env::temp_dir());
+        if cfg!(windows) {
+            assert!(libre.unwrap_or(0) > 0, "no pude medir el disco");
+        }
     }
 
     #[test]

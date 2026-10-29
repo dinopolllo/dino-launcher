@@ -489,12 +489,26 @@ html.win{--r-window:10px}
 .rail-spacer{flex:1}
 
 /* Dentro de la barra de vidrio, una tarjeta con su propio borde sería vidrio sobre
-   vidrio. Es una fila separada por una línea, como el perfil al pie de una barra. */
+   vidrio. Es una fila separada por una línea, como el perfil al pie de una barra.
+
+   Y ahora se pulsa —abre el cambio de cuenta—, así que tiene que parecerlo: cursor,
+   realce al pasar por encima y anillo de foco. La línea de separación pasa a un
+   pseudoelemento porque el realce es redondeado, y un borde recto cruzando una esquina
+   redondeada se lee como un recorte. El relleno se iguala por abajo: de fila estática
+   llevaba 2px, y con realce el texto quedaba pegado al canto. */
 .account{
-  margin:0 2px;padding:12px 8px 2px;
+  position:relative;
+  margin:13px 2px 0;padding:10px 8px;
   display:flex;flex-direction:column;gap:9px;
-  border-top:1px solid rgba(255,255,255,.07);
+  border-radius:12px;cursor:pointer;
+  transition:background .16s ease;
 }
+.account::before{
+  content:"";position:absolute;left:6px;right:6px;top:-13px;height:1px;
+  background:rgba(255,255,255,.07);
+}
+.account:hover{background:rgba(255,255,255,.07)}
+.account:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 .account-row{display:flex;align-items:center;gap:9px}
 .account canvas{width:30px;height:30px;border-radius:7px;image-rendering:pixelated;flex:none}
 .account-name{font-weight:600;font-size:13px;line-height:1.15}
@@ -742,6 +756,15 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 .upbar-btn:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 .upbar-btn[disabled]{opacity:.55;cursor:default}
 
+.alert-raw{
+  display:block;margin-top:7px;
+  font-family:var(--font-mono);font-size:10.5px;line-height:1.5;
+  /* El color sale del propio aviso y no del gris de siempre: un gris verdoso dentro de
+     un recuadro rosa se lee como un fallo de pintado. Es el tono del aviso, más
+     apagado, porque esto es el detalle técnico y no el mensaje. */
+  color:rgba(245,201,206,.62);
+  overflow-wrap:anywhere;
+}
 .alert{
   margin-top:16px;border-radius:var(--r-card);padding:12px 14px;
   background:rgba(255,107,122,.09);
@@ -1323,7 +1346,11 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
       <div class="rail-spacer"></div>
 
-      <div class="account">
+      <!-- Se puede pulsar: es la única forma de volver al setup para cambiar de cuenta
+           o releer la diferencia entre las dos. Antes, quien elegía una se quedaba con
+           ella para siempre sin ninguna vía de vuelta. -->
+      <div class="account" id="accountBtn" role="button" tabindex="0"
+           title="Cambiar de cuenta o ver cómo funcionan">
         <div class="account-row">
           <canvas data-head="?" width="8" height="8"></canvas>
           <div>
@@ -1789,6 +1816,17 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
             <small>Juegas con el nombre que elijas. Sin cuenta y sin instalar nada más.</small>
           </button>
         </div>
+        <!-- La diferencia entre las dos, en dos frases y solo si se pide: quien ya sabe
+             cuál le toca no tiene por qué leerla, y quien no, no debería tener que
+             buscarla fuera. -->
+        <button type="button" class="link-min" id="sp-ayuda" style="margin-top:14px">¿Cuál me toca?</button>
+        <div class="note" id="sp-ayuda-txt" hidden style="margin-top:10px;text-align:left">
+          <b>Con cuenta de Microsoft</b> entras con el Minecraft que compraste: tu nombre y
+          tu skin son los de siempre, y te sirve en cualquier servidor.<br><br>
+          <b>Sin cuenta</b> juegas con el nombre que escribas aquí. No es una cuenta oficial
+          de Minecraft: vale en los servidores que lo permitan —el nuestro sí—, pero no en
+          los que piden sesión oficial, y la skin no se sincroniza.
+        </div>
       </div>
 
       <div class="ob-step" data-sp="2-msa">
@@ -2218,6 +2256,40 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     return name.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
                .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "modpack";
   }
+  function escapar(t){
+    return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  /* Traduce lo que devuelve el backend a algo que diga **qué hacer**. El texto técnico
+     se queda debajo en pequeño: sirve para diagnosticar sin asustar a quien solo quería
+     jugar, y es lo que se puede copiar y mandar si hay que mirarlo. */
+  var ERRORES = [
+    [/sin conexión|error de red|dns|connect|tiempo de espera|timed out/i,
+     "Parece que no hay internet. Revisa tu conexión y vuelve a intentarlo."],
+    [/hash|dañad|corrupt|incomplet/i,
+     "La descarga llegó incompleta. Vuelve a darle: sigue desde donde se quedó."],
+    [/no encontré ningún modpack/i,
+     "Ese código no existe. Pídeselo otra vez a quien te lo pasó."],
+    [/espacio|os error 112/i,
+     "No queda espacio en el disco para instalarlo."],
+    [/permiso|denied|os error 5/i,
+     "Windows no dejó escribir en la carpeta. Cierra el juego, y si sigue, reinicia el launcher."],
+    [/404|not found|no such file/i,
+     "El archivo ya no está donde decía el catálogo. Avisa a quien lo publicó."]
+  ];
+
+  function showError(titulo, err){
+    var crudo = String(err || "");
+    for (var i = 0; i < ERRORES.length; i++) {
+      if (ERRORES[i][0].test(crudo)) {
+        showAlert("<b>" + escapar(titulo) + "</b> " + ERRORES[i][1] +
+                  '<small class="alert-raw">' + escapar(crudo) + "</small>");
+        return;
+      }
+    }
+    showAlert("<b>" + escapar(titulo) + "</b> " + escapar(crudo));
+  }
+
   function showAlert(html){
     var el = $("alert");
     if (!el) return;
@@ -2262,6 +2334,23 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     if (play) play.disabled = !PACK;
   }
 
+  /* El botón principal dice lo que va a pasar al pulsarlo, con el peso de lo que haya
+     que bajar cuando se sepa. Antes siempre ponía «Jugar»: el primer clic de un amigo
+     se iba media hora a descargar sin haberle avisado de nada, y eso se parece
+     demasiado a que el launcher se colgó. */
+  function renderBoton(){
+    var play = document.querySelector(".play");
+    if (!play || !playLabel) return Promise.resolve();
+    if (!PACK) { playLabel.textContent = "Jugar"; return Promise.resolve(); }
+    return call("pack_state", { id: PACK.id }).then(function(e){
+      var txt = ({ instalar: "Instalar", actualizar: "Actualizar" })[e && e.estado] || "Jugar";
+      /* El tamaño solo cuando hay descarga por delante: en «Jugar» no aporta nada. */
+      if (e && e.bytes) txt += " · " + humanBytes(e.bytes);
+      playLabel.textContent = txt;
+      dlog("botón: " + txt + " (" + ((e && e.estado) || "?") + ")");
+    }).catch(function(){ playLabel.textContent = "Jugar"; });
+  }
+
   var RAM_REC = null;   /* la recomendación para esta máquina, en GB */
 
   function renderMemory(){
@@ -2304,7 +2393,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       if (PACK && PACK.id === id) PACK.max_mem = mb;
       return renderMemory();
     }).catch(function(e){
-      showAlert("<b>No pude guardar la RAM.</b> " + String(e));
+      showError("No pude guardar la RAM.", e);
     });
   });
 
@@ -2389,8 +2478,8 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       PACK = p && p.id ? p : null;
       $("kvEngine").textContent = "ElyPrism 11.1.0 · administrado";
       setSync(PACK ? "listo para jugar" : "sin modpack", !!PACK);
-      return Promise.all([renderInstance(), renderAccount(), renderServer(),
-                          renderMemory(), renderJava(), renderBiblioteca()]);
+      return Promise.all([renderInstance(), renderAccount(), renderServer(), renderMemory(),
+                          renderJava(), renderBiblioteca(), renderBoton()]);
     }).catch(function(){});
   }
 
@@ -2529,8 +2618,15 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     marcarSesionEnBiblioteca(cual === "jugando");
   }
 
-  function setProgress(paso, frac){
+  function setProgress(paso, frac, bajado, total){
     if (paso) launchPhase.textContent = paso;
+    /* Los megas cuando se sepan: en una descarga de cientos, un porcentaje a secas no
+       dice si quedan dos minutos o veinte. Los pasos que no bajan nada lo dejan vacío. */
+    if (launchAmt) {
+      launchAmt.textContent = total
+        ? humanBytes(bajado || 0) + " / " + humanBytes(total)
+        : "";
+    }
     if (typeof frac === "number" && frac >= 0) {
       launchBar.removeAttribute("data-indeterminate");
       launchBar.style.setProperty("--frac", Math.round(frac * 100) + "%");
@@ -2543,7 +2639,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   if (tauri) {
     tauri.event.listen("install", function(e){
       var p = e.payload || {};
-      setProgress(p.paso, p.frac);
+      setProgress(p.paso, p.frac, p.bajado, p.total);
       progresoInvitacion(p.paso, p.frac);
     });
   }
@@ -2691,7 +2787,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       }
       return r;
     }).catch(function(err){
-      showAlert("<b>No se pudo.</b> " + String(err));
+      showError("No se pudo.", err);
       estadoPrevio = null; mostrarEstado("reposo");
       throw err;
     }).finally(function(){
@@ -2711,7 +2807,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       if (!PACK) return;
       call("instance_info", { id: PACK.id }).then(function(i){
         if (i && i.path) return call("open_folder", { path: i.path });
-      }).catch(function(e){ showAlert("<b>No pude abrir la carpeta.</b> " + e); });
+      }).catch(function(e){ showError("No pude abrir la carpeta.", e); });
     });
   }
   var btnVerify = $("btnVerify");
@@ -2886,6 +2982,29 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
   document.getElementById("sp-cerrar").addEventListener("click", spCerrar);
   spAtras.addEventListener("click", function(){ spParar(); spIr("1", 1); });
+
+  var spAyuda = document.getElementById("sp-ayuda");
+  if (spAyuda) {
+    spAyuda.addEventListener("click", function(){
+      var t = document.getElementById("sp-ayuda-txt");
+      t.hidden = !t.hidden;
+      spAyuda.textContent = t.hidden ? "¿Cuál me toca?" : "Entendido";
+    });
+  }
+
+  /* Volver al setup desde la cuenta del rail: para cambiarla, o para releer qué es cada
+     una. Con una partida abierta no, que acabaría cambiando la cuenta por debajo. */
+  var accountBtn = document.getElementById("accountBtn");
+  if (accountBtn) {
+    var abrirCuentas = function(){
+      if (estadoPrevio === "jugando") return;
+      spAbrir();
+    };
+    accountBtn.addEventListener("click", abrirCuentas);
+    accountBtn.addEventListener("keydown", function(e){
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); abrirCuentas(); }
+    });
+  }
 
   /* Cortar la espera del login: se deja de sondear, se cierra el motor y se vuelve a
      elegir. Sin esto la única salida era cerrar a mano la ventana del motor, que es
@@ -3270,7 +3389,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     call("select_pack", { id: id }).then(refreshAll).then(function(){
       document.querySelector('[data-go="jugar"]').click();
     }).catch(function(e){
-      showAlert("<b>No pude cambiar de modpack.</b> " + String(e));
+      showError("No pude cambiar de modpack.", e);
     });
   }
 
@@ -3318,7 +3437,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     call("remove_pack", { id: id, deleteFiles: borrar })
       .then(refreshAll)
       .catch(function(e){
-        showAlert("<b>No pude quitar " + nombre + ".</b> " + String(e));
+        showError("No pude quitar " + nombre + ".", e);
         refreshAll();
       });
   }
@@ -3446,7 +3565,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
            apuntando a nuestra carpeta y no al disco de quien lo publicó. */
         return refreshAll().then(function(){ return runPlay(); });
       }).catch(function(e){
-        showAlert("<b>No se pudo instalar.</b> " + String(e));
+        showError("No se pudo instalar.", e);
         estadoPrevio = null; mostrarEstado("reposo");
         joinEstado("encontrado");
       }).finally(function(){ btn.disabled = false; });
