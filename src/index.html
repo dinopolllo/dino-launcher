@@ -575,7 +575,12 @@ h2{font-family:var(--font-display);font-weight:700;font-size:16px;letter-spacing
 .hero-left{min-width:0;position:relative;z-index:1;display:flex;gap:18px;align-items:center}
 .pack-title{
   font-family:var(--font-display);font-weight:800;
-  font-size:33px;line-height:1.02;letter-spacing:-.032em;margin:0 0 9px;
+  /* Cede tamaño antes que partirse una línea más. El botón de Jugar ahora puede decir
+     «Instalar · 387 MB», que es ~85px más ancho que «Jugar», y ese ancho sale de esta
+     columna: con la ventana en su mínimo y un nombre largo, el título se iba a cuatro
+     líneas. Entre 900 y 1200 baja de 33 a 26 y vuelve a caber en tres. */
+  font-size:clamp(26px, 2.4vw + 10px, 33px);
+  line-height:1.02;letter-spacing:-.032em;margin:0 0 9px;
 }
 .metaline{
   font-family:var(--font-mono);font-size:11.5px;color:var(--text-dim);
@@ -597,8 +602,11 @@ h2{font-family:var(--font-display);font-weight:700;font-size:16px;letter-spacing
 
 .play{
   border:0;cursor:pointer;border-radius:16px;
-  padding:16px 38px;
+  /* 38 de lado era holgado cuando el botón decía una palabra; ahora puede llevar una
+     línea entera, y ese holgor se lo quitaba al título de al lado. */
+  padding:16px 30px;
   font-family:var(--font-display);font-weight:700;font-size:16px;
+  white-space:nowrap;
   color:#04170A;
   background:linear-gradient(165deg,#99D984,var(--green) 48%,var(--green-hot) 78%,var(--green-deep));
   box-shadow:
