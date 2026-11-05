@@ -165,11 +165,13 @@ async fn play_inner(app: tauri::AppHandle, args: PlayArgs) -> Result<String, Str
     // mundo: se registra y se sigue con lo que haya instalado.
     let mut version = args.version.clone();
     let mut mrpack = std::path::PathBuf::from(&args.mrpack);
+    let mut server = args.server.clone();
     if let Some(code) = args.code.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
         emit("Buscando actualizaciones", -1.0);
         match catalog::resolver(code).await {
             Ok(remoto) if remoto.version != version => {
                 println!("[PLAY] hay versión nueva del pack: {} -> {}", version, remoto.version);
+                seguir_servidor(&layout, &args.instance_id, &remoto, &mut server);
                 // Con el id local, no el del catálogo: es el que dice dónde vive este
                 // pack en esta máquina.
                 let destino = layout.packs().join(format!("{}.mrpack", args.instance_id));
@@ -223,7 +225,10 @@ async fn play_inner(app: tauri::AppHandle, args: PlayArgs) -> Result<String, Str
                     }
                 }
             }
-            Ok(_) => println!("[PLAY] el modpack ya está al día"),
+            Ok(remoto) => {
+                println!("[PLAY] el modpack ya está al día");
+                seguir_servidor(&layout, &args.instance_id, &remoto, &mut server);
+            }
             Err(e) => println!("[PLAY] no pude comprobar actualizaciones: {e}"),
         }
     }
@@ -236,7 +241,7 @@ async fn play_inner(app: tauri::AppHandle, args: PlayArgs) -> Result<String, Str
         max_mem,
         // Un flag experimental sin desbloquear impide que la JVM arranque siquiera.
         jvm_args: engine::normalize_jvm_args(&args.jvm_args),
-        server: args.server.clone(),
+        server: server.clone(),
     };
 
     // El motor tiene que ser invisible: nada de consola, y que se cierre solo
@@ -292,7 +297,7 @@ async fn play_inner(app: tauri::AppHandle, args: PlayArgs) -> Result<String, Str
         &layout,
         &args.instance_id,
         &account,
-        args.server.as_deref(),
+        server.as_deref(),
     );
     // Un perfil vacío confundiría al motor; mejor no pasar la bandera.
     if matches!(&account, engine::Account::Profile(p) if p.is_empty()) {
@@ -773,6 +778,32 @@ fn layout_of(app: &tauri::AppHandle) -> Result<engine::Layout, String> {
 ///
 /// Uno ilegible se aparta en vez de ignorarse: seguir como si no hubiera nada haría que
 /// el primer guardado se llevara por delante la lista buena.
+/// El servidor de un pack del catálogo es el que diga el catálogo **ahora**, no el de
+/// cuando se instaló. El host puede cambiarle la IP al servidor sin que cambie el pack, y
+/// antes el servidor solo se releía con una versión nueva, y aun entonces ese primer
+/// Jugar salía con el viejo: «Connection timed out» para todos (VoidSafio, 03-11-2026).
+/// Un catálogo sin servidor no borra el que hay. Se anota en la biblioteca.
+fn seguir_servidor(
+    layout: &engine::Layout,
+    instance_id: &str,
+    remoto: &catalog::PackRemoto,
+    server: &mut Option<String>,
+) {
+    let Some(nuevo) = remoto.server.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        return;
+    };
+    if server.as_deref() == Some(nuevo) {
+        return;
+    }
+    println!("[PLAY] el servidor del pack cambió: {:?} -> {nuevo}", server);
+    *server = Some(nuevo.to_string());
+    let mut b = biblioteca(layout);
+    if let Some(antes) = b.buscar(instance_id).cloned() {
+        b.upsert(library::Instalado { server: server.clone(), ..antes });
+        let _ = guardar_biblioteca(layout, &b);
+    }
+}
+
 fn biblioteca(layout: &engine::Layout) -> library::Biblioteca {
     let ruta = layout.root.join("packs.json");
     let Ok(txt) = std::fs::read_to_string(&ruta) else {
@@ -1425,5 +1456,26 @@ mod tests {
         let leida = biblioteca(&l);
         assert_eq!(leida.packs.len(), 2);
         assert_eq!(leida.seleccionado().unwrap().id, "b");
+    }
+    #[test]
+    fn el_servidor_sigue_al_catalogo_aunque_la_version_no_cambie() {
+        let l = carpeta("servidor-movido");
+        let mut b = library::Biblioteca::default();
+        b.upsert(library::Instalado { server: Some("212.192.29.52:25571".into()), ..entrada("void") });
+        guardar_biblioteca(&l, &b).unwrap();
+        let mut remoto: catalog::PackRemoto = serde_json::from_value(serde_json::json!({
+            "code": "VOID", "id": "void", "name": "void", "version": "1.0.0",
+            "mrpack": "https://x/void.mrpack", "server": "voidsafio.minecra.fr"
+        }))
+        .unwrap();
+
+        let mut server = Some("212.192.29.52:25571".to_string());
+        seguir_servidor(&l, "void", &remoto, &mut server);
+        assert_eq!(server.as_deref(), Some("voidsafio.minecra.fr"), "este mismo Jugar ya usa el nuevo");
+        assert_eq!(biblioteca(&l).buscar("void").unwrap().server.as_deref(), Some("voidsafio.minecra.fr"));
+
+        remoto.server = None;
+        seguir_servidor(&l, "void", &remoto, &mut server);
+        assert_eq!(server.as_deref(), Some("voidsafio.minecra.fr"), "un catálogo sin servidor no lo borra");
     }
 }
