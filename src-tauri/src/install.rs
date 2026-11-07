@@ -1089,6 +1089,9 @@ pub async fn install_pack(
         }
     }
 
+    // Lo que trae esta versión, para saber luego qué sobra de la anterior.
+    let mut nuevos: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     // 1. overrides -> respetando lo que ya es del jugador
     progress("Copiando configuración", 0.05);
     for i in 0..zip.len() {
@@ -1106,6 +1109,7 @@ pub async fn install_pack(
             continue;
         };
         let rel = pack::safe_relative(rel)?;
+        nuevos.insert(rel.clone());
         let out = minecraft.join(&rel);
         // Los archivos "seed" son del jugador: solo se escriben la primera vez.
         if pack::is_seed(&rel) && out.exists() {
@@ -1123,6 +1127,7 @@ pub async fn install_pack(
     let total = index.files.len().max(1);
     for (n, file) in index.files.iter().enumerate() {
         let rel = pack::safe_relative(&file.path)?;
+        nuevos.insert(rel.clone());
         let out = minecraft.join(&rel);
         let frac = 0.1 + 0.85 * (n as f32 / total as f32);
 
@@ -1152,13 +1157,50 @@ pub async fn install_pack(
         std::fs::write(&out, data)?;
     }
 
-    // 3. configuración de la instancia
+    // 3. lo que la versión anterior puso y esta ya no trae (ver `pack::sobrantes`)
+    quitar_sobrantes(&dir, &minecraft, &nuevos);
+
+    // 4. configuración de la instancia
     progress("Configurando la instancia", 0.97);
     std::fs::write(dir.join("mmc-pack.json"), pack::mmc_pack(&index.dependencies)?)?;
     std::fs::write(dir.join("instance.cfg"), engine::instance_cfg(settings))?;
 
     progress("Listo", 1.0);
     Ok(())
+}
+
+/// Lo que anota cada instalación: los archivos que puso el pack, relativos a `minecraft/`.
+const REGISTRO: &str = "dino-archivos.json";
+
+/// Borra lo que sobra de la versión anterior del pack y anota lo de esta. Un fallo aquí
+/// no impide jugar: como mucho queda algo de más, igual que antes de existir esto.
+fn quitar_sobrantes(dir: &Path, minecraft: &Path, nuevos: &std::collections::HashSet<String>) {
+    let previos: Option<std::collections::HashSet<String>> = std::fs::read_to_string(dir.join(REGISTRO))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .map(|v| v.into_iter().collect());
+    let mods: Vec<String> = std::fs::read_dir(minecraft.join("mods"))
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    for rel in pack::sobrantes(previos.as_ref(), nuevos, &mods) {
+        // Ya pasó por `safe_relative` (o es un nombre de `mods/` sin separadores).
+        let Ok(rel) = pack::safe_relative(&rel) else { continue };
+        match std::fs::remove_file(minecraft.join(&rel)) {
+            Ok(()) => println!("[PACK] quitado lo que ya no trae el pack: {rel}"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => println!("[PACK] no pude quitar {rel}: {e}"),
+        }
+    }
+    let mut lista: Vec<&String> = nuevos.iter().collect();
+    lista.sort();
+    if let Ok(s) = serde_json::to_string_pretty(&lista) {
+        let _ = std::fs::write(dir.join(REGISTRO), s);
+    }
 }
 
 fn hex512(bytes: &[u8]) -> String {
