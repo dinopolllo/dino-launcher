@@ -11,9 +11,7 @@
 //! Los datos van a `DINO_HOME` o, si no está, a `%USERPROFILE%\dino-v2-data`: a propósito
 //! fuera de `AppData`, para no mezclarse con el 1.x instalado.
 
-use dino_core::schema::{
-    self, InstallState, InstanceManifest, JavaChoice, Library, LibraryEntry, Memory, PackSource, Paths,
-};
+use dino_core::schema::{self, InstallState, InstanceManifest, JavaChoice, LibraryEntry, Memory, PackSource, Paths};
 use dino_download::{Downloader, Progress};
 use dino_minecraft::launch::{Account, LaunchSpec};
 use dino_minecraft::{install, launch, mrpack};
@@ -28,7 +26,8 @@ const USAGE: &str = "uso:
   dino-cli accounts
   dino-cli verify <cuenta-microsoft>
   dino-cli migrate-plan <raiz-1.x> <salida.json>
-  dino-cli diagnostics <salida.zip>";
+  dino-cli diagnostics <salida.zip>
+  dino-cli bench-download <pack.mrpack> <concurrencias, p. ej. 1,4,8,16,32>";
 
 fn home() -> PathBuf {
     std::env::var_os("DINO_HOME").map(PathBuf::from).unwrap_or_else(|| {
@@ -89,6 +88,7 @@ async fn main() {
         Some("accounts") => cmd_accounts(),
         Some("verify") if args.len() >= 2 => cmd_verify(&args[1]).await,
         Some("migrate-plan") if args.len() >= 3 => cmd_migrate_plan(&args[1], &args[2]),
+        Some("bench-download") if args.len() >= 3 => cmd_bench_download(&paths, &args[1], &args[2]).await,
         Some("diagnostics") if args.len() >= 2 => dino_log::export_report(&paths, std::path::Path::new(&args[1]))
             .map(|n| println!("{n} archivos en {}", args[1]))
             .map_err(|e| e.to_string()),
@@ -102,6 +102,40 @@ async fn main() {
         eprintln!("ERROR: {e}");
         std::process::exit(1);
     }
+}
+
+/// Benchmark de descargas: los mods de un pack, desde cero y sin caché, con cada
+/// concurrencia. Cada pasada usa una carpeta vacía que se borra al acabar.
+async fn cmd_bench_download(paths: &Paths, mrpack: &str, list: &str) -> Result<(), String> {
+    let index = mrpack::read_index(std::path::Path::new(mrpack)).map_err(|e| e.to_string())?;
+    let levels: Vec<usize> = list.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+    for c in levels {
+        let dir = paths.root.join("bench").join(format!("c{c}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let items: Vec<dino_download::Item> = index
+            .files
+            .iter()
+            .filter_map(|f| {
+                Some(dino_download::Item {
+                    url: f.downloads.first()?.clone(),
+                    dest: dir.join(mrpack::safe_relative(&f.path).ok()?),
+                    sha1: f.hashes.get("sha1").cloned(),
+                    size: Some(f.file_size).filter(|s| *s > 0),
+                    shared: false,
+                })
+            })
+            .collect();
+        let t0 = Instant::now();
+        let st = Downloader::new(c).fetch_all(items, &|_| {}).await.map_err(|e| e.to_string())?;
+        let secs = t0.elapsed().as_secs_f64();
+        println!(
+            "{}",
+            serde_json::json!({"concurrency": c, "files": st.files, "mb": mb(st.downloaded_bytes),
+                "secs": secs, "mb_per_s": mb(st.downloaded_bytes) / secs})
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    Ok(())
 }
 
 /// `accounts.json` del motor de 1.x: el puente solo lo lee.
@@ -183,7 +217,11 @@ async fn cmd_install(paths: &Paths, src: &str, id: &str) -> Result<(), String> {
         return Err(format!("«{id}» no vale como id: minúsculas, números y guiones"));
     }
     let t0 = Instant::now();
-    let dl = Downloader::new(32);
+    let store = dino_config::Store::new(paths.clone());
+    let cfg = store.config().map_err(|e| e.to_string())?;
+    let dl = Downloader::new(cfg.download_concurrency as usize)
+        .with_cache(paths.shared_files())
+        .with_rate_limit(cfg.download_limit);
     let pr = Printer { last: Mutex::new(Default::default()) };
     let report = |l: &str, p: Option<Progress>| pr.report(l, p);
 
@@ -231,18 +269,22 @@ async fn cmd_install(paths: &Paths, src: &str, id: &str) -> Result<(), String> {
 
     manifest.state = InstallState::Ready;
     schema::save(&paths.instance_manifest(id), &manifest, schema::INSTANCE_SCHEMA).map_err(|e| e.to_string())?;
-    let mut lib: Library = schema::load(&paths.library()).map_err(|e| e.to_string())?.unwrap_or_default();
-    lib.instances.retain(|e| e.id != id);
-    lib.instances.push(LibraryEntry {
-        id: id.into(),
-        name: index.name.clone(),
-        source: PackSource::File,
-        pack_version: index.version_id.clone(),
-        server: None,
-        last_played: None,
-    });
-    lib.selected.get_or_insert_with(|| id.to_string());
-    schema::save(&paths.library(), &lib, schema::LIBRARY_SCHEMA).map_err(|e| e.to_string())?;
+    store
+        .update_library(|lib| {
+            use dino_config::LibraryExt;
+            lib.upsert(LibraryEntry {
+                id: id.into(),
+                name: index.name.clone(),
+                source: PackSource::File,
+                pack_version: index.version_id.clone(),
+                server: None,
+                last_played: None,
+            });
+            if lib.selected.is_none() {
+                lib.select(id);
+            }
+        })
+        .map_err(|e| e.to_string())?;
 
     tracing::info!(secs = t0.elapsed().as_secs_f64(), "instalación terminada");
     println!(

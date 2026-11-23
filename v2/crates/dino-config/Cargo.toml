@@ -1,0 +1,11 @@
+[package]
+name = "dino-config"
+description = "Configuración y biblioteca de Dino 2.0: lectura, escritura atómica y las reglas de la biblioteca."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+dino-core = { path = "../dino-core" }
+serde.workspace = true
+thiserror.workspace = true

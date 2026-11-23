@@ -14,6 +14,7 @@ dino-download = { path = "../dino-download" }
 dino-minecraft = { path = "../dino-minecraft" }
 dino-auth = { path = "../dino-auth" }
 dino-core = { path = "../dino-core" }
+dino-config = { path = "../dino-config" }
 dino-log = { path = "../dino-log" }
 tracing = "0.1.44"
 tokio.workspace = true

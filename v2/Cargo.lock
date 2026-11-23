@@ -198,6 +198,7 @@ name = "dino-cli"
 version = "0.0.1"
 dependencies = [
  "dino-auth",
+ "dino-config",
  "dino-core",
  "dino-download",
  "dino-log",
@@ -206,6 +207,15 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "dino-config"
+version = "0.0.1"
+dependencies = [
+ "dino-core",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]

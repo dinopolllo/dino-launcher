@@ -93,11 +93,12 @@ si son de una versión más nueva.
 
 | Archivo | Sustituye a |
 | --- | --- |
-| `config.json` | marca `admin` |
+| `config.json` (`download_concurrency`, `download_limit`, `close_ui_while_playing`, `update_channel`, `admin_unlocked`) | marca `admin` |
 | `library.json` | `packs.json` (y el `pack.json` antiguo) |
 | `accounts.json` (sin secretos) | lectura del `accounts.json` del motor |
 | `instances/<id>/instance.json` | `instance.cfg` + `mmc-pack.json` + `dino-archivos.json` |
 | `migration-v1.json` | — (diario de la migración, permite volver a 1.x) |
+| `cache/files/<aa>/<sha1>` | — (caché compartida de mods entre packs, enlaces duros) |
 
 ## Migración
 

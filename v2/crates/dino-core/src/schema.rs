@@ -81,6 +81,10 @@ impl Paths {
     pub fn version_dir(&self, version_id: &str) -> PathBuf {
         self.versions().join(version_id)
     }
+    /// Caché por hash de archivos compartidos entre packs (mods): `<aa>/<sha1>`.
+    pub fn shared_files(&self) -> PathBuf {
+        self.root.join("cache").join("files")
+    }
     /// Runtimes de Java descargados, uno por componente de Mojang.
     pub fn java(&self) -> PathBuf {
         self.root.join("java")
@@ -98,6 +102,9 @@ pub struct Config {
     /// Descargas simultáneas.
     #[serde(default = "default_concurrency")]
     pub download_concurrency: u32,
+    /// Límite de descarga en bytes por segundo. `None`: sin límite.
+    #[serde(default)]
+    pub download_limit: Option<u64>,
     /// Canal del updater del launcher.
     #[serde(default)]
     pub update_channel: UpdateChannel,
@@ -127,6 +134,7 @@ impl Default for Config {
             schema: CONFIG_SCHEMA,
             close_ui_while_playing: true,
             download_concurrency: default_concurrency(),
+            download_limit: None,
             update_channel: UpdateChannel::Stable,
             admin_unlocked: false,
         }
