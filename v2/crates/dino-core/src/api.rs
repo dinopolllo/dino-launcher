@@ -5,9 +5,11 @@
 //! cruzando estos tipos con lo que lee de verdad `src/index.html`.
 //!
 //! Convenciones para la interfaz:
-//! - un tamaño o total que vale **0 o `None` significa «no se sabe»**, nunca «nada»;
+//! - en los datos de los comandos, un tamaño que **no se sabe es `None`** (nunca 0). En los
+//!   eventos `progress`, un total de 0 significa lo mismo;
 //! - `loader` llega como objeto (`{kind, version}`), no como texto: la interfaz lo redacta;
-//! - `icon` es una URL lista para `<img src>`, servida por un protocolo propio de `dino-app`.
+//! - `icon` es una URL lista para `<img src>`, servida por un protocolo propio de `dino-app`
+//!   y construida con [`icon_url`] según la plataforma.
 //!   La interfaz no llama a `convertFileSrc` ni depende del `scope` del protocolo de assets
 //!   (con un scope mal puesto la imagen fallaba sin error y salía el dino genérico).
 
@@ -39,16 +41,20 @@ pub struct InstanceView {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PrimaryAction {
     Play,
-    /// Falta instalar; `bytes` es lo que se va a **descargar** (0 si no se sabe).
-    Install { bytes: u64 },
+    /// Falta instalar; `bytes` es lo que se va a **descargar** (`None` si no se sabe).
+    Install { bytes: Option<u64> },
     /// Hay una versión nueva del pack en el catálogo; `bytes` es lo que se va a descargar.
-    Update { to_version: String, bytes: u64 },
+    Update { to_version: String, bytes: Option<u64> },
     /// Ya hay una partida de esta instancia abierta.
     Playing,
 }
 
 /// Detalle de una instancia instalada: Ajustes («En disco: …») y el diálogo de quitar,
 /// que dice qué se pierde antes de un borrado que no se deshace. Sustituye a `instance_info`.
+///
+/// Con una instancia que no está instalada, `instance_details` devuelve el error
+/// `not_installed`. La interfaz no necesita llamarlo en ese caso: `InstanceView.disk_bytes`
+/// es `None` y no hay archivos que borrar.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstanceDetails {
     pub id: String,
@@ -103,8 +109,37 @@ pub struct JavaOption {
     pub path: String,
     /// Versión mayor (21, 17…), si se pudo leer.
     pub major: Option<u32>,
-    /// De dónde sale: `mojang` (descargado por Dino) o `system` (instalado en la máquina).
-    pub origin: String,
+    pub origin: JavaOrigin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JavaOrigin {
+    /// Runtime de Mojang descargado por Dino.
+    Mojang,
+    /// Java instalado en la máquina.
+    System,
+}
+
+/// Esquema del protocolo propio que sirve los iconos.
+pub const ICON_SCHEME: &str = "dino-icon";
+
+/// URL de un icono, lista para `<img src>`.
+///
+/// Tauri 2 no sirve un protocolo propio igual en todas partes: en WebView2 (Windows, y
+/// también Android) es `http://<esquema>.localhost/…`; en macOS y Linux,
+/// `<esquema>://localhost/…`. Con la forma equivocada el `<img>` falla sin error y sale el
+/// icono genérico. Comprobado en esta máquina: el IPC de Tauri va a `http://ipc.localhost/…`.
+pub fn icon_url(instance_id: &str) -> String {
+    icon_url_for(cfg!(any(windows, target_os = "android")), instance_id)
+}
+
+fn icon_url_for(webview2_style: bool, id: &str) -> String {
+    if webview2_style {
+        format!("http://{ICON_SCHEME}.localhost/{id}")
+    } else {
+        format!("{ICON_SCHEME}://localhost/{id}")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -167,12 +202,36 @@ mod tests {
 
     #[test]
     fn el_boton_principal_en_json() {
-        let a = PrimaryAction::Update { to_version: "3.16.0".into(), bytes: 1024 };
+        let a = PrimaryAction::Update { to_version: "3.16.0".into(), bytes: Some(1024) };
         let v = serde_json::to_value(&a).unwrap();
         assert_eq!(v["kind"], "update");
         assert_eq!(v["to_version"], "3.16.0");
         let r: PlayRequest = serde_json::from_str(r#"{"instance":"voidsafio"}"#).unwrap();
         assert!(r.launch, "por defecto Jugar abre el juego");
+    }
+
+    #[test]
+    fn no_se_sabe_es_null_en_todas_partes() {
+        let v = serde_json::to_value(PrimaryAction::Install { bytes: None }).unwrap();
+        assert!(v["bytes"].is_null());
+    }
+
+    #[test]
+    fn la_url_del_icono_depende_de_la_plataforma() {
+        assert_eq!(icon_url_for(true, "voidsafio"), "http://dino-icon.localhost/voidsafio");
+        assert_eq!(icon_url_for(false, "voidsafio"), "dino-icon://localhost/voidsafio");
+        let aqui = icon_url("x");
+        if cfg!(windows) {
+            assert!(aqui.starts_with("http://dino-icon.localhost/"));
+        } else {
+            assert!(aqui.starts_with("dino-icon://localhost/"));
+        }
+    }
+
+    #[test]
+    fn el_origen_de_java_es_un_conjunto_cerrado() {
+        assert_eq!(serde_json::to_value(JavaOrigin::Mojang).unwrap(), "mojang");
+        assert!(serde_json::from_str::<JavaOrigin>("\"Mojang\"").is_err());
     }
 
     #[test]

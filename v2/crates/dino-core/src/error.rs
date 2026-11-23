@@ -38,6 +38,8 @@ pub enum ErrorCode {
     GameCrashed,
     /// Ya hay una partida o una instalación en marcha.
     Busy,
+    /// Se pidió algo que solo existe con la instancia instalada (p. ej. `instance_details`).
+    NotInstalled,
     /// No se pudo instalar la actualización del launcher.
     UpdateFailed,
     /// Todo lo demás. Siempre lleva `detail` y siempre se registra.
@@ -81,7 +83,9 @@ impl DinoError {
                 (true, Action::OpenLogs)
             }
             ErrorCode::Busy => (true, Action::None),
-            ErrorCode::PackNotFound | ErrorCode::PackInvalid | ErrorCode::UnsupportedLoader => (false, Action::None),
+            ErrorCode::PackNotFound | ErrorCode::PackInvalid | ErrorCode::UnsupportedLoader | ErrorCode::NotInstalled => {
+                (false, Action::None)
+            }
         };
         Self { code, retryable, action, detail: detail.into() }
     }

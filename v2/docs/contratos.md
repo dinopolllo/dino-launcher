@@ -79,7 +79,9 @@ son para el texto. **Un total de 0 significa «no se sabe»**: barra indetermina
 `offline`, `download_failed`, `hash_mismatch`, `disk_full`, `disk_permission`,
 `pack_not_found`, `pack_invalid`, `unsupported_loader`, `java_unavailable`,
 `account_required`, `session_expired`, `microsoft_rejected`, `game_crashed`, `busy`,
-`update_failed`, `internal`.
+`not_installed`, `update_failed`, `internal`.
+
+`instance_details` con una instancia sin instalar devuelve `not_installed`.
 
 Acciones que la interfaz puede ofrecer: `retry`, `free_space`, `choose_folder`, `sign_in`,
 `renew_session`, `open_logs`, `none`.
@@ -108,8 +110,9 @@ a mover, sin avisos.
 | Dato | 1.x | 2.0 |
 | --- | --- | --- |
 | `loader` | texto (`"fabric 0.19.5"`) | objeto `{kind, version}`; el texto lo redacta la interfaz |
-| `icon` | data URL | URL lista para `<img src>` (protocolo propio de `dino-app`): sin `convertFileSrc` ni scope |
+| `icon` | data URL | URL lista para `<img src>` (protocolo propio `dino-icon`): `http://dino-icon.localhost/<id>` en Windows, `dino-icon://localhost/<id>` en macOS y Linux; la construye el núcleo (`icon_url`), sin `convertFileSrc` ni scope |
 | Tamaño en la vista previa | `bytes`, ambiguo | `pack_bytes` (el archivo) y `download_bytes` (lo que se baja; `None` = no se sabe) |
+| «No se sabe» | `0` | `None` en todos los datos de comandos (también `PrimaryAction.bytes`); `0` solo en los totales de `progress` |
 | `ServerStatus` | `players`, `max_players` | igual (se mantienen los nombres de 1.x) |
 | Mensajes de error | texto bajo el aviso (`.alert-raw`) | `code` + `action`; `detail` va a una revelación «Detalles» |
 
@@ -129,3 +132,12 @@ a mover, sin avisos.
 | 10 | Verificar no es descargar | Fase `verifying_files` |
 | 11 | Sin lista de Javas | `available_java` en `InstanceSettings` |
 | 12 | `detail` en «Detalles» | Cosa de la interfaz; de acuerdo |
+
+### Segunda pasada (2026-11-23)
+
+| # | Punto | Resolución |
+| --- | --- | --- |
+| 1 | En WebView2 un protocolo propio se sirve como `http://<esquema>.localhost` | `icon_url` construye la URL según la plataforma, con test de las dos formas |
+| 2 | «No se sabe» escrito como `0` y como `None` | `PrimaryAction.bytes` pasa a `Option<u64>` |
+| 3 | `JavaOption.origin` era texto | `enum JavaOrigin { mojang, system }` |
+| 4 | `instance_details` sin instalar | Devuelve `not_installed` (código nuevo) |
