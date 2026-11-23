@@ -7,7 +7,6 @@
 use crate::install::Installed;
 use crate::model::{allowed, Arg, Features};
 use crate::{io_err, Paths, Result};
-use md5::{Digest, Md5};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -25,11 +24,12 @@ impl Account {
     /// Cuenta sin conexión: el UUID es el de `UUID.nameUUIDFromBytes("OfflinePlayer:<nombre>")`,
     /// igual que en 1.x (`auth.rs`) y que el servidor. Mismo nombre, mismo inventario.
     pub fn offline(name: &str) -> Self {
-        let mut h: [u8; 16] = Md5::digest(format!("OfflinePlayer:{name}").as_bytes()).into();
-        h[6] = (h[6] & 0x0f) | 0x30;
-        h[8] = (h[8] & 0x3f) | 0x80;
-        let hex: String = h.iter().map(|b| format!("{b:02x}")).collect();
-        Self { name: name.into(), uuid: hex, access_token: "0".into(), user_type: "legacy".into() }
+        Self {
+            name: name.into(),
+            uuid: dino_core::accounts::offline_uuid(name),
+            access_token: "0".into(),
+            user_type: "legacy".into(),
+        }
     }
 }
 

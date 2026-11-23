@@ -187,10 +187,14 @@ dependencies = [
 name = "dino-auth"
 version = "0.0.1"
 dependencies = [
+ "dino-core",
+ "dino-download",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
+ "zip",
 ]
 
 [[package]]
@@ -222,6 +226,7 @@ dependencies = [
 name = "dino-core"
 version = "0.0.1"
 dependencies = [
+ "md-5",
  "serde",
  "serde_json",
  "thiserror",
@@ -257,7 +262,6 @@ version = "0.0.1"
 dependencies = [
  "dino-core",
  "dino-download",
- "md-5",
  "serde",
  "serde_json",
  "sha2",

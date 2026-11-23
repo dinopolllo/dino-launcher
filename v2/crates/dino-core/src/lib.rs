@@ -9,6 +9,7 @@
 //!
 //! Ver `v2/docs/contratos.md` para la lista completa de comandos.
 
+pub mod accounts;
 pub mod api;
 pub mod error;
 pub mod events;

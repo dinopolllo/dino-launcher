@@ -23,7 +23,9 @@ const USAGE: &str = "uso:
   dino-cli --version
   dino-cli install <ruta-o-url.mrpack> <instancia>
   dino-cli launch <instancia> <jugador> [--msa] [--server host] [--mem MB] [--wait]
-  dino-cli accounts
+  dino-cli account list | add-offline <nombre> | select <uuid|nombre> | remove <uuid>
+  dino-cli account sync | login | renew [--force]
+  dino-cli engine ensure
   dino-cli verify <cuenta-microsoft>
   dino-cli migrate-plan <raiz-1.x> <salida.json>
   dino-cli diagnostics <salida.zip>
@@ -85,7 +87,9 @@ async fn main() {
     let r = match args.first().map(String::as_str) {
         Some("install") if args.len() >= 3 => cmd_install(&paths, &args[1], &args[2]).await,
         Some("launch") if args.len() >= 3 => cmd_launch(&paths, &args[1..]).await,
-        Some("accounts") => cmd_accounts(),
+        Some("accounts") => cmd_account(&paths, &["list".to_string()]).await,
+        Some("account") if args.len() >= 2 => cmd_account(&paths, &args[1..]).await,
+        Some("engine") if args.get(1).map(String::as_str) == Some("ensure") => cmd_engine_ensure().await,
         Some("verify") if args.len() >= 2 => cmd_verify(&args[1]).await,
         Some("migrate-plan") if args.len() >= 3 => cmd_migrate_plan(&args[1], &args[2]),
         Some("bench-download") if args.len() >= 3 => cmd_bench_download(&paths, &args[1], &args[2]).await,
@@ -138,27 +142,89 @@ async fn cmd_bench_download(paths: &Paths, mrpack: &str, list: &str) -> Result<(
     Ok(())
 }
 
-/// `accounts.json` del motor de 1.x: el puente solo lo lee.
-fn engine_accounts() -> PathBuf {
-    std::env::var_os("DINO_ENGINE_ACCOUNTS").map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(std::env::var_os("APPDATA").expect("sin APPDATA"))
-            .join("gg.dinolab.launcher")
-            .join("engine")
-            .join("accounts.json")
-    })
+/// Raíz del motor (ElyPrism): `bin/` y `engine/`. En la app es la misma carpeta de datos;
+/// en `dino-cli` es la del 1.x instalado salvo que se diga otra con `DINO_ENGINE_ROOT`.
+fn engine() -> dino_auth::Engine {
+    dino_auth::Engine::new(std::env::var_os("DINO_ENGINE_ROOT").map(PathBuf::from).unwrap_or_else(|| {
+        PathBuf::from(std::env::var_os("APPDATA").expect("sin APPDATA")).join("gg.dinolab.launcher")
+    }))
 }
 
-fn cmd_accounts() -> Result<(), String> {
-    let l = dino_auth::list(&engine_accounts()).map_err(|e| e.to_string())?;
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    for a in l {
-        let exp = match a.expires {
-            Some(e) if e > now => format!("sesión válida {} min más", (e - now) / 60),
-            Some(_) => "sesión caducada".into(),
-            None => "—".into(),
-        };
-        println!("{:8} {:20} activa={} {}", a.kind, a.name, a.active, exp);
+fn engine_accounts() -> PathBuf {
+    engine().accounts()
+}
+
+async fn cmd_account(paths: &Paths, args: &[String]) -> Result<(), String> {
+    let acc = dino_auth::Accounts::new(paths.clone());
+    let e = engine();
+    match args.first().map(String::as_str) {
+        Some("list") => {
+            for v in ok(acc.list(&e.accounts()))? {
+                let ses = v.session_minutes_left.map(|m| format!("sesión {m} min")).unwrap_or_default();
+                println!("{:16} {:18} {} activa={} {}", format!("{:?}", v.kind), v.name, v.uuid, v.active, ses);
+            }
+        }
+        Some("add-offline") if args.len() >= 2 => {
+            let a = ok(acc.add_offline(&args[1]))?;
+            println!("{}", serde_json::json!({"name": a.name, "uuid": a.uuid}));
+        }
+        Some("select") if args.len() >= 2 => {
+            let uuid = resolve(&acc, &e, &args[1])?;
+            ok(acc.select(&uuid))?;
+        }
+        Some("remove") if args.len() >= 2 => {
+            let a = ok(acc.remove(&args[1]))?;
+            println!("quitada {}", a.name);
+        }
+        Some("sync") => {
+            let r = ok(acc.sync_bridge(&e.accounts()))?;
+            println!("{}", serde_json::json!({"added": r.added, "removed": r.removed}));
+        }
+        Some("login") => {
+            // El jugador añade su cuenta en la ventana del motor; al cerrarla se sincroniza.
+            e.ensure(&Downloader::new(4)).await.map_err(|x| x.to_string())?;
+            let mut child = e.open_for_login().map_err(|x| x.to_string())?;
+            child.wait().map_err(|x| x.to_string())?;
+            let r = ok(acc.sync_bridge(&e.accounts()))?;
+            println!("{}", serde_json::json!({"added": r.added, "removed": r.removed}));
+        }
+        Some("renew") => {
+            let force = args.iter().any(|a| a == "--force");
+            if !force && !acc.needs_renewal(&e.accounts()) {
+                println!("{}", serde_json::json!({"renewed": [], "skipped": "a todas les quedan más de 12 h"}));
+                return Ok(());
+            }
+            let r = e.renew(Duration::from_secs(30)).map_err(|x| x.to_string())?;
+            tracing::info!(renewed = ?r.renewed, ms = r.elapsed.as_millis() as u64, hidden = r.windows_hidden, "renovación");
+            println!(
+                "{}",
+                serde_json::json!({"renewed": r.renewed, "ms": r.elapsed.as_millis() as u64, "windows_hidden": r.windows_hidden})
+            );
+        }
+        _ => return Err(USAGE.into()),
     }
+    Ok(())
+}
+
+fn ok<T>(r: Result<T, dino_auth::AccountsError>) -> Result<T, String> {
+    r.map_err(|e| e.to_string())
+}
+
+/// Una cuenta por uuid o por nombre.
+fn resolve(acc: &dino_auth::Accounts, e: &dino_auth::Engine, who: &str) -> Result<String, String> {
+    let l = acc.list(&e.accounts()).map_err(|x| x.to_string())?;
+    l.iter()
+        .find(|v| v.uuid == who)
+        .or_else(|| l.iter().find(|v| v.name == who))
+        .map(|v| v.uuid.clone())
+        .ok_or_else(|| format!("no hay ninguna cuenta «{who}»"))
+}
+
+async fn cmd_engine_ensure() -> Result<(), String> {
+    let e = engine();
+    let t0 = Instant::now();
+    let bin = e.ensure(&Downloader::new(4)).await.map_err(|x| x.to_string())?;
+    println!("{}", serde_json::json!({"binary": bin, "secs": t0.elapsed().as_secs_f64()}));
     Ok(())
 }
 
@@ -332,12 +398,22 @@ async fn cmd_launch(paths: &Paths, args: &[String]) -> Result<(), String> {
         Memory::Auto => 4096,
     });
 
-    let account = if msa {
-        // Puente: la sesión la obtuvo y la renueva el motor; aquí solo se usa.
-        let s = dino_auth::session(&engine_accounts(), player).map_err(|e| e.to_string())?;
-        Account { name: s.name, uuid: s.uuid, access_token: s.access_token, user_type: "msa".into() }
-    } else {
-        Account::offline(player)
+    // `player`: una cuenta de Dino (uuid o nombre). Con `--msa`, la de Microsoft con ese
+    // nombre; sin cuenta guardada con ese nombre, una offline de paso.
+    let accs = dino_auth::Accounts::new(paths.clone());
+    let e = engine();
+    let found = accs.list(&e.accounts()).map_err(|x| x.to_string())?.into_iter().find(|v| {
+        (v.uuid == *player || v.name == *player) && (v.kind == dino_core::schema::AccountKind::MicrosoftBridge) == msa
+    });
+    let account = match found {
+        Some(v) => {
+            let i = accs.launch_identity(Some(&v.uuid), &e.accounts()).map_err(|x| x.to_string())?;
+            Account { name: i.name, uuid: i.uuid, access_token: i.access_token, user_type: i.user_type }
+        }
+        None if msa => {
+            return Err(format!("no hay ninguna cuenta Microsoft «{player}»: prueba `dino-cli account sync`"))
+        }
+        None => Account::offline(player),
     };
     let game_dir = paths.game_dir(id);
     // Los args del jugador van después: si repite uno, gana el suyo.

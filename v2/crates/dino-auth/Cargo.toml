@@ -1,12 +1,16 @@
 [package]
 name = "dino-auth"
-description = "Cuentas de Dino 2.0: puente con las cuentas Microsoft del motor mientras no haya client_id propio."
+description = "Cuentas de Dino 2.0: offline nativas y Microsoft a través del motor (puente)."
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 
 [dependencies]
+dino-core = { path = "../dino-core" }
+dino-download = { path = "../dino-download" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+sha2.workspace = true
+zip.workspace = true
