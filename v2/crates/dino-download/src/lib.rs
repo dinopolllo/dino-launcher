@@ -137,6 +137,10 @@ impl Downloader {
         items: Vec<Item>,
         on_progress: &(dyn Fn(Progress) + Send + Sync),
     ) -> Result<Stats, DownloadError> {
+        // Un mismo destino puede venir dos veces (NeoForge y Mojang listan alguna librería
+        // por duplicado). Bajarlo dos veces a la vez hacía chocar las dos escrituras.
+        let mut vistos = std::collections::HashSet::new();
+        let items: Vec<Item> = items.into_iter().filter(|i| vistos.insert(i.dest.clone())).collect();
         let total = Progress {
             files_total: items.len() as u64,
             bytes_total: items.iter().filter_map(|i| i.size).sum(),
@@ -233,9 +237,12 @@ fn espera(intento: u32) -> Duration {
     Duration::from_millis(500 * 2u64.pow(intento.saturating_sub(1)))
 }
 
+/// Nombre temporal único por descarga: dos procesos (o dos lotes) que bajen el mismo
+/// archivo a la vez no se pisan; el último `rename` simplemente gana.
 fn part_path(dest: &Path) -> PathBuf {
+    static N: AtomicU64 = AtomicU64::new(0);
     let mut s = dest.as_os_str().to_owned();
-    s.push(".part");
+    s.push(format!(".{}-{}.part", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
     PathBuf::from(s)
 }
 
@@ -286,8 +293,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn el_temporal_lleva_el_nombre_entero_mas_part() {
-        assert_eq!(part_path(Path::new("a/b/lib-1.0.jar")), PathBuf::from("a/b/lib-1.0.jar.part"));
+    fn cada_descarga_tiene_su_propio_temporal() {
+        let a = part_path(Path::new("a/b/lib-1.0.jar"));
+        let b = part_path(Path::new("a/b/lib-1.0.jar"));
+        assert_ne!(a, b);
+        let s = a.to_string_lossy();
+        assert!(s.starts_with("a/b/lib-1.0.jar.") && s.ends_with(".part"));
     }
 
     #[test]
