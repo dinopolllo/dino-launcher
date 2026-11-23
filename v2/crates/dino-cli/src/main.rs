@@ -189,9 +189,10 @@ async fn cmd_install(paths: &Paths, src: &str, id: &str) -> Result<(), String> {
 
     let mrpack = if src.starts_with("http://") || src.starts_with("https://") {
         let dest = paths.pack_file(id);
-        dl.fetch_all(vec![dino_download::Item { url: src.into(), dest: dest.clone(), sha1: None, size: None }], &|p| {
-            report("Pack", Some(p))
-        })
+        dl.fetch_all(
+            vec![dino_download::Item { url: src.into(), dest: dest.clone(), sha1: None, size: None, shared: false }],
+            &|p| report("Pack", Some(p)),
+        )
         .await
         .map_err(|e| e.to_string())?;
         dest

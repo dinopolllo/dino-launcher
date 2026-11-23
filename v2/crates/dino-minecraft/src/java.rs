@@ -110,6 +110,7 @@ pub async fn ensure(dl: &Downloader, dirs: &Paths, component: &str, report: Repo
                         dest,
                         sha1: Some(d.raw.sha1.clone()),
                         size: Some(d.raw.size),
+                        shared: false,
                     });
                 }
             }

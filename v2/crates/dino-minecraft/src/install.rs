@@ -162,6 +162,7 @@ fn library_items(dirs: &Paths, v: &VersionJson, client_jar: &Path) -> Result<Vec
             dest: client_jar.to_path_buf(),
             sha1: d.client.sha1.clone(),
             size: d.client.size,
+            shared: false,
         });
     }
     for l in &v.libraries {
@@ -169,7 +170,7 @@ fn library_items(dirs: &Paths, v: &VersionJson, client_jar: &Path) -> Result<Vec
             continue;
         }
         let (Some(path), Some(url)) = (l.path(), l.url()) else { continue };
-        items.push(Item { url, dest: dirs.libraries().join(path), sha1: l.sha1(), size: l.size() });
+        items.push(Item { url, dest: dirs.libraries().join(path), sha1: l.sha1(), size: l.size(), shared: false });
     }
     Ok(items)
 }
@@ -178,7 +179,13 @@ async fn install_assets(dl: &Downloader, dirs: &Paths, v: &VersionJson, report: 
     let Some(idx) = &v.asset_index else { return Ok(Stats::default()) };
     let index_path = dirs.assets().join("indexes").join(format!("{}.json", idx.id));
     dl.fetch_all(
-        vec![Item { url: idx.url.clone(), dest: index_path.clone(), sha1: idx.sha1.clone(), size: idx.size }],
+        vec![Item {
+            url: idx.url.clone(),
+            dest: index_path.clone(),
+            sha1: idx.sha1.clone(),
+            size: idx.size,
+            shared: false,
+        }],
         &|_| {},
     )
     .await?;
@@ -196,6 +203,7 @@ async fn install_assets(dl: &Downloader, dirs: &Paths, v: &VersionJson, report: 
                 dest: dirs.assets().join("objects").join(hh).join(&o.hash),
                 sha1: Some(o.hash.clone()),
                 size: Some(o.size),
+                shared: false,
             }
         })
         .collect();

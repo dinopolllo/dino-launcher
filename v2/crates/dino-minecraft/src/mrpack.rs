@@ -127,6 +127,8 @@ pub async fn install(dl: &Downloader, mrpack: &Path, game_dir: &Path, report: Re
             dest: game_dir.join(rel),
             sha1: f.hashes.get("sha1").cloned(),
             size: Some(f.file_size).filter(|s| *s > 0),
+            // Un mismo mod en dos packs se baja una vez: caché compartida por hash.
+            shared: true,
         });
     }
     let stats = dl.fetch_all(items, &|p| report("Mods", Some(p))).await?;
