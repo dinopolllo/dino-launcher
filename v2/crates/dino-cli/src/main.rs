@@ -181,7 +181,7 @@ async fn cmd_launch(args: &[String]) -> Result<(), String> {
     let out = std::fs::File::create(logdir.join("latest.log")).map_err(|e| e.to_string())?;
     cmd.stdout(out.try_clone().map_err(|e| e.to_string())?).stderr(out);
     let t0 = Instant::now();
-    let mut child = cmd.spawn().map_err(|e| format!("no pude lanzar Java: {e}"))?;
+    let mut child = launch::spawn(cmd).map_err(|e| format!("no pude lanzar Java: {e}"))?;
     println!("{}", serde_json::json!({"launched": true, "pid": child.id(), "spawn_ms": t0.elapsed().as_millis()}));
     if wait {
         let st = child.wait().map_err(|e| e.to_string())?;

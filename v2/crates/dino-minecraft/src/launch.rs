@@ -118,7 +118,38 @@ pub fn command(dirs: &Dirs, inst: &Installed, spec: &LaunchSpec) -> Result<std::
     cmd.arg(&v.main_class);
     cmd.args(expand(&args.game));
     cmd.current_dir(spec.game_dir);
+    cmd.stdin(std::process::Stdio::null());
     Ok(cmd)
+}
+
+/// Lanza el juego sin que herede los canales de quien lanza.
+///
+/// En Windows, `CreateProcess` hereda **todos** los handles heredables del padre, no solo
+/// los que se le pasan como stdin/stdout/stderr. Si Dino se arrancó con su salida conectada
+/// a una tubería (una terminal, un script), Java se quedaba con ese extremo abierto y quien
+/// esperaba a Dino esperaba en realidad a que terminara la partida. Medido: un `launch`
+/// que debía volver en milisegundos volvió a los 707 s, al cerrarse el juego.
+pub fn spawn(mut cmd: std::process::Command) -> std::io::Result<std::process::Child> {
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetStdHandle(n: u32) -> isize;
+            fn SetHandleInformation(h: isize, mask: u32, flags: u32) -> i32;
+        }
+        const HANDLE_FLAG_INHERIT: u32 = 1;
+        // STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE
+        for n in [-10i32 as u32, -11i32 as u32, -12i32 as u32] {
+            // SAFETY: llamadas sin punteros; un handle nulo o inválido solo hace fallar la llamada.
+            unsafe {
+                let h = GetStdHandle(n);
+                if h != 0 && h != -1 {
+                    SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
+                }
+            }
+        }
+    }
+    cmd.spawn()
 }
 
 #[cfg(test)]
