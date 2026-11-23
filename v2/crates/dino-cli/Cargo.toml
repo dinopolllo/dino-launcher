@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 dino-download = { path = "../dino-download" }
 dino-minecraft = { path = "../dino-minecraft" }
+dino-auth = { path = "../dino-auth" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

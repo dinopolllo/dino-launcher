@@ -160,9 +160,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dino-auth"
+version = "0.0.1"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "dino-cli"
 version = "0.0.1"
 dependencies = [
+ "dino-auth",
  "dino-download",
  "dino-minecraft",
  "serde",

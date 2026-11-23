@@ -71,8 +71,10 @@ async fn main() {
     let r = match args.first().map(String::as_str) {
         Some("install") if args.len() >= 3 => cmd_install(&args[1], &args[2]).await,
         Some("launch") if args.len() >= 3 => cmd_launch(&args[1..]).await,
+        Some("accounts") => cmd_accounts(),
+        Some("verify") if args.len() >= 2 => cmd_verify(&args[1]).await,
         _ => {
-            eprintln!("uso:\n  dino-cli install <ruta-o-url.mrpack> <instancia>\n  dino-cli launch <instancia> <jugador> [--server host] [--mem MB] [--wait]");
+            eprintln!("uso:\n  dino-cli install <ruta-o-url.mrpack> <instancia>\n  dino-cli launch <instancia> <jugador> [--msa] [--server host] [--mem MB] [--wait]\n  dino-cli accounts\n  dino-cli verify <cuenta-microsoft>");
             std::process::exit(2);
         }
     };
@@ -80,6 +82,38 @@ async fn main() {
         eprintln!("ERROR: {e}");
         std::process::exit(1);
     }
+}
+
+/// `accounts.json` del motor de 1.x: el puente solo lo lee.
+fn engine_accounts() -> PathBuf {
+    std::env::var_os("DINO_ENGINE_ACCOUNTS").map(PathBuf::from).unwrap_or_else(|| {
+        PathBuf::from(std::env::var_os("APPDATA").expect("sin APPDATA"))
+            .join("gg.dinolab.launcher")
+            .join("engine")
+            .join("accounts.json")
+    })
+}
+
+fn cmd_accounts() -> Result<(), String> {
+    let l = dino_auth::list(&engine_accounts()).map_err(|e| e.to_string())?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    for a in l {
+        let exp = match a.expires {
+            Some(e) if e > now => format!("sesión válida {} min más", (e - now) / 60),
+            Some(_) => "sesión caducada".into(),
+            None => "—".into(),
+        };
+        println!("{:8} {:20} activa={} {}", a.kind, a.name, a.active, exp);
+    }
+    Ok(())
+}
+
+async fn cmd_verify(name: &str) -> Result<(), String> {
+    let s = dino_auth::session(&engine_accounts(), name).map_err(|e| e.to_string())?;
+    let dl = Downloader::new(1);
+    let perfil = dino_auth::verify(dl.client(), &s).await.map_err(|e| e.to_string())?;
+    println!("{}", serde_json::json!({"valid": true, "profile": perfil, "uuid": s.uuid, "expires": s.expires}));
+    Ok(())
 }
 
 async fn cmd_install(src: &str, id: &str) -> Result<(), String> {
@@ -145,9 +179,11 @@ async fn cmd_launch(args: &[String]) -> Result<(), String> {
     let mut server = None;
     let mut mem = 4096u32;
     let mut wait = false;
+    let mut msa = false;
     let mut it = args[2..].iter();
     while let Some(a) = it.next() {
         match a.as_str() {
+            "--msa" => msa = true,
             "--server" => server = it.next().cloned(),
             "--mem" => mem = it.next().and_then(|m| m.parse().ok()).unwrap_or(mem),
             "--wait" => wait = true,
@@ -164,7 +200,13 @@ async fn cmd_launch(args: &[String]) -> Result<(), String> {
         serde_json::from_slice(&std::fs::read(&vjson).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     let inst = Installed { version, java: meta.java, client_jar: meta.client_jar };
 
-    let account = Account::offline(player);
+    let account = if msa {
+        // Puente: la sesión la obtuvo y la renueva el motor; aquí solo se usa.
+        let s = dino_auth::session(&engine_accounts(), player).map_err(|e| e.to_string())?;
+        Account { name: s.name, uuid: s.uuid, access_token: s.access_token, user_type: "msa".into() }
+    } else {
+        Account::offline(player)
+    };
     let game_dir = dirs.instance(id).join("minecraft");
     let jvm = vec!["-XX:+UseG1GC".to_string(), "-XX:MaxGCPauseMillis=50".to_string()];
     let spec = LaunchSpec {
