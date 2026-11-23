@@ -1,6 +1,7 @@
 # Contratos de Dino 2.0 (etapa 3)
 
-Fecha: 2026-11-23 · Estado: propuesta, pendiente de revisión con la sesión de diseño.
+Fecha: 2026-11-23 · Estado: **revisado con la sesión de diseño** el mismo día (cruzado con lo que
+lee `src/index.html` en `windows-port`, 3e16a5e). Sus 12 puntos están aplicados; ver «Revisión».
 
 La fuente de verdad son los tipos de `crates/dino-core` (`schema`, `events`, `error`, `api`).
 Este documento los resume y dice qué pasa con cada comando de 1.x.
@@ -23,6 +24,7 @@ Este documento los resume y dice qué pasa con cada comando de 1.x.
 | `window_minimize`, `window_toggle_maximize`, `window_is_maximized`, `window_close` | — | igual que 1.x | igual |
 | `library_list` | — | `Vec<InstanceView>` | `list_packs`, `get_pack`, `pack_state` |
 | `library_select` | `id` | — | `select_pack` |
+| `instance_details` | `id` | `InstanceDetails` (`path`, `worlds`, `disk_bytes`, `mods`, `loader`, `minecraft`) | `instance_info` |
 | `library_remove` | `id`, `delete_files` | — | `remove_pack` |
 | `catalog_lookup` | `code` (o link) | `PackPreview` | `catalog_lookup` |
 | `catalog_add` | `code` | `InstanceView` | `catalog_install` |
@@ -31,7 +33,7 @@ Este documento los resume y dice qué pasa con cada comando de 1.x.
 | `play` | `PlayRequest` | `PlayOutcome` | `play` |
 | `play_cancel` | — | — | `abort_launch` |
 | `game_stop` | — | — | `stop_game` |
-| `instance_settings_get` | `id` | `InstanceSettings` | `memory_info`, `java_runtimes` |
+| `instance_settings_get` | `id` | `InstanceSettings` (con `available_java`) | `memory_info`, `java_runtimes` |
 | `instance_settings_set` | `id`, `memory`, `jvm_args`, `java` | — | `set_pack_memory` (y los args JVM, que en 1.x no se aplicaban) |
 | `instance_verify` | `id` | — | botón «Verificar archivos» (`play{install_only}`) |
 | `open_folder` | `target`: `instance` \| `logs` \| `data` | — | `open_folder` (que recibía una ruta cualquiera) |
@@ -57,7 +59,7 @@ Este documento los resume y dice qué pasa con cada comando de 1.x.
 
 | `type` | Campos | Sustituye a |
 | --- | --- | --- |
-| `progress` | `task`, `instance`, `phase`, `files_done/total`, `bytes_done/total`, `finished` | evento `install` |
+| `progress` | `task`, `instance`, `task_bytes_done/total`, `phase`, `files_done/total`, `bytes_done/total`, `finished` | evento `install` |
 | `session` | `state`: `idle` \| `preparing` \| `playing` \| `stopping`, `instance` | sondeo de `session_state` |
 | `library_changed` | — | recargar a mano tras cada cambio |
 | `accounts_changed` | — | — |
@@ -66,7 +68,11 @@ Este documento los resume y dice qué pasa con cada comando de 1.x.
 
 Fases de `progress`: `checking_updates`, `downloading_pack`, `reading_versions`,
 `downloading_libraries`, `downloading_assets`, `installing_java`, `preparing_loader`,
-`downloading_mods`, `renewing_session`, `launching`, `done`.
+`downloading_mods`, `verifying_files`, `renewing_session`, `launching`, `done`.
+
+La barra lee `task_bytes_done / task_bytes_total`, el total de la tarea, que nunca
+retrocede aunque cambie la fase o corran varias a la vez. La fase y sus `files_*`/`bytes_*`
+son para el texto. **Un total de 0 significa «no se sabe»**: barra indeterminada.
 
 ## Códigos de error
 
@@ -96,3 +102,30 @@ si son de una versión más nueva.
 `dino_core::migrate`: plan puro → `apply` (mueve, no copia, con diario) → `rollback`.
 Probado en seco con los datos reales de 1.x el 2026-11-23: 3 instancias, 4 cuentas, 4,5 GB
 a mover, sin avisos.
+
+## Cambios de forma frente a 1.x que la interfaz tiene que adaptar
+
+| Dato | 1.x | 2.0 |
+| --- | --- | --- |
+| `loader` | texto (`"fabric 0.19.5"`) | objeto `{kind, version}`; el texto lo redacta la interfaz |
+| `icon` | data URL | URL lista para `<img src>` (protocolo propio de `dino-app`): sin `convertFileSrc` ni scope |
+| Tamaño en la vista previa | `bytes`, ambiguo | `pack_bytes` (el archivo) y `download_bytes` (lo que se baja; `None` = no se sabe) |
+| `ServerStatus` | `players`, `max_players` | igual (se mantienen los nombres de 1.x) |
+| Mensajes de error | texto bajo el aviso (`.alert-raw`) | `code` + `action`; `detail` va a una revelación «Detalles» |
+
+## Revisión de la sesión de diseño (2026-11-23)
+
+| # | Punto | Resolución |
+| --- | --- | --- |
+| 1 | `PackPreview` sin `code`, `icon`, `server` | Añadidos, opcionales (un archivo local no tiene código) |
+| 2 | `InstanceView` sin `mods` ni tamaño en disco | Añadidos `mods` y `disk_bytes` |
+| 3 | `instance_info` sin equivalente (incluye `worlds` para el diálogo de quitar) | Nuevo `instance_details(id)` |
+| 4 | La barra retrocedía con bytes por fase | `task_bytes_done/total`, monótono |
+| 5 | `ServerStatus` cambiaba nombres | Se mantienen `players` y `max_players` |
+| 6 | `loader` pasa a objeto | Aceptado y anotado |
+| 7 | `icon` como ruta exigía scope | URL de protocolo propio, sin scope |
+| 8 | `bytes` ambiguo | `pack_bytes` + `download_bytes` |
+| 9 | Total 0 | = «no se sabe», escrito en el contrato |
+| 10 | Verificar no es descargar | Fase `verifying_files` |
+| 11 | Sin lista de Javas | `available_java` en `InstanceSettings` |
+| 12 | `detail` en «Detalles» | Cosa de la interfaz; de acuerdo |

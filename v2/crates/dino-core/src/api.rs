@@ -1,7 +1,15 @@
 //! Lo que la interfaz pide y lo que recibe: las formas de datos de los comandos.
 //!
 //! Cada comando devuelve `Result<T, DinoError>`. La lista de comandos, con su equivalente
-//! en 1.x, está en `v2/docs/contratos.md`.
+//! en 1.x, está en `v2/docs/contratos.md`. Revisado con la sesión de diseño el 2026-11-23
+//! cruzando estos tipos con lo que lee de verdad `src/index.html`.
+//!
+//! Convenciones para la interfaz:
+//! - un tamaño o total que vale **0 o `None` significa «no se sabe»**, nunca «nada»;
+//! - `loader` llega como objeto (`{kind, version}`), no como texto: la interfaz lo redacta;
+//! - `icon` es una URL lista para `<img src>`, servida por un protocolo propio de `dino-app`.
+//!   La interfaz no llama a `convertFileSrc` ni depende del `scope` del protocolo de assets
+//!   (con un scope mal puesto la imagen fallaba sin error y salía el dino genérico).
 
 use crate::schema::{JavaChoice, LoaderSpec, Memory, PackSource};
 use serde::{Deserialize, Serialize};
@@ -16,8 +24,11 @@ pub struct InstanceView {
     pub minecraft: Option<String>,
     pub loader: Option<LoaderSpec>,
     pub server: Option<String>,
-    /// Ruta del icono (se sirve con el protocolo de assets de Tauri), si hay.
     pub icon: Option<String>,
+    /// Mods del pack (la línea de datos: «… · 44 mods · …»).
+    pub mods: u32,
+    /// Lo que ocupa la instancia en disco. `None` si no está instalada o no se ha medido.
+    pub disk_bytes: Option<u64>,
     pub selected: bool,
     /// Qué hace el botón principal si se pulsa ahora.
     pub action: PrimaryAction,
@@ -28,12 +39,27 @@ pub struct InstanceView {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PrimaryAction {
     Play,
-    /// Falta instalar; `bytes` es lo que se va a bajar (0 si no se sabe).
+    /// Falta instalar; `bytes` es lo que se va a **descargar** (0 si no se sabe).
     Install { bytes: u64 },
-    /// Hay una versión nueva del pack en el catálogo.
+    /// Hay una versión nueva del pack en el catálogo; `bytes` es lo que se va a descargar.
     Update { to_version: String, bytes: u64 },
     /// Ya hay una partida de esta instancia abierta.
     Playing,
+}
+
+/// Detalle de una instancia instalada: Ajustes («En disco: …») y el diálogo de quitar,
+/// que dice qué se pierde antes de un borrado que no se deshace. Sustituye a `instance_info`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InstanceDetails {
+    pub id: String,
+    /// Carpeta del juego (`instances/<id>/minecraft`).
+    pub path: String,
+    pub minecraft: String,
+    pub loader: LoaderSpec,
+    pub mods: u32,
+    /// Mundos en `saves/`.
+    pub worlds: u32,
+    pub disk_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -65,9 +91,20 @@ pub struct InstanceSettings {
     pub memory: Memory,
     pub jvm_args: Vec<String>,
     pub java: JavaChoice,
+    /// Javas que el selector puede ofrecer además de «Automático» (sucesor de `java_runtimes`).
+    pub available_java: Vec<JavaOption>,
     /// RAM física de la máquina y la recomendada, en MB, para el slider.
     pub machine_ram_mb: u32,
     pub recommended_max_mb: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JavaOption {
+    pub path: String,
+    /// Versión mayor (21, 17…), si se pudo leer.
+    pub major: Option<u32>,
+    /// De dónde sale: `mojang` (descargado por Dino) o `system` (instalado en la máquina).
+    pub origin: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -80,25 +117,37 @@ pub struct AccountView {
     pub session_minutes_left: Option<u64>,
 }
 
-/// Lo que se lee de un `.mrpack` antes de importarlo.
+/// Lo que se sabe de un pack antes de instalarlo. Lo devuelven `catalog_lookup` (por código
+/// o link) y `mrpack_inspect` (archivo local).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackPreview {
+    /// Código normalizado del catálogo: lo que luego recibe `catalog_add`, aunque se haya
+    /// buscado con un link. `None` para un archivo local.
+    pub code: Option<String>,
     pub name: String,
     pub version: String,
     pub minecraft: String,
     pub loader: LoaderSpec,
     pub mods: u32,
-    pub bytes: u64,
+    pub icon: Option<String>,
+    /// Servidor al que se entra directo («entras directo a X»).
+    pub server: Option<String>,
+    /// Peso del archivo `.mrpack`. **No** es lo que se va a descargar: los mods se bajan
+    /// aparte (en septiembre esto confundió un pack de KB con uno de cientos de MB).
+    pub pack_bytes: u64,
+    /// Total a descargar (pack + mods), si se conoce. `None` = no se sabe todavía.
+    pub download_bytes: Option<u64>,
     /// `false` si el loader está fuera de alcance (Forge, Quilt): la interfaz lo explica.
     pub supported: bool,
 }
 
+/// Estado de un servidor. Los nombres de los jugadores son los que ya lee la interfaz de 1.x.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerStatus {
     pub online: bool,
     pub motd: String,
-    pub players_online: u32,
-    pub players_max: u32,
+    pub players: u32,
+    pub max_players: u32,
     pub version: Option<String>,
     pub ping_ms: Option<u32>,
 }
@@ -124,5 +173,26 @@ mod tests {
         assert_eq!(v["to_version"], "3.16.0");
         let r: PlayRequest = serde_json::from_str(r#"{"instance":"voidsafio"}"#).unwrap();
         assert!(r.launch, "por defecto Jugar abre el juego");
+    }
+
+    #[test]
+    fn el_estado_del_servidor_usa_los_nombres_que_lee_la_interfaz() {
+        let s = ServerStatus { online: true, motd: "x".into(), players: 3, max_players: 20, version: None, ping_ms: Some(40) };
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!((v["players"].as_u64(), v["max_players"].as_u64()), (Some(3), Some(20)));
+    }
+
+    #[test]
+    fn la_vista_previa_separa_el_archivo_de_la_descarga() {
+        let p = PackPreview {
+            code: Some("VOIDSAFIO".into()), name: "VoidSafio".into(), version: "3.15.0".into(),
+            minecraft: "1.21.1".into(), loader: LoaderSpec::NeoForge { version: "21.1.251".into() },
+            mods: 132, icon: None, server: Some("voidsafio.minecra.fr".into()),
+            pack_bytes: 296_512_611, download_bytes: None, supported: true,
+        };
+        let v = serde_json::to_value(&p).unwrap();
+        assert!(v.get("bytes").is_none(), "nada de un `bytes` ambiguo");
+        assert_eq!(v["loader"]["kind"], "neo_forge");
+        assert!(v["download_bytes"].is_null());
     }
 }
