@@ -77,10 +77,7 @@ struct MmcComponent {
 }
 
 fn ini(cfg: &str) -> BTreeMap<String, String> {
-    cfg.lines()
-        .filter_map(|l| l.split_once('='))
-        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
-        .collect()
+    cfg.lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.trim().to_string(), v.trim().to_string())).collect()
 }
 
 fn loader_of(mmc: &MmcPack) -> Result<(String, LoaderSpec), String> {
@@ -139,11 +136,8 @@ pub fn plan(
             Vec::new()
         };
         let last_played = cfg.get("lastLaunchTime").and_then(|t| t.parse::<u64>().ok()).map(|ms| ms / 1000);
-        let managed_files = inst
-            .dino_archivos
-            .as_deref()
-            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
-            .unwrap_or_default();
+        let managed_files =
+            inst.dino_archivos.as_deref().and_then(|s| serde_json::from_str::<Vec<String>>(s).ok()).unwrap_or_default();
 
         lib.instances.push(LibraryEntry {
             id: p.id.clone(),
@@ -169,10 +163,7 @@ pub fn plan(
             java: JavaChoice::Auto,
             managed_files,
         });
-        moves.push(Move {
-            from: engine.join("instances").join(&p.id).join("minecraft"),
-            to: paths.game_dir(&p.id),
-        });
+        moves.push(Move { from: engine.join("instances").join(&p.id).join("minecraft"), to: paths.game_dir(&p.id) });
     }
     lib.selected = v1.selected.filter(|s| lib.instances.iter().any(|i| &i.id == s));
 
@@ -273,7 +264,11 @@ pub fn read_v1(paths: &Paths) -> Option<(String, Option<String>, BTreeMap<String
             let r = |f: &str| std::fs::read_to_string(d.join(f)).ok();
             inst.insert(
                 e.file_name().to_string_lossy().into_owned(),
-                V1Instance { mmc_pack: r("mmc-pack.json"), instance_cfg: r("instance.cfg"), dino_archivos: r("dino-archivos.json") },
+                V1Instance {
+                    mmc_pack: r("mmc-pack.json"),
+                    instance_cfg: r("instance.cfg"),
+                    dino_archivos: r("dino-archivos.json"),
+                },
             );
         }
     }
@@ -292,15 +287,30 @@ mod tests {
     const MMC_NEO: &str = r#"{"components":[{"uid":"org.lwjgl3","version":"3.3.3"},{"uid":"net.minecraft","version":"1.21.1"},{"uid":"net.neoforged","version":"21.1.251"}],"formatVersion":1}"#;
     const MMC_FABRIC: &str = r#"{"components":[{"uid":"net.minecraft","version":"26.2"},{"uid":"net.fabricmc.intermediary","version":"26.2"},{"uid":"net.fabricmc.fabric-loader","version":"0.19.3"}],"formatVersion":1}"#;
     const MMC_FORGE: &str = r#"{"components":[{"uid":"net.minecraft","version":"1.20.1"},{"uid":"net.minecraftforge","version":"47.2.0"}],"formatVersion":1}"#;
-    const CFG: &str = "[General]\nname=VoidSafio\nOverrideJavaArgs=false\nJvmArgs=-XX:+UseG1GC\nlastLaunchTime=1795434034343\n";
+    const CFG: &str =
+        "[General]\nname=VoidSafio\nOverrideJavaArgs=false\nJvmArgs=-XX:+UseG1GC\nlastLaunchTime=1795434034343\n";
     const ACCOUNTS: &str = r#"{"formatVersion":3,"accounts":[
         {"type":"Offline","profile":{"id":"aaa","name":"JugadorOffline"}},
         {"type":"MSA","active":true,"ygg":{"token":"SECRETO","exp":1},"profile":{"id":"bbb","name":"JugadorMicrosoft"}}]}"#;
 
     fn fixture() -> (Paths, BTreeMap<String, V1Instance>) {
         let mut m = BTreeMap::new();
-        m.insert("voidsafio".into(), V1Instance { mmc_pack: Some(MMC_NEO.into()), instance_cfg: Some(CFG.into()), dino_archivos: Some(r#"["mods/a.jar","config/b.toml"]"#.into()) });
-        m.insert("fabulously-optimized".into(), V1Instance { mmc_pack: Some(MMC_FABRIC.into()), instance_cfg: Some("OverrideJavaArgs=true\nJvmArgs=-XX:+UseZGC -Dfoo=1\n".into()), dino_archivos: None });
+        m.insert(
+            "voidsafio".into(),
+            V1Instance {
+                mmc_pack: Some(MMC_NEO.into()),
+                instance_cfg: Some(CFG.into()),
+                dino_archivos: Some(r#"["mods/a.jar","config/b.toml"]"#.into()),
+            },
+        );
+        m.insert(
+            "fabulously-optimized".into(),
+            V1Instance {
+                mmc_pack: Some(MMC_FABRIC.into()),
+                instance_cfg: Some("OverrideJavaArgs=true\nJvmArgs=-XX:+UseZGC -Dfoo=1\n".into()),
+                dino_archivos: None,
+            },
+        );
         m.insert("viejo-forge".into(), V1Instance { mmc_pack: Some(MMC_FORGE.into()), ..Default::default() });
         (Paths::new("R"), m)
     }

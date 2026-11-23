@@ -42,9 +42,14 @@ pub struct InstanceView {
 pub enum PrimaryAction {
     Play,
     /// Falta instalar; `bytes` es lo que se va a **descargar** (`None` si no se sabe).
-    Install { bytes: Option<u64> },
+    Install {
+        bytes: Option<u64>,
+    },
     /// Hay una versión nueva del pack en el catálogo; `bytes` es lo que se va a descargar.
-    Update { to_version: String, bytes: Option<u64> },
+    Update {
+        to_version: String,
+        bytes: Option<u64>,
+    },
     /// Ya hay una partida de esta instancia abierta.
     Playing,
 }
@@ -236,7 +241,14 @@ mod tests {
 
     #[test]
     fn el_estado_del_servidor_usa_los_nombres_que_lee_la_interfaz() {
-        let s = ServerStatus { online: true, motd: "x".into(), players: 3, max_players: 20, version: None, ping_ms: Some(40) };
+        let s = ServerStatus {
+            online: true,
+            motd: "x".into(),
+            players: 3,
+            max_players: 20,
+            version: None,
+            ping_ms: Some(40),
+        };
         let v = serde_json::to_value(&s).unwrap();
         assert_eq!((v["players"].as_u64(), v["max_players"].as_u64()), (Some(3), Some(20)));
     }
@@ -244,10 +256,17 @@ mod tests {
     #[test]
     fn la_vista_previa_separa_el_archivo_de_la_descarga() {
         let p = PackPreview {
-            code: Some("VOIDSAFIO".into()), name: "VoidSafio".into(), version: "3.15.0".into(),
-            minecraft: "1.21.1".into(), loader: LoaderSpec::NeoForge { version: "21.1.251".into() },
-            mods: 132, icon: None, server: Some("voidsafio.minecra.fr".into()),
-            pack_bytes: 296_512_611, download_bytes: None, supported: true,
+            code: Some("VOIDSAFIO".into()),
+            name: "VoidSafio".into(),
+            version: "3.15.0".into(),
+            minecraft: "1.21.1".into(),
+            loader: LoaderSpec::NeoForge { version: "21.1.251".into() },
+            mods: 132,
+            icon: None,
+            server: Some("voidsafio.minecra.fr".into()),
+            pack_bytes: 296_512_611,
+            download_bytes: None,
+            supported: true,
         };
         let v = serde_json::to_value(&p).unwrap();
         assert!(v.get("bytes").is_none(), "nada de un `bytes` ambiguo");

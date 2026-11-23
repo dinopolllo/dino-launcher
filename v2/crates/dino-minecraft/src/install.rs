@@ -1,9 +1,7 @@
 //! Instalar una versión de Minecraft con su loader.
 
-use crate::model::{
-    allowed, maven_path, AssetIndex, Features, LoaderProfile, VersionJson, VersionManifest,
-};
-use crate::{io_err, java, Dirs, Error, Report, Result};
+use crate::model::{allowed, maven_path, AssetIndex, Features, LoaderProfile, VersionJson, VersionManifest};
+use crate::{io_err, java, Error, Paths, Report, Result};
 use dino_download::{Downloader, Item, Stats};
 use std::path::{Path, PathBuf};
 
@@ -15,12 +13,8 @@ const FABRIC_META: &str = "https://meta.fabricmc.net/v2/versions/loader";
 const NEOFORGE_META: &str = "https://launcher-meta.modrinth.com/neo/v0/versions";
 const GAME_VERSION_PLACEHOLDER: &str = "${modrinth.gameVersion}";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Loader {
-    Vanilla,
-    Fabric(String),
-    NeoForge(String),
-}
+/// El loader de una instancia: el mismo tipo que guarda `instance.json`.
+pub use dino_core::schema::LoaderSpec as Loader;
 
 #[derive(Debug, Clone)]
 pub struct Installed {
@@ -40,7 +34,7 @@ pub struct InstallStats {
 
 pub async fn install(
     dl: &Downloader,
-    dirs: &Dirs,
+    dirs: &Paths,
     mc: &str,
     loader: &Loader,
     report: Report<'_>,
@@ -56,16 +50,21 @@ pub async fn install(
 
     let version = match loader {
         Loader::Vanilla => vanilla.clone(),
-        Loader::Fabric(v) => {
+        Loader::Fabric { version: v } => {
             let p: LoaderProfile = dl.json(&format!("{FABRIC_META}/{mc}/{v}/profile/json")).await?;
             merge(vanilla.clone(), p, mc)
         }
-        Loader::NeoForge(v) => {
+        Loader::NeoForge { version: v } => {
             let p: LoaderProfile = dl.json(&format!("{NEOFORGE_META}/{v}.json")).await?;
             merge(vanilla.clone(), p, mc)
         }
     };
 
+    // El id con que se guarda lo calcula Dino, no el perfil: así `installed` lo encuentra
+    // sin red aunque un loader cambie la forma de su id. Hoy coinciden (comprobado con los
+    // perfiles de Fabric y de NeoForge).
+    let mut version = version;
+    version.id = version_id(mc, loader);
     let vdir = dirs.version_dir(&version.id);
     std::fs::create_dir_all(&vdir).map_err(io_err(&vdir))?;
     // El jar del cliente lleva el nombre de la versión instalada: NeoForge lo excluye de su
@@ -78,11 +77,8 @@ pub async fn install(
         async { Ok::<_, Error>(dl.fetch_all(libs, &|p| report("Librerías", Some(p))).await?) },
         install_assets(dl, dirs, &vanilla, report),
         async {
-            let component = vanilla
-                .java_version
-                .as_ref()
-                .map(|j| j.component.clone())
-                .unwrap_or_else(|| "jre-legacy".into());
+            let component =
+                vanilla.java_version.as_ref().map(|j| j.component.clone()).unwrap_or_else(|| "jre-legacy".into());
             java::ensure(dl, dirs, &component, report).await
         },
     )?;
@@ -96,6 +92,31 @@ pub async fn install(
         Installed { version, java: java_bin, client_jar },
         InstallStats { libraries: libs_stats, assets: assets_stats, java: true, processors_run },
     ))
+}
+
+/// Id de la versión instalada para `mc` + `loader`: el `id` que dan los perfiles de cada
+/// loader, y con el que se guardan el JSON fusionado y el jar del cliente.
+pub fn version_id(mc: &str, loader: &Loader) -> String {
+    match loader {
+        Loader::Vanilla => mc.to_string(),
+        Loader::Fabric { version } => format!("fabric-loader-{version}-{mc}"),
+        Loader::NeoForge { version } => format!("neoforge-{version}"),
+    }
+}
+
+/// Lo ya instalado, sin red: lo que hace falta para lanzar a partir de `instance.json`.
+pub fn installed(dirs: &Paths, mc: &str, loader: &Loader) -> Result<Installed> {
+    let id = version_id(mc, loader);
+    let vdir = dirs.version_dir(&id);
+    let json = vdir.join(format!("{id}.json"));
+    let raw = std::fs::read(&json).map_err(io_err(&json))?;
+    let version: VersionJson = serde_json::from_slice(&raw)?;
+    let component = version.java_version.as_ref().map(|j| j.component.clone()).unwrap_or_else(|| "jre-legacy".into());
+    let java = java::bin_for(dirs, &component);
+    if !java.exists() {
+        return Err(Error::Other(format!("falta Java ({component}): hay que reparar la instancia")));
+    }
+    Ok(Installed { client_jar: vdir.join(format!("{id}.jar")), version, java })
 }
 
 /// Fusiona el perfil de un loader con la versión de Mojang de la que hereda.
@@ -132,7 +153,7 @@ pub fn merge(mut v: VersionJson, p: LoaderProfile, mc: &str) -> VersionJson {
     v
 }
 
-fn library_items(dirs: &Dirs, v: &VersionJson, client_jar: &Path) -> Result<Vec<Item>> {
+fn library_items(dirs: &Paths, v: &VersionJson, client_jar: &Path) -> Result<Vec<Item>> {
     let f = Features::default();
     let mut items = Vec::new();
     if let Some(d) = &v.downloads {
@@ -153,7 +174,7 @@ fn library_items(dirs: &Dirs, v: &VersionJson, client_jar: &Path) -> Result<Vec<
     Ok(items)
 }
 
-async fn install_assets(dl: &Downloader, dirs: &Dirs, v: &VersionJson, report: Report<'_>) -> Result<Stats> {
+async fn install_assets(dl: &Downloader, dirs: &Paths, v: &VersionJson, report: Report<'_>) -> Result<Stats> {
     let Some(idx) = &v.asset_index else { return Ok(Stats::default()) };
     let index_path = dirs.assets().join("indexes").join(format!("{}.json", idx.id));
     dl.fetch_all(
@@ -186,7 +207,7 @@ async fn install_assets(dl: &Downloader, dirs: &Dirs, v: &VersionJson, report: R
 /// Ejecuta los processors de cliente de NeoForge (parchean el jar del juego).
 /// Adaptado de `install_minecraft_inner` de app-lib.
 async fn run_processors(
-    dirs: &Dirs,
+    dirs: &Paths,
     v: &VersionJson,
     client_jar: &Path,
     mc: &str,
@@ -200,10 +221,8 @@ async fn run_processors(
     }
     let libdir = dirs.libraries();
     let java = java::java_console(javaw);
-    let client: Vec<_> = procs
-        .iter()
-        .filter(|p| p.sides.as_ref().map_or(true, |s| s.iter().any(|x| x == "client")))
-        .collect();
+    let client: Vec<_> =
+        procs.iter().filter(|p| p.sides.as_ref().is_none_or(|s| s.iter().any(|x| x == "client"))).collect();
 
     let resolve = |arg: &str| -> Result<String> {
         if let Some(key) = arg.strip_prefix('{').and_then(|a| a.strip_suffix('}')) {
@@ -253,9 +272,7 @@ async fn run_processors(
 }
 
 fn lib_path(libdir: &Path, coord: &str) -> Result<PathBuf> {
-    maven_path(coord)
-        .map(|p| libdir.join(p))
-        .ok_or_else(|| Error::Other(format!("coordenada Maven inválida: {coord}")))
+    maven_path(coord).map(|p| libdir.join(p)).ok_or_else(|| Error::Other(format!("coordenada Maven inválida: {coord}")))
 }
 
 /// Valores de `data`: `[coord]` es una librería, `'texto'` es un literal.
@@ -283,6 +300,13 @@ fn main_class(jar: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ids_de_version_como_los_de_los_perfiles() {
+        assert_eq!(version_id("1.21.1", &Loader::NeoForge { version: "21.1.251".into() }), "neoforge-21.1.251");
+        assert_eq!(version_id("1.21.1", &Loader::Fabric { version: "0.16.9".into() }), "fabric-loader-0.16.9-1.21.1");
+        assert_eq!(version_id("1.21.1", &Loader::Vanilla), "1.21.1");
+    }
 
     #[test]
     fn datos_de_processor() {

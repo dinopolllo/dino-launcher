@@ -1,0 +1,59 @@
+name: v2
+
+# Núcleo de Dino 2.0 (carpeta v2/). Va aparte de build.yml, que sigue compilando el 1.x de
+# src-tauri: así un cambio en uno no tumba el CI del otro.
+#
+# Formato, clippy sin avisos y tests en Windows, macOS y Linux. Los tests no usan red: las
+# pruebas contra servidores reales se hacen con dino-cli, a mano.
+
+on:
+  push:
+    paths: ["v2/**", ".github/workflows/v2.yml"]
+  pull_request:
+    paths: ["v2/**", ".github/workflows/v2.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: v2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  formato:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  comprobar:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: v2
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: v2
+      - name: Clippy sin avisos
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+      - name: dino-cli arranca
+        run: |
+          cargo build --release -p dino-cli
+          ./target/release/dino-cli --version

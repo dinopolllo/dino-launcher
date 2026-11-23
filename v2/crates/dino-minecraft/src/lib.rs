@@ -32,35 +32,8 @@ pub(crate) fn io_err(p: &Path) -> impl FnOnce(std::io::Error) -> Error + '_ {
     move |e| Error::Io(p.to_path_buf(), e)
 }
 
-/// Disposición en disco de Dino 2.0 (ver la sección 7 del documento de arquitectura).
-#[derive(Debug, Clone)]
-pub struct Dirs {
-    pub root: PathBuf,
-}
-
-impl Dirs {
-    pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
-    }
-    pub fn libraries(&self) -> PathBuf {
-        self.root.join("cache").join("libraries")
-    }
-    pub fn assets(&self) -> PathBuf {
-        self.root.join("cache").join("assets")
-    }
-    pub fn versions(&self) -> PathBuf {
-        self.root.join("cache").join("versions")
-    }
-    pub fn version_dir(&self, id: &str) -> PathBuf {
-        self.versions().join(id)
-    }
-    pub fn java(&self) -> PathBuf {
-        self.root.join("java")
-    }
-    pub fn instance(&self, id: &str) -> PathBuf {
-        self.root.join("instances").join(id)
-    }
-}
+/// Rutas de Dino 2.0: las de `dino-core`, que es su única fuente.
+pub use dino_core::schema::Paths;
 
 /// Lo que se va haciendo, para quien muestre progreso.
 pub type Report<'a> = &'a (dyn Fn(&str, Option<dino_download::Progress>) + Send + Sync);

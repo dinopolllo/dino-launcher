@@ -3,7 +3,7 @@
 //! 1.x dependía de lo que bajara el motor; aquí se usa el mismo índice que el launcher
 //! oficial, con cada archivo verificado por SHA-1.
 
-use crate::{io_err, Dirs, Error, Report, Result};
+use crate::{io_err, Error, Paths, Report, Result};
 use dino_download::{Downloader, Item};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -69,6 +69,11 @@ fn java_bin(home: &std::path::Path) -> PathBuf {
     }
 }
 
+/// Dónde queda el ejecutable de un runtime instalado.
+pub fn bin_for(dirs: &Paths, component: &str) -> PathBuf {
+    java_bin(&dirs.java().join(component))
+}
+
 /// Ejecutable para los processors: con consola, para poder leer su salida.
 pub fn java_console(javaw: &std::path::Path) -> PathBuf {
     if cfg!(windows) {
@@ -79,7 +84,7 @@ pub fn java_console(javaw: &std::path::Path) -> PathBuf {
 }
 
 /// Deja instalado el runtime `component` y devuelve la ruta a su ejecutable.
-pub async fn ensure(dl: &Downloader, dirs: &Dirs, component: &str, report: Report<'_>) -> Result<PathBuf> {
+pub async fn ensure(dl: &Downloader, dirs: &Paths, component: &str, report: Report<'_>) -> Result<PathBuf> {
     let home = dirs.java().join(component);
     let bin = java_bin(&home);
     let plat = platform().ok_or_else(|| Error::Other("plataforma sin Java de Mojang".into()))?;
@@ -100,7 +105,12 @@ pub async fn ensure(dl: &Downloader, dirs: &Dirs, component: &str, report: Repor
             "directory" => std::fs::create_dir_all(&dest).map_err(io_err(&dest))?,
             "file" => {
                 if let Some(d) = &f.downloads {
-                    items.push(Item { url: d.raw.url.clone(), dest, sha1: Some(d.raw.sha1.clone()), size: Some(d.raw.size) });
+                    items.push(Item {
+                        url: d.raw.url.clone(),
+                        dest,
+                        sha1: Some(d.raw.sha1.clone()),
+                        size: Some(d.raw.size),
+                    });
                 }
             }
             _ => {} // enlaces simbólicos: solo en macOS/Linux, el runtime no los necesita para arrancar

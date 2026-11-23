@@ -4,13 +4,13 @@
 # y se prueba entero desde `dino-cli`.
 [workspace]
 resolver = "2"
-members = ["crates/dino-core", "crates/dino-download", "crates/dino-minecraft", "crates/dino-auth", "crates/dino-cli"]
+members = ["crates/dino-core", "crates/dino-log", "crates/dino-download", "crates/dino-minecraft", "crates/dino-auth", "crates/dino-cli"]
 
 [workspace.package]
 edition = "2021"
 license = "GPL-3.0-only"
 version = "0.0.1"
-rust-version = "1.80"
+rust-version = "1.82"
 
 [workspace.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json", "http2"] }

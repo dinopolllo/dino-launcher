@@ -231,7 +231,13 @@ fn encaja(r: &Rule, f: &Features) -> bool {
         }
         if let Some(a) = &os.arch {
             // «x86» en las reglas de Mojang es 32 bits.
-            let aqui = if cfg!(target_arch = "x86") { "x86" } else if cfg!(target_arch = "aarch64") { "arm64" } else { "x86_64" };
+            let aqui = if cfg!(target_arch = "x86") {
+                "x86"
+            } else if cfg!(target_arch = "aarch64") {
+                "arm64"
+            } else {
+                "x86_64"
+            };
             if a != aqui {
                 return false;
             }
@@ -355,15 +361,21 @@ mod tests {
             os: None,
             features: Some([("is_quick_play_multiplayer".to_string(), true)].into()),
         };
-        assert!(!allowed(Some(&[rule.clone()]), &Features::default()));
+        assert!(!allowed(Some(std::slice::from_ref(&rule)), &Features::default()));
         assert!(allowed(Some(&[rule]), &Features { quick_play_multiplayer: true }));
     }
 
     #[test]
     fn la_clave_ignora_la_version_pero_no_el_clasificador() {
         let l = |n: &str| Library {
-            name: n.into(), downloads: None, url: None, sha1: None, size: None, rules: None,
-            downloadable: true, include_in_classpath: true,
+            name: n.into(),
+            downloads: None,
+            url: None,
+            sha1: None,
+            size: None,
+            rules: None,
+            downloadable: true,
+            include_in_classpath: true,
         };
         assert_eq!(l("org.ow2.asm:asm:9.7").key(), l("org.ow2.asm:asm:9.10.1").key());
         assert_ne!(l("org.lwjgl:lwjgl:3.3.3").key(), l("org.lwjgl:lwjgl:3.3.3:natives-windows").key());

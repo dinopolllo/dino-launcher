@@ -7,6 +7,7 @@ version.workspace = true
 
 [dependencies]
 dino-download = { path = "../dino-download" }
+dino-core = { path = "../dino-core" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

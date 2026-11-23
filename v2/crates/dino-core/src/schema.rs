@@ -66,6 +66,25 @@ impl Paths {
     pub fn logs(&self) -> PathBuf {
         self.root.join("logs")
     }
+    /// Librerías en disposición Maven, compartidas entre instancias.
+    pub fn libraries(&self) -> PathBuf {
+        self.root.join("cache").join("libraries")
+    }
+    /// Assets por hash (`objects/`) e índices (`indexes/`), compartidos entre instancias.
+    pub fn assets(&self) -> PathBuf {
+        self.root.join("cache").join("assets")
+    }
+    /// Versiones instaladas: JSON fusionado y jar del cliente.
+    pub fn versions(&self) -> PathBuf {
+        self.root.join("cache").join("versions")
+    }
+    pub fn version_dir(&self, version_id: &str) -> PathBuf {
+        self.versions().join(version_id)
+    }
+    /// Runtimes de Java descargados, uno por componente de Mojang.
+    pub fn java(&self) -> PathBuf {
+        self.root.join("java")
+    }
 }
 
 // ---------------------------------------------------------------- config.json
@@ -216,7 +235,9 @@ pub enum Memory {
     /// La que toque según la RAM de la máquina (se recalcula si la máquina cambia).
     #[default]
     Auto,
-    Fixed { max_mb: u32 },
+    Fixed {
+        max_mb: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]

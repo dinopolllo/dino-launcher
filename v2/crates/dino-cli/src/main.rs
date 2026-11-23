@@ -1,34 +1,39 @@
 //! `dino-cli`: el núcleo de Dino 2.0 sin interfaz.
 //!
+//!     dino-cli --version
 //!     dino-cli install <ruta-o-url.mrpack> <instancia>
-//!     dino-cli launch  <instancia> <jugador> [--server host] [--mem MB] [--wait]
+//!     dino-cli launch  <instancia> <jugador> [--msa] [--server host] [--mem MB] [--wait]
+//!     dino-cli accounts | verify <cuenta> | migrate-plan <raiz-1.x> <salida.json>
+//!     dino-cli diagnostics <salida.zip>
 //!
+//! Escribe los mismos archivos que la app (`library.json`, `instances/<id>/instance.json`)
+//! y registra en `logs/` como ella.
 //! Los datos van a `DINO_HOME` o, si no está, a `%USERPROFILE%\dino-v2-data`: a propósito
 //! fuera de `AppData`, para no mezclarse con el 1.x instalado.
 
+use dino_core::schema::{
+    self, InstallState, InstanceManifest, JavaChoice, Library, LibraryEntry, Memory, PackSource, Paths,
+};
 use dino_download::{Downloader, Progress};
-use dino_minecraft::install::Installed;
 use dino_minecraft::launch::{Account, LaunchSpec};
-use dino_minecraft::model::VersionJson;
-use dino_minecraft::{install, launch, mrpack, Dirs};
-use serde::{Deserialize, Serialize};
+use dino_minecraft::{install, launch, mrpack};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-#[derive(Serialize, Deserialize)]
-struct InstanceMeta {
-    pack: String,
-    pack_version: String,
-    minecraft: String,
-    version_id: String,
-    java: PathBuf,
-    client_jar: PathBuf,
-}
+const USAGE: &str = "uso:
+  dino-cli --version
+  dino-cli install <ruta-o-url.mrpack> <instancia>
+  dino-cli launch <instancia> <jugador> [--msa] [--server host] [--mem MB] [--wait]
+  dino-cli accounts
+  dino-cli verify <cuenta-microsoft>
+  dino-cli migrate-plan <raiz-1.x> <salida.json>
+  dino-cli diagnostics <salida.zip>";
 
 fn home() -> PathBuf {
     std::env::var_os("DINO_HOME").map(PathBuf::from).unwrap_or_else(|| {
-        let user = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).expect("sin carpeta de usuario");
+        let user =
+            std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).expect("sin carpeta de usuario");
         PathBuf::from(user).join("dino-v2-data")
     })
 }
@@ -46,7 +51,7 @@ impl Printer {
     fn report(&self, label: &str, p: Option<Progress>) {
         let mut last = self.last.lock().unwrap();
         let now = Instant::now();
-        let done = p.map_or(true, |p| p.files_done == p.files_total);
+        let done = p.is_none_or(|p| p.files_done == p.files_total);
         if !done {
             if let Some(t) = last.get(label) {
                 if now.duration_since(*t) < Duration::from_millis(500) {
@@ -59,7 +64,11 @@ impl Printer {
             None => eprintln!("· {label}"),
             Some(p) => eprintln!(
                 "· {label}: {}/{} archivos · {:.1}/{:.1} MB (bajados {:.1} MB)",
-                p.files_done, p.files_total, mb(p.bytes_done), mb(p.bytes_total), mb(p.bytes_downloaded)
+                p.files_done,
+                p.files_total,
+                mb(p.bytes_done),
+                mb(p.bytes_total),
+                mb(p.bytes_downloaded)
             ),
         }
     }
@@ -68,18 +77,28 @@ impl Printer {
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if matches!(args.first().map(String::as_str), Some("--version" | "-V")) {
+        println!("dino-cli {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    let paths = Paths::new(home());
+    let _log = dino_log::init(&paths, std::env::var_os("DINO_LOG").is_some()).ok();
     let r = match args.first().map(String::as_str) {
-        Some("install") if args.len() >= 3 => cmd_install(&args[1], &args[2]).await,
-        Some("launch") if args.len() >= 3 => cmd_launch(&args[1..]).await,
+        Some("install") if args.len() >= 3 => cmd_install(&paths, &args[1], &args[2]).await,
+        Some("launch") if args.len() >= 3 => cmd_launch(&paths, &args[1..]).await,
         Some("accounts") => cmd_accounts(),
         Some("verify") if args.len() >= 2 => cmd_verify(&args[1]).await,
         Some("migrate-plan") if args.len() >= 3 => cmd_migrate_plan(&args[1], &args[2]),
+        Some("diagnostics") if args.len() >= 2 => dino_log::export_report(&paths, std::path::Path::new(&args[1]))
+            .map(|n| println!("{n} archivos en {}", args[1]))
+            .map_err(|e| e.to_string()),
         _ => {
-            eprintln!("uso:\n  dino-cli install <ruta-o-url.mrpack> <instancia>\n  dino-cli launch <instancia> <jugador> [--msa] [--server host] [--mem MB] [--wait]\n  dino-cli accounts\n  dino-cli verify <cuenta-microsoft>");
+            eprintln!("{USAGE}");
             std::process::exit(2);
         }
     };
     if let Err(e) = r {
+        tracing::error!(error = %e, "comando fallido");
         eprintln!("ERROR: {e}");
         std::process::exit(1);
     }
@@ -126,10 +145,20 @@ fn cmd_migrate_plan(root: &str, out: &str) -> Result<(), String> {
     let plan = migrate::plan(&paths, &packs, accounts.as_deref(), &inst)?;
     let size = |p: &std::path::Path| -> u64 {
         fn walk(p: &std::path::Path) -> u64 {
-            std::fs::read_dir(p).map(|rd| rd.flatten().map(|e| {
-                let t = e.file_type().ok();
-                if t.is_some_and(|t| t.is_dir()) { walk(&e.path()) } else { e.metadata().map(|m| m.len()).unwrap_or(0) }
-            }).sum()).unwrap_or(0)
+            std::fs::read_dir(p)
+                .map(|rd| {
+                    rd.flatten()
+                        .map(|e| {
+                            let t = e.file_type().ok();
+                            if t.is_some_and(|t| t.is_dir()) {
+                                walk(&e.path())
+                            } else {
+                                e.metadata().map(|m| m.len()).unwrap_or(0)
+                            }
+                        })
+                        .sum()
+                })
+                .unwrap_or(0)
         }
         walk(p)
     };
@@ -149,18 +178,22 @@ fn cmd_migrate_plan(root: &str, out: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn cmd_install(src: &str, id: &str) -> Result<(), String> {
+async fn cmd_install(paths: &Paths, src: &str, id: &str) -> Result<(), String> {
+    if !schema::valid_id(id) {
+        return Err(format!("«{id}» no vale como id: minúsculas, números y guiones"));
+    }
     let t0 = Instant::now();
-    let dirs = Dirs::new(home());
     let dl = Downloader::new(32);
     let pr = Printer { last: Mutex::new(Default::default()) };
     let report = |l: &str, p: Option<Progress>| pr.report(l, p);
 
     let mrpack = if src.starts_with("http://") || src.starts_with("https://") {
-        let dest = dirs.root.join("packs").join(format!("{id}.mrpack"));
-        dl.fetch_all(vec![dino_download::Item { url: src.into(), dest: dest.clone(), sha1: None, size: None }], &|p| report("Pack", Some(p)))
-            .await
-            .map_err(|e| e.to_string())?;
+        let dest = paths.pack_file(id);
+        dl.fetch_all(vec![dino_download::Item { url: src.into(), dest: dest.clone(), sha1: None, size: None }], &|p| {
+            report("Pack", Some(p))
+        })
+        .await
+        .map_err(|e| e.to_string())?;
         dest
     } else {
         PathBuf::from(src)
@@ -169,27 +202,48 @@ async fn cmd_install(src: &str, id: &str) -> Result<(), String> {
     let index = mrpack::read_index(&mrpack).map_err(|e| e.to_string())?;
     let mc = index.minecraft().map_err(|e| e.to_string())?.to_string();
     let loader = index.loader().map_err(|e| e.to_string())?;
-    eprintln!("Pack «{}» {} → Minecraft {mc}, {loader:?}", index.name, index.version_id);
+    tracing::info!(pack = %index.name, version = %index.version_id, %mc, ?loader, "instalando");
 
-    let game_dir = dirs.instance(id).join("minecraft");
+    // Lo que el jugador eligió (memoria, args, Java) sobrevive a reinstalar.
+    let previo: Option<InstanceManifest> = schema::load(&paths.instance_manifest(id)).map_err(|e| e.to_string())?;
+    let mut manifest = InstanceManifest {
+        schema: schema::INSTANCE_SCHEMA,
+        id: id.into(),
+        minecraft: mc.clone(),
+        loader: loader.clone(),
+        state: InstallState::Incomplete,
+        memory: previo.as_ref().map(|m| m.memory).unwrap_or_default(),
+        jvm_args: previo.as_ref().map(|m| m.jvm_args.clone()).unwrap_or_default(),
+        java: previo.as_ref().map(|m| m.java.clone()).unwrap_or(JavaChoice::Auto),
+        managed_files: previo.as_ref().map(|m| m.managed_files.clone()).unwrap_or_default(),
+    };
+    // Se marca incompleta antes de empezar: un corte a mitad deja constancia.
+    schema::save(&paths.instance_manifest(id), &manifest, schema::INSTANCE_SCHEMA).map_err(|e| e.to_string())?;
+
     let t_mc = Instant::now();
-    let mc_fut = install::install(&dl, &dirs, &mc, &loader, &report);
+    let mc_fut = install::install(&dl, paths, &mc, &loader, &report);
+    let game_dir = paths.game_dir(id);
     let pack_fut = mrpack::install(&dl, &mrpack, &game_dir, &report);
     let (mc_res, pack_res) = tokio::join!(mc_fut, pack_fut);
     let (inst, st) = mc_res.map_err(|e| e.to_string())?;
     let (_, pack_stats) = pack_res.map_err(|e| e.to_string())?;
 
-    let meta = InstanceMeta {
-        pack: index.name.clone(),
+    manifest.state = InstallState::Ready;
+    schema::save(&paths.instance_manifest(id), &manifest, schema::INSTANCE_SCHEMA).map_err(|e| e.to_string())?;
+    let mut lib: Library = schema::load(&paths.library()).map_err(|e| e.to_string())?.unwrap_or_default();
+    lib.instances.retain(|e| e.id != id);
+    lib.instances.push(LibraryEntry {
+        id: id.into(),
+        name: index.name.clone(),
+        source: PackSource::File,
         pack_version: index.version_id.clone(),
-        minecraft: mc.clone(),
-        version_id: inst.version.id.clone(),
-        java: inst.java.clone(),
-        client_jar: inst.client_jar.clone(),
-    };
-    let p = dirs.instance(id).join("instance.json");
-    std::fs::write(&p, serde_json::to_vec_pretty(&meta).unwrap()).map_err(|e| e.to_string())?;
+        server: None,
+        last_played: None,
+    });
+    lib.selected.get_or_insert_with(|| id.to_string());
+    schema::save(&paths.library(), &lib, schema::LIBRARY_SCHEMA).map_err(|e| e.to_string())?;
 
+    tracing::info!(secs = t0.elapsed().as_secs_f64(), "instalación terminada");
     println!(
         "{}",
         serde_json::json!({
@@ -206,11 +260,11 @@ async fn cmd_install(src: &str, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn cmd_launch(args: &[String]) -> Result<(), String> {
+async fn cmd_launch(paths: &Paths, args: &[String]) -> Result<(), String> {
     let id = &args[0];
     let player = &args[1];
     let mut server = None;
-    let mut mem = 4096u32;
+    let mut mem: Option<u32> = None;
     let mut wait = false;
     let mut msa = false;
     let mut it = args[2..].iter();
@@ -218,20 +272,22 @@ async fn cmd_launch(args: &[String]) -> Result<(), String> {
         match a.as_str() {
             "--msa" => msa = true,
             "--server" => server = it.next().cloned(),
-            "--mem" => mem = it.next().and_then(|m| m.parse().ok()).unwrap_or(mem),
+            "--mem" => mem = it.next().and_then(|m| m.parse().ok()),
             "--wait" => wait = true,
             o => return Err(format!("opción desconocida: {o}")),
         }
     }
-    let dirs = Dirs::new(home());
-    let meta: InstanceMeta = serde_json::from_slice(
-        &std::fs::read(dirs.instance(id).join("instance.json")).map_err(|e| format!("instancia sin instalar: {e}"))?,
-    )
-    .map_err(|e| e.to_string())?;
-    let vjson = dirs.version_dir(&meta.version_id).join(format!("{}.json", meta.version_id));
-    let version: VersionJson =
-        serde_json::from_slice(&std::fs::read(&vjson).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    let inst = Installed { version, java: meta.java, client_jar: meta.client_jar };
+    let manifest: InstanceManifest = schema::load(&paths.instance_manifest(id))
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("la instancia «{id}» no está instalada"))?;
+    if manifest.state != InstallState::Ready {
+        return Err(format!("la instancia «{id}» quedó a medias: vuelve a instalarla"));
+    }
+    let inst = install::installed(paths, &manifest.minecraft, &manifest.loader).map_err(|e| e.to_string())?;
+    let mem = mem.unwrap_or(match manifest.memory {
+        Memory::Fixed { max_mb } => max_mb,
+        Memory::Auto => 4096,
+    });
 
     let account = if msa {
         // Puente: la sesión la obtuvo y la renueva el motor; aquí solo se usa.
@@ -240,8 +296,10 @@ async fn cmd_launch(args: &[String]) -> Result<(), String> {
     } else {
         Account::offline(player)
     };
-    let game_dir = dirs.instance(id).join("minecraft");
-    let jvm = vec!["-XX:+UseG1GC".to_string(), "-XX:MaxGCPauseMillis=50".to_string()];
+    let game_dir = paths.game_dir(id);
+    // Los args del jugador van después: si repite uno, gana el suyo.
+    let mut jvm = vec!["-XX:+UseG1GC".to_string(), "-XX:MaxGCPauseMillis=50".to_string()];
+    jvm.extend(manifest.jvm_args.iter().cloned());
     let spec = LaunchSpec {
         account: &account,
         game_dir: &game_dir,
@@ -250,13 +308,14 @@ async fn cmd_launch(args: &[String]) -> Result<(), String> {
         extra_jvm_args: &jvm,
         server: server.as_deref(),
     };
-    let mut cmd = launch::command(&dirs, &inst, &spec).map_err(|e| e.to_string())?;
-    let logdir = dirs.instance(id).join("dino-logs");
+    let mut cmd = launch::command(paths, &inst, &spec).map_err(|e| e.to_string())?;
+    let logdir = paths.instance_dir(id).join("dino-logs");
     std::fs::create_dir_all(&logdir).map_err(|e| e.to_string())?;
     let out = std::fs::File::create(logdir.join("latest.log")).map_err(|e| e.to_string())?;
     cmd.stdout(out.try_clone().map_err(|e| e.to_string())?).stderr(out);
     let t0 = Instant::now();
     let mut child = launch::spawn(cmd).map_err(|e| format!("no pude lanzar Java: {e}"))?;
+    tracing::info!(instance = %id, pid = child.id(), mem, "juego lanzado");
     println!("{}", serde_json::json!({"launched": true, "pid": child.id(), "spawn_ms": t0.elapsed().as_millis()}));
     if wait {
         let st = child.wait().map_err(|e| e.to_string())?;

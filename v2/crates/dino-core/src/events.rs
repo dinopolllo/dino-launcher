@@ -107,8 +107,15 @@ mod tests {
     #[test]
     fn la_barra_lee_el_total_de_la_tarea_y_la_fase_queda_para_el_texto() {
         let p = Progress {
-            task: "t".into(), instance: None, task_bytes_done: 500, task_bytes_total: 1000,
-            phase: Phase::VerifyingFiles, files_done: 3, files_total: 120, bytes_done: 0, bytes_total: 0,
+            task: "t".into(),
+            instance: None,
+            task_bytes_done: 500,
+            task_bytes_total: 1000,
+            phase: Phase::VerifyingFiles,
+            files_done: 3,
+            files_total: 120,
+            bytes_done: 0,
+            bytes_total: 0,
             finished: false,
         };
         let v = serde_json::to_value(Event::Progress(p)).unwrap();

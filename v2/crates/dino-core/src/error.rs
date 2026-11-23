@@ -83,9 +83,10 @@ impl DinoError {
                 (true, Action::OpenLogs)
             }
             ErrorCode::Busy => (true, Action::None),
-            ErrorCode::PackNotFound | ErrorCode::PackInvalid | ErrorCode::UnsupportedLoader | ErrorCode::NotInstalled => {
-                (false, Action::None)
-            }
+            ErrorCode::PackNotFound
+            | ErrorCode::PackInvalid
+            | ErrorCode::UnsupportedLoader
+            | ErrorCode::NotInstalled => (false, Action::None),
         };
         Self { code, retryable, action, detail: detail.into() }
     }

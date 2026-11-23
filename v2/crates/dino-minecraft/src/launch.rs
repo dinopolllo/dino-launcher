@@ -6,7 +6,7 @@
 
 use crate::install::Installed;
 use crate::model::{allowed, Arg, Features};
-use crate::{io_err, Dirs, Result};
+use crate::{io_err, Paths, Result};
 use md5::{Digest, Md5};
 use std::collections::HashMap;
 use std::path::Path;
@@ -43,7 +43,7 @@ pub struct LaunchSpec<'a> {
     pub server: Option<&'a str>,
 }
 
-pub fn command(dirs: &Dirs, inst: &Installed, spec: &LaunchSpec) -> Result<std::process::Command> {
+pub fn command(dirs: &Paths, inst: &Installed, spec: &LaunchSpec) -> Result<std::process::Command> {
     let v = &inst.version;
     let f = Features { quick_play_multiplayer: spec.server.is_some() };
     let sep = if cfg!(windows) { ";" } else { ":" };

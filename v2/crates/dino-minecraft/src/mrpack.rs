@@ -46,9 +46,9 @@ impl Index {
     pub fn loader(&self) -> Result<Loader> {
         let d = &self.dependencies;
         if let Some(v) = d.get("neoforge") {
-            Ok(Loader::NeoForge(v.clone()))
+            Ok(Loader::NeoForge { version: v.clone() })
         } else if let Some(v) = d.get("fabric-loader") {
-            Ok(Loader::Fabric(v.clone()))
+            Ok(Loader::Fabric { version: v.clone() })
         } else if d.contains_key("forge") || d.contains_key("quilt-loader") {
             Err(Error::Other("Forge y Quilt están fuera del alcance de 2.0 (ningún pack los usa)".into()))
         } else {

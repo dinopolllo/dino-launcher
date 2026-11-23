@@ -121,11 +121,8 @@ pub fn session(accounts_json: &Path, name: &str) -> Result<Session, AuthError> {
 
 /// Pregunta a Mojang si la sesión vale, sin enseñarla. Devuelve el nombre del perfil.
 pub async fn verify(client: &reqwest::Client, s: &Session) -> Result<String, AuthError> {
-    let r = client
-        .get("https://api.minecraftservices.com/minecraft/profile")
-        .bearer_auth(&s.access_token)
-        .send()
-        .await?;
+    let r =
+        client.get("https://api.minecraftservices.com/minecraft/profile").bearer_auth(&s.access_token).send().await?;
     if !r.status().is_success() {
         return Err(AuthError::Rejected(r.status().as_u16()));
     }
@@ -151,7 +148,9 @@ mod tests {
 
     #[test]
     fn una_sesion_caducada_no_se_usa() {
-        let p = file(r#"{"formatVersion":3,"accounts":[{"type":"MSA","ygg":{"token":"t","exp":10},"profile":{"id":"u","name":"Yahir"}}]}"#);
+        let p = file(
+            r#"{"formatVersion":3,"accounts":[{"type":"MSA","ygg":{"token":"t","exp":10},"profile":{"id":"u","name":"Yahir"}}]}"#,
+        );
         assert!(matches!(session(&p, "Yahir"), Err(AuthError::Expired(_))));
         let _ = std::fs::remove_file(p);
     }
