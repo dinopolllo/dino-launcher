@@ -10,8 +10,7 @@ Por debajo usa [ElyPrismLauncher](https://github.com/ElyPrismLauncher/Launcher) 
 él resuelve autenticación, Java, mod loaders y descarga de mods; Dino Launcher pone la cara,
 el catálogo de modpacks y la sincronización.
 
-El motor se descarga de sus releases oficiales y **no se modifica**, así que su GPL-3 no se
-propaga a este código. Corre siempre con `--dir` apuntando a la carpeta de datos de Dino
+El motor se descarga de sus releases oficiales y **no se modifica**. Corre siempre con `--dir` apuntando a la carpeta de datos de Dino
 Launcher, de modo que no toca ningún Prism que ya tengas instalado.
 
 Los detalles de la orquestación están en [docs/arquitectura.md](docs/arquitectura.md).
@@ -109,6 +108,10 @@ de cada push.
 
 ## Licencia
 
-Este proyecto es de Yahir. ElyPrismLauncher y Prism Launcher son de sus respectivos autores bajo
-GPL-3.0 y se usan sin modificar. Dino Launcher no está afiliado ni respaldado por Prism Launcher,
-ElyPrismLauncher, Ely.by ni Mojang.
+Dino Launcher es software libre bajo la **GNU General Public License v3.0**: puedes usarlo,
+estudiarlo, modificarlo y redistribuirlo con las condiciones de [LICENSE](LICENSE). Quien
+reparta una versión, modificada o no, tiene que ofrecer también su código fuente.
+
+Copyright © Yahir. ElyPrismLauncher y Prism Launcher son de sus respectivos autores bajo
+GPL-3.0. Dino Launcher no está afiliado ni respaldado por Prism Launcher, ElyPrismLauncher,
+Ely.by, Modrinth ni Mojang.
