@@ -73,6 +73,7 @@ async fn main() {
         Some("launch") if args.len() >= 3 => cmd_launch(&args[1..]).await,
         Some("accounts") => cmd_accounts(),
         Some("verify") if args.len() >= 2 => cmd_verify(&args[1]).await,
+        Some("migrate-plan") if args.len() >= 3 => cmd_migrate_plan(&args[1], &args[2]),
         _ => {
             eprintln!("uso:\n  dino-cli install <ruta-o-url.mrpack> <instancia>\n  dino-cli launch <instancia> <jugador> [--msa] [--server host] [--mem MB] [--wait]\n  dino-cli accounts\n  dino-cli verify <cuenta-microsoft>");
             std::process::exit(2);
@@ -113,6 +114,38 @@ async fn cmd_verify(name: &str) -> Result<(), String> {
     let dl = Downloader::new(1);
     let perfil = dino_auth::verify(dl.client(), &s).await.map_err(|e| e.to_string())?;
     println!("{}", serde_json::json!({"valid": true, "profile": perfil, "uuid": s.uuid, "expires": s.expires}));
+    Ok(())
+}
+
+/// Plan de migración 1.x → 2.0 **en seco**: lee los datos de 1.x en `root` y escribe en
+/// `out` qué haría, sin mover ni escribir nada en `root`. Sin secretos.
+fn cmd_migrate_plan(root: &str, out: &str) -> Result<(), String> {
+    use dino_core::{migrate, schema::Paths};
+    let paths = Paths::new(root);
+    let (packs, accounts, inst) = migrate::read_v1(&paths).ok_or("no encuentro packs.json de 1.x")?;
+    let plan = migrate::plan(&paths, &packs, accounts.as_deref(), &inst)?;
+    let size = |p: &std::path::Path| -> u64 {
+        fn walk(p: &std::path::Path) -> u64 {
+            std::fs::read_dir(p).map(|rd| rd.flatten().map(|e| {
+                let t = e.file_type().ok();
+                if t.is_some_and(|t| t.is_dir()) { walk(&e.path()) } else { e.metadata().map(|m| m.len()).unwrap_or(0) }
+            }).sum()).unwrap_or(0)
+        }
+        walk(p)
+    };
+    let report = serde_json::json!({
+        "library": plan.library,
+        "manifests": plan.manifests.iter().map(|m| serde_json::json!({
+            "id": m.id, "minecraft": m.minecraft, "loader": m.loader, "memory": m.memory,
+            "jvm_args": m.jvm_args, "managed_files": m.managed_files.len(),
+        })).collect::<Vec<_>>(),
+        "accounts": plan.accounts,
+        "moves": plan.moves.iter().map(|m| serde_json::json!({
+            "from": m.from, "to": m.to, "exists": m.from.exists(), "dest_exists": m.to.exists(), "mb": size(&m.from) / 1_048_576,
+        })).collect::<Vec<_>>(),
+        "warnings": plan.warnings,
+    });
+    std::fs::write(out, serde_json::to_vec_pretty(&report).unwrap()).map_err(|e| e.to_string())?;
     Ok(())
 }
 

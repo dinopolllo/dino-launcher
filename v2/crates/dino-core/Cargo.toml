@@ -1,0 +1,11 @@
+[package]
+name = "dino-core"
+description = "Contratos de Dino 2.0: esquemas en disco, eventos, errores con código y migración desde 1.x."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
