@@ -11,10 +11,9 @@
 //! Los datos van a `DINO_HOME` o, si no está, a `%USERPROFILE%\dino-v2-data`: a propósito
 //! fuera de `AppData`, para no mezclarse con el 1.x instalado.
 
-use dino_core::schema::{self, InstallState, InstanceManifest, JavaChoice, LibraryEntry, Memory, PackSource, Paths};
+use dino_core::schema::{self, InstallState, InstanceManifest, JavaChoice, LibraryEntry, PackSource, Paths};
 use dino_download::{Downloader, Progress};
-use dino_minecraft::launch::{Account, LaunchSpec};
-use dino_minecraft::{install, launch, mrpack};
+use dino_minecraft::{install, mrpack};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -22,7 +21,8 @@ use std::time::{Duration, Instant};
 const USAGE: &str = "uso:
   dino-cli --version
   dino-cli install <ruta-o-url.mrpack> <instancia>
-  dino-cli launch <instancia> <jugador> [--msa] [--server host] [--mem MB] [--wait]
+  dino-cli launch <instancia> [cuenta] [--msa] [--server host] [--mem MB] [--wait]
+  dino-cli status | stop
   dino-cli account list | add-offline <nombre> | select <uuid|nombre> | remove <uuid>
   dino-cli account sync | login | renew [--force]
   dino-cli engine ensure
@@ -86,7 +86,9 @@ async fn main() {
     let _log = dino_log::init(&paths, std::env::var_os("DINO_LOG").is_some()).ok();
     let r = match args.first().map(String::as_str) {
         Some("install") if args.len() >= 3 => cmd_install(&paths, &args[1], &args[2]).await,
-        Some("launch") if args.len() >= 3 => cmd_launch(&paths, &args[1..]).await,
+        Some("launch") if args.len() >= 2 => cmd_launch(&paths, &args[1..]).await,
+        Some("status") => cmd_status(&paths),
+        Some("stop") => cmd_stop(&paths),
         Some("accounts") => cmd_account(&paths, &["list".to_string()]).await,
         Some("account") if args.len() >= 2 => cmd_account(&paths, &args[1..]).await,
         Some("engine") if args.get(1).map(String::as_str) == Some("ensure") => cmd_engine_ensure().await,
@@ -328,11 +330,17 @@ async fn cmd_install(paths: &Paths, src: &str, id: &str) -> Result<(), String> {
     let t_mc = Instant::now();
     let mc_fut = install::install(&dl, paths, &mc, &loader, &report);
     let game_dir = paths.game_dir(id);
-    let pack_fut = mrpack::install(&dl, &mrpack, &game_dir, &report);
+    let previous = manifest.managed_files.clone();
+    let pack_fut = mrpack::install(&dl, &mrpack, &game_dir, &previous, &report);
     let (mc_res, pack_res) = tokio::join!(mc_fut, pack_fut);
     let (inst, st) = mc_res.map_err(|e| e.to_string())?;
-    let (_, pack_stats) = pack_res.map_err(|e| e.to_string())?;
+    let packed = pack_res.map_err(|e| e.to_string())?;
+    let pack_stats = packed.stats;
+    for r in &packed.removed {
+        tracing::info!(file = %r, "quitado: la versión nueva del pack ya no lo trae");
+    }
 
+    manifest.managed_files = packed.managed;
     manifest.state = InstallState::Ready;
     schema::save(&paths.instance_manifest(id), &manifest, schema::INSTANCE_SCHEMA).map_err(|e| e.to_string())?;
     store
@@ -363,6 +371,7 @@ async fn cmd_install(paths: &Paths, src: &str, id: &str) -> Result<(), String> {
             "assets": {"files": st.assets.files, "skipped": st.assets.skipped, "mb": mb(st.assets.downloaded_bytes)},
             "mods": {"files": pack_stats.files, "skipped": pack_stats.skipped, "mb": mb(pack_stats.downloaded_bytes)},
             "processors_run": st.processors_run,
+            "removed": packed.removed,
             "version_id": inst.version.id,
         })
     );
@@ -371,74 +380,71 @@ async fn cmd_install(paths: &Paths, src: &str, id: &str) -> Result<(), String> {
 
 async fn cmd_launch(paths: &Paths, args: &[String]) -> Result<(), String> {
     let id = &args[0];
-    let player = &args[1];
-    let mut server = None;
-    let mut mem: Option<u32> = None;
+    let mut who: Option<String> = None;
+    let mut opts = dino_session::LaunchOptions::default();
     let mut wait = false;
     let mut msa = false;
-    let mut it = args[2..].iter();
+    let mut it = args[1..].iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--msa" => msa = true,
-            "--server" => server = it.next().cloned(),
-            "--mem" => mem = it.next().and_then(|m| m.parse().ok()),
+            "--server" => opts.server = it.next().cloned(),
+            "--mem" => opts.max_mem_mb = it.next().and_then(|m| m.parse().ok()),
             "--wait" => wait = true,
+            o if !o.starts_with("--") && who.is_none() => who = Some(o.to_string()),
             o => return Err(format!("opción desconocida: {o}")),
         }
     }
-    let manifest: InstanceManifest = schema::load(&paths.instance_manifest(id))
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("la instancia «{id}» no está instalada"))?;
-    if manifest.state != InstallState::Ready {
-        return Err(format!("la instancia «{id}» quedó a medias: vuelve a instalarla"));
-    }
-    let inst = install::installed(paths, &manifest.minecraft, &manifest.loader).map_err(|e| e.to_string())?;
-    let mem = mem.unwrap_or(match manifest.memory {
-        Memory::Fixed { max_mb } => max_mb,
-        Memory::Auto => 4096,
-    });
-
-    // `player`: una cuenta de Dino (uuid o nombre). Con `--msa`, la de Microsoft con ese
-    // nombre; sin cuenta guardada con ese nombre, una offline de paso.
     let accs = dino_auth::Accounts::new(paths.clone());
     let e = engine();
-    let found = accs.list(&e.accounts()).map_err(|x| x.to_string())?.into_iter().find(|v| {
-        (v.uuid == *player || v.name == *player) && (v.kind == dino_core::schema::AccountKind::MicrosoftBridge) == msa
-    });
-    let account = match found {
-        Some(v) => {
-            let i = accs.launch_identity(Some(&v.uuid), &e.accounts()).map_err(|x| x.to_string())?;
-            Account { name: i.name, uuid: i.uuid, access_token: i.access_token, user_type: i.user_type }
-        }
-        None if msa => {
-            return Err(format!("no hay ninguna cuenta Microsoft «{player}»: prueba `dino-cli account sync`"))
-        }
-        None => Account::offline(player),
-    };
-    let game_dir = paths.game_dir(id);
-    // Los args del jugador van después: si repite uno, gana el suyo.
-    let mut jvm = vec!["-XX:+UseG1GC".to_string(), "-XX:MaxGCPauseMillis=50".to_string()];
-    jvm.extend(manifest.jvm_args.iter().cloned());
-    let spec = LaunchSpec {
-        account: &account,
-        game_dir: &game_dir,
-        max_mem_mb: mem,
-        min_mem_mb: 2048.min(mem),
-        extra_jvm_args: &jvm,
-        server: server.as_deref(),
-    };
-    let mut cmd = launch::command(paths, &inst, &spec).map_err(|e| e.to_string())?;
-    let logdir = paths.instance_dir(id).join("dino-logs");
-    std::fs::create_dir_all(&logdir).map_err(|e| e.to_string())?;
-    let out = std::fs::File::create(logdir.join("latest.log")).map_err(|e| e.to_string())?;
-    cmd.stdout(out.try_clone().map_err(|e| e.to_string())?).stderr(out);
-    let t0 = Instant::now();
-    let mut child = launch::spawn(cmd).map_err(|e| format!("no pude lanzar Java: {e}"))?;
-    tracing::info!(instance = %id, pid = child.id(), mem, "juego lanzado");
-    println!("{}", serde_json::json!({"launched": true, "pid": child.id(), "spawn_ms": t0.elapsed().as_millis()}));
-    if wait {
-        let st = child.wait().map_err(|e| e.to_string())?;
-        println!("{}", serde_json::json!({"exited": st.code(), "played_s": t0.elapsed().as_secs_f64()}));
+    // La cuenta: una guardada (uuid o nombre); si no hay ninguna con ese nombre y no es
+    // Microsoft, se crea offline. Sin nombre, la activa.
+    if let Some(w) = &who {
+        let l = accs.list(&e.accounts()).map_err(|x| x.to_string())?;
+        let found = l.iter().find(|v| {
+            (v.uuid == *w || v.name == *w) && (v.kind == dino_core::schema::AccountKind::MicrosoftBridge) == msa
+        });
+        opts.account = match found {
+            Some(v) => Some(v.uuid.clone()),
+            None if msa => {
+                return Err(format!("no hay ninguna cuenta Microsoft «{w}»: prueba `dino-cli account sync`"))
+            }
+            None => Some(accs.add_offline(w).map_err(|x| x.to_string())?.uuid),
+        };
     }
+    let t0 = Instant::now();
+    let session = dino_session::launch(paths, &accs, &e.accounts(), id, &opts)
+        .map_err(|x| format!("{:?}: {}", x.code, x.detail))?;
+    println!(
+        "{}",
+        serde_json::json!({"launched": true, "pid": session.record.pid, "spawn_ms": t0.elapsed().as_millis()})
+    );
+    if wait {
+        let out = dino_session::wait(paths, session, &|st| {
+            println!("{}", serde_json::json!({"state": st, "ms": t0.elapsed().as_millis()}));
+        });
+        println!(
+            "{}",
+            serde_json::json!({"exit_code": out.exit_code, "reached_window": out.reached_window, "played_s": out.played.as_secs()})
+        );
+    }
+    Ok(())
+}
+
+fn cmd_status(paths: &Paths) -> Result<(), String> {
+    match dino_session::running(paths) {
+        Some(r) => println!(
+            "{}",
+            serde_json::json!({"playing": true, "instance": r.instance, "pid": r.pid, "started": r.started})
+        ),
+        None => println!("{}", serde_json::json!({"playing": false})),
+    }
+    Ok(())
+}
+
+fn cmd_stop(paths: &Paths) -> Result<(), String> {
+    let t0 = Instant::now();
+    let r = dino_session::stop(paths, Duration::from_secs(30));
+    println!("{}", serde_json::json!({"result": format!("{r:?}"), "ms": t0.elapsed().as_millis()}));
     Ok(())
 }

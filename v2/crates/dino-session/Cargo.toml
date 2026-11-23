@@ -1,0 +1,14 @@
+[package]
+name = "dino-session"
+description = "La partida de Dino 2.0: lanzarla, su estado, cerrarla bien y reengancharse a ella."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+dino-core = { path = "../dino-core" }
+dino-auth = { path = "../dino-auth" }
+dino-minecraft = { path = "../dino-minecraft" }
+serde.workspace = true
+serde_json.workspace = true
+tracing = "0.1.44"

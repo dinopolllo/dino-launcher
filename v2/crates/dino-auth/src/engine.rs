@@ -345,68 +345,14 @@ fn merge_ini_if_missing(existing: &str, kv: &[(&str, &str)]) -> String {
     merge_ini(existing, &missing)
 }
 
-/// Ventanas de un proceso. Solo hace algo en Windows: en macOS el motor arranca sin
-/// ventana ni icono en el Dock cuando no se le pide.
+/// Ventanas de un proceso (ver `dino_core::os`).
 mod win {
-    #[cfg(windows)]
-    mod imp {
-        #[link(name = "user32")]
-        extern "system" {
-            fn EnumWindows(cb: extern "system" fn(isize, isize) -> i32, param: isize) -> i32;
-            fn GetWindowThreadProcessId(hwnd: isize, pid: *mut u32) -> u32;
-            fn IsWindowVisible(hwnd: isize) -> i32;
-            fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
-            fn PostMessageW(hwnd: isize, msg: u32, w: usize, l: isize) -> i32;
-        }
-
-        struct Search {
-            pid: u32,
-            visible_only: bool,
-            found: Vec<isize>,
-        }
-
-        extern "system" fn visit(hwnd: isize, param: isize) -> i32 {
-            // SAFETY: `param` es el puntero a `Search` que pasa `windows_of`, vivo durante
-            // toda la enumeración (EnumWindows es síncrona).
-            let s = unsafe { &mut *(param as *mut Search) };
-            let mut owner = 0u32;
-            unsafe { GetWindowThreadProcessId(hwnd, &mut owner) };
-            if owner == s.pid && (!s.visible_only || unsafe { IsWindowVisible(hwnd) } != 0) {
-                s.found.push(hwnd);
-            }
-            1
-        }
-
-        fn windows_of(pid: u32, visible_only: bool) -> Vec<isize> {
-            let mut s = Search { pid, visible_only, found: Vec::new() };
-            unsafe { EnumWindows(visit, &mut s as *mut Search as isize) };
-            s.found
-        }
-
-        pub fn hide_all(pid: u32) -> u32 {
-            let w = windows_of(pid, true);
-            for h in &w {
-                unsafe { ShowWindow(*h, 0) }; // SW_HIDE
-            }
-            w.len() as u32
-        }
-
-        pub fn close_all(pid: u32) {
-            for h in windows_of(pid, false) {
-                unsafe { PostMessageW(h, 0x0010, 0, 0) }; // WM_CLOSE
-            }
-        }
+    pub fn hide_all(pid: u32) -> u32 {
+        dino_core::os::hide_windows(pid)
     }
-
-    #[cfg(not(windows))]
-    mod imp {
-        pub fn hide_all(_pid: u32) -> u32 {
-            0
-        }
-        pub fn close_all(_pid: u32) {}
+    pub fn close_all(pid: u32) {
+        dino_core::os::close_windows(pid, true);
     }
-
-    pub use imp::*;
 }
 
 #[cfg(test)]

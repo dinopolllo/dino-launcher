@@ -4,7 +4,7 @@
 # y se prueba entero desde `dino-cli`.
 [workspace]
 resolver = "2"
-members = ["crates/dino-core", "crates/dino-config", "crates/dino-log", "crates/dino-download", "crates/dino-minecraft", "crates/dino-auth", "crates/dino-cli"]
+members = ["crates/dino-core", "crates/dino-config", "crates/dino-log", "crates/dino-download", "crates/dino-minecraft", "crates/dino-auth", "crates/dino-session", "crates/dino-cli"]
 
 [workspace.package]
 edition = "2021"

@@ -207,6 +207,7 @@ dependencies = [
  "dino-download",
  "dino-log",
  "dino-minecraft",
+ "dino-session",
  "serde",
  "serde_json",
  "tokio",
@@ -268,6 +269,18 @@ dependencies = [
  "thiserror",
  "tokio",
  "zip",
+]
+
+[[package]]
+name = "dino-session"
+version = "0.0.1"
+dependencies = [
+ "dino-auth",
+ "dino-core",
+ "dino-minecraft",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

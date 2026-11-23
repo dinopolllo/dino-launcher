@@ -14,6 +14,7 @@ pub mod api;
 pub mod error;
 pub mod events;
 pub mod migrate;
+pub mod os;
 pub mod schema;
 
 pub use error::{Action, DinoError, ErrorCode};
