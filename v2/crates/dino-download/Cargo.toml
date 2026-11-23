@@ -1,0 +1,15 @@
+[package]
+name = "dino-download"
+description = "Descargas concurrentes con verificación por hash, reintentos y escritura atómica."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+reqwest.workspace = true
+tokio.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha1.workspace = true

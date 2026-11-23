@@ -1,0 +1,17 @@
+[package]
+name = "dino-cli"
+description = "Línea de comandos del núcleo de Dino 2.0: pruebas y benchmarks sin interfaz."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "dino-cli"
+path = "src/main.rs"
+
+[dependencies]
+dino-download = { path = "../dino-download" }
+dino-minecraft = { path = "../dino-minecraft" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true

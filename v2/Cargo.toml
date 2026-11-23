@@ -1,0 +1,31 @@
+# Dino Launcher 2.0 — núcleo propio (etapa 2: prototipo de evaluación).
+#
+# Vive aparte del launcher 1.x (`src-tauri/`) a propósito: este workspace no conoce Tauri
+# y se prueba entero desde `dino-cli`.
+[workspace]
+resolver = "2"
+members = ["crates/dino-download", "crates/dino-minecraft", "crates/dino-cli"]
+
+[workspace.package]
+edition = "2021"
+license = "GPL-3.0-only"
+version = "0.0.1"
+rust-version = "1.80"
+
+[workspace.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json", "http2"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "time"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+sha1 = "0.10"
+sha2 = "0.10"
+md-5 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
