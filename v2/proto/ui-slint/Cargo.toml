@@ -1,0 +1,22 @@
+# Prototipo de medición (etapa 2, paso 2): la misma estructura de pantalla de Dino en Slint,
+# para comparar RAM, CPU y arranque con la interfaz de Tauri. No es la interfaz de 2.0.
+[package]
+name = "dino-ui-slint-proto"
+version = "0.0.1"
+edition = "2021"
+license = "GPL-3.0-only"
+publish = false
+
+[workspace]
+
+[dependencies]
+slint = "=1.19.0"
+
+[build-dependencies]
+slint-build = "=1.19.0"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true

@@ -1,0 +1,59 @@
+// Estructura de la pantalla Jugar: barra lateral, ficha del pack, botón Jugar, progreso
+// y una animación decorativa del fondo (como `drift` en index.html) para medir su coste.
+import { Button, ProgressIndicator } from "std-widgets.slint";
+
+component RailButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    width: 56px; height: 56px; border-radius: 14px;
+    background: active ? #ffffff22 : transparent;
+    Text { text: label; color: #e8f0ea; font-size: 11px; }
+}
+
+export component App inherits Window {
+    title: "Dino Launcher (prototipo Slint)";
+    preferred-width: 1120px; preferred-height: 742px;
+    min-width: 900px; min-height: 620px;
+    background: #0d1310;
+
+    in property <string> pack-name;
+    in property <string> pack-meta;
+    in property <string> server;
+    in-out property <float> progress: 0;
+    in-out property <string> status: "Listo para jugar";
+    callback play();
+
+    // Fondo con deriva lenta, el equivalente a la animación infinita de 1.x.
+    // `animation-tick()` hace que Slint repinte cada frame, igual que una animación CSS infinita.
+    Rectangle {
+        x: -80px + 80px * (1 + sin(animation-tick() / 84s * 360deg)); y: -60px;
+        width: root.width + 160px; height: root.height + 120px;
+        background: @radial-gradient(circle, #1f4d33 0%, #0d1310 70%);
+    }
+
+    HorizontalLayout {
+        padding: 16px; spacing: 16px;
+        VerticalLayout {
+            spacing: 8px; alignment: start;
+            RailButton { label: "Jugar"; active: true; }
+            RailButton { label: "Packs"; }
+            RailButton { label: "Ajustes"; }
+            RailButton { label: "Admin"; }
+        }
+        Rectangle {
+            border-radius: 20px; background: #ffffff10; border-color: #ffffff22; border-width: 1px;
+            VerticalLayout {
+                padding: 32px; spacing: 14px; alignment: end;
+                Text { text: root.pack-name; font-size: 44px; font-weight: 800; color: #f2f7f3; }
+                Text { text: root.pack-meta; font-size: 14px; color: #a9b8ad; }
+                Text { text: root.server; font-size: 13px; color: #7fd49a; }
+                HorizontalLayout {
+                    spacing: 16px; alignment: start;
+                    Button { text: "Jugar"; primary: true; width: 180px; clicked => { root.play(); } }
+                    Text { text: root.status; color: #cfd9d1; vertical-alignment: center; }
+                }
+                ProgressIndicator { progress: root.progress; height: 6px; }
+            }
+        }
+    }
+}
