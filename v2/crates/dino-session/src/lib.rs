@@ -225,14 +225,22 @@ pub enum Stopped {
 /// `grace` no se ha ido, a la fuerza. En 1.x el plazo era 30 s y se mantiene.
 pub fn stop(paths: &Paths, grace: Duration) -> Stopped {
     let Some(rec) = running(paths) else { return Stopped::NotRunning };
-    os::close_windows(rec.pid, false);
+    // Si se pide parar mientras carga, la ventana aún no existe y no hay a quién avisar:
+    // se reintenta hasta que aparezca (si no, se esperaba el plazo entero y se forzaba).
+    let mut asked = os::close_windows(rec.pid, false) > 0;
     let deadline = Instant::now() + grace;
+    let mut tick = 0u32;
     while Instant::now() < deadline {
         if !os::process_alive(rec.pid) {
             let _ = std::fs::remove_file(record_path(paths));
             return Stopped::Clean;
         }
         std::thread::sleep(Duration::from_millis(200));
+        tick += 1;
+        if !asked && tick >= 5 {
+            tick = 0;
+            asked = os::close_windows(rec.pid, false) > 0;
+        }
     }
     os::terminate(rec.pid);
     let _ = std::fs::remove_file(record_path(paths));

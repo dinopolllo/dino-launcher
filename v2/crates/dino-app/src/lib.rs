@@ -345,7 +345,7 @@ fn open_main_window(app: &tauri::AppHandle) {
     match tauri::WebviewWindowBuilder::from_config(app, &conf).and_then(|b| b.build()) {
         Ok(w) => {
             apply_glass(&w);
-            tracing::info!("interfaz reabierta tras la partida");
+            tracing::info!("interfaz reabierta");
         }
         Err(x) => tracing::error!(error = %x, "no pude reabrir la ventana"),
     }

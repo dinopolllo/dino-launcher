@@ -311,16 +311,22 @@ pub enum StoreError {
 /// Lee un archivo con esquema. `Ok(None)` si no existe.
 pub fn load<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, StoreError> {
     match std::fs::read(path) {
-        Ok(b) => serde_json::from_slice(&b).map(Some).map_err(|e| StoreError::Corrupt(path.into(), e)),
+        Ok(b) => serde_json::from_slice(strip_bom(&b)).map(Some).map_err(|e| StoreError::Corrupt(path.into(), e)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(StoreError::Read(path.into(), e)),
     }
 }
 
+/// El Bloc de notas y PowerShell 5 guardan UTF-8 con BOM; un archivo retocado a mano
+/// no debe darse por dañado por eso.
+fn strip_bom(b: &[u8]) -> &[u8] {
+    b.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(b)
+}
+
 /// Guarda con esquema, salvo que el archivo en disco sea de una versión más nueva.
 pub fn save<T: Serialize>(path: &Path, value: &T, schema: u32) -> Result<(), StoreError> {
     if let Ok(b) = std::fs::read(path) {
-        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&b) {
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(strip_bom(&b)) {
             if let Some(s) = v.get("schema").and_then(|s| s.as_u64()) {
                 if s as u32 > schema {
                     return Err(StoreError::Newer(path.into(), s as u32));
@@ -371,6 +377,15 @@ mod tests {
         assert!(!valid_id("../x"));
         assert!(!valid_id("Void Safio"));
         assert!(!valid_id(""));
+    }
+
+    #[test]
+    fn un_json_con_bom_no_esta_danado() {
+        let d = tmp("bom");
+        let p = d.join("config.json");
+        std::fs::write(&p, b"\xEF\xBB\xBF{\"schema\": 1}").unwrap();
+        let c: Config = load(&p).unwrap().unwrap();
+        assert_eq!(c.schema, 1);
     }
 
     #[test]

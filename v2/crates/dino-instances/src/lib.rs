@@ -137,7 +137,9 @@ impl Core {
     pub async fn library_list(&self) -> R<Vec<InstanceView>> {
         let lib = self.store.library().map_err(internal)?;
         let catalog = if lib.instances.iter().any(|x| matches!(x.source, PackSource::Catalog { .. })) {
-            catalog::fetch_catalog().await.ok()
+            // La biblioteca no espera a una red lenta o caída: sin respuesta en 2 s se enseña
+            // con lo instalado («Actualizar» aparecerá la próxima vez; Jugar sí consulta).
+            tokio::time::timeout(Duration::from_secs(2), catalog::fetch_catalog()).await.ok().and_then(|r| r.ok())
         } else {
             None
         };
@@ -175,7 +177,7 @@ impl Core {
         };
         let action = if playing == Some(entry.id.as_str()) {
             PrimaryAction::Playing
-        } else if let Some(r) = remote.filter(|r| r.version != entry.pack_version && installed) {
+        } else if let Some(r) = remote.filter(|r| r.version != entry.pack_version && (installed || on_disk)) {
             // `r.bytes` del catálogo es el peso del `.mrpack`, no lo que se va a descargar
             // (mods, Minecraft, assets): eso no se sabe hasta leer el pack.
             PrimaryAction::Update { to_version: r.version.clone(), bytes: None }
@@ -347,14 +349,7 @@ impl Core {
 
     /// Avisa antes de empezar, en vez de fallar a mitad con el disco lleno.
     fn check_space(&self, pack_bytes: u64) -> R<()> {
-        let need = os::space_needed(pack_bytes);
-        match os::free_space(&self.paths.root) {
-            Some(free) if free < need => Err(e(
-                ErrorCode::DiskFull,
-                format!("hacen falta {} MB libres y hay {} MB", need / 1_048_576, free / 1_048_576),
-            )),
-            _ => Ok(()),
-        }
+        space_ok(os::free_space(&self.paths.root), pack_bytes)
     }
 
     /// Primera vez que 2.0 abre una carpeta de 1.x: migra (mueve, no copia, con diario).
@@ -437,13 +432,16 @@ impl Core {
             std::fs::copy(path, &dest).map_err(|x| e(ErrorCode::DiskPermission, x))?;
         }
         extract_icon(&dest, &self.paths.pack_icon(&id));
+        // Reimportar el mismo pack (una versión nueva) lo actualiza: lo que el jugador ya
+        // tenía y el archivo no dice —servidor, última partida— se conserva.
+        let before = lib.find(&id);
         let entry = LibraryEntry {
             id: id.clone(),
             name: pre.name.clone(),
             source: PackSource::File,
             pack_version: pre.version.clone(),
-            server,
-            last_played: None,
+            server: server.or_else(|| before.and_then(|b| b.server.clone())),
+            last_played: before.and_then(|b| b.last_played),
         };
         self.store
             .update_library(|l| {
@@ -921,6 +919,18 @@ fn extract_icon(mrpack: &Path, dest: &Path) {
 
 /// Mods de una instancia: los que anotó el pack o, si es de antes de anotarlos, los `.jar`
 /// que haya en `mods/`. La ficha y el detalle usan esta misma cuenta.
+/// Sin dato del disco no se bloquea: mejor intentar que impedir jugar por una medida fallida.
+fn space_ok(free: Option<u64>, pack_bytes: u64) -> R<()> {
+    let need = os::space_needed(pack_bytes);
+    match free {
+        Some(free) if free < need => Err(e(
+            ErrorCode::DiskFull,
+            format!("hacen falta {} MB libres y hay {} MB", need / 1_048_576, free / 1_048_576),
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn mods_of(m: &InstanceManifest, game: &Path) -> u32 {
     if m.managed_files.is_empty() {
         count_jars(&game.join("mods"))
@@ -966,6 +976,15 @@ fn dir_size(p: &Path) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sin_sitio_se_avisa_antes_de_empezar() {
+        let x = space_ok(Some(500 * 1_048_576), 300 * 1_048_576).unwrap_err();
+        assert_eq!(x.code, ErrorCode::DiskFull);
+        assert!(x.detail.contains("1050 MB") && x.detail.contains("500 MB"), "{}", x.detail);
+        assert!(space_ok(Some(2_000 * 1_048_576), 300 * 1_048_576).is_ok());
+        assert!(space_ok(None, u64::MAX).is_ok(), "sin medida no se bloquea");
+    }
 
     fn core(n: &str) -> (Arc<Core>, Arc<Mutex<Vec<Event>>>) {
         let d = std::env::temp_dir().join(format!("dino-instances-{}-{n}", std::process::id()));
