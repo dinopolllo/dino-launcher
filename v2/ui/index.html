@@ -2706,10 +2706,9 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     });
   }
 
-  /* Tareas que no pasan por `play` —importar, verificar, añadir del catálogo— no emiten
-     eventos de sesión, así que el panel de progreso se enseña y se quita a mano. Se
-     cancelan igual que jugar: el descargador mira la misma señal. */
-  function tareaSinSesion(texto){
+  /* Importar, verificar y añadir del catálogo también anuncian su sesión, pero el
+     panel se enseña ya al pulsar, con el texto que toca, sin esperar al primer aviso. */
+  function empezarTarea(texto){
     /* Un aviso de un intento anterior no puede quedarse encima de uno nuevo. */
     showAlert(null);
     cancelando = false;
@@ -2718,14 +2717,13 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     setProgress(texto, -1);
     mostrarEstado("preparando");
   }
-  function finTareaSinSesion(){
+  /* El cierre normal lo hace el `idle` del núcleo. Esto cubre el único caso en que no
+     llega: que la tarea ni empiece porque ya había otra (`busy`), y entonces el núcleo
+     no anuncia nada. Repetirlo tras un `idle` no hace daño. */
+  function acabarTarea(){
     estadoPrevio = null;
     cancelando = false;
     mostrarEstado("reposo");
-    /* Se relee salga como salga: el núcleo avisa con `library_changed` solo cuando una
-       instalación termina bien, y una cancelada o fallida deja la instancia a medias.
-       Sin esto la ficha seguiría diciendo «Jugar» con la instancia ya sin instalar. */
-    refreshAll();
   }
 
   var btnInstall = $("btnInstall");
@@ -2742,18 +2740,17 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       btnInstall.textContent = "Instalando…";
       /* A Jugar antes de empezar, no al acabar: es donde se ve el progreso. */
       document.querySelector('[data-go="jugar"]').click();
-      tareaSinSesion("Preparando la instalación");
+      empezarTarea("Preparando la instalación");
       call("mrpack_import", { path: path, server: srv || null })
         .then(function(){
           pending = null;
           $("previewBody").hidden = true;
           $("previewSub").textContent = "Suelta un archivo para verlo antes de instalar.";
           $("dropHint").textContent = "solo archivos .mrpack";
-          return refreshAll();
         })
         .catch(function(e){ if (!esCancelado(e)) showError("No se pudo importar.", e); })
         .then(function(){
-          finTareaSinSesion();
+          acabarTarea();
           btnInstall.disabled = false;
           btnInstall.textContent = "Instalar este modpack";
         });
@@ -2855,39 +2852,23 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   }
 
   /* ---- la sesión al cargar ----
-     Sin sondeo, la página se entera de una tarea por sus eventos. Pero si se recarga a
-     mitad —o el núcleo recrea la ventana— la tarea ya había empezado, y `app_info.session`
-     lo dice una vez al cargar. Las tareas que no pasan por `play` no avisan al terminar,
-     y si fallan nadie se entera; por eso, solo en ese caso, se vuelve a preguntar cada
-     3 s hasta que acabe. Es el único sondeo de la página, y solo existe mientras dura
-     esa tarea huérfana. */
-  var huerfana = null;
+     La página se entera de una tarea por sus eventos. Si se recarga a mitad —o el
+     núcleo recrea la ventana— la tarea ya había empezado, y `app_info.session` lo dice
+     una vez al cargar. El `idle` del final llega igual que siempre, así que no hace
+     falta nada más: ni sondeo ni relectura. */
   function sesionAlCargar(s){
     if (!s || s.state === "idle") return;
-    if (s.state === "playing") { onSession(s); return; }
     if (estadoPrevio) return;   /* ya hay una tarea conocida en marcha */
     onSession(s);
-    setProgress("Preparando", -1);
-    vigilarHuerfana();
-  }
-  function vigilarHuerfana(){
-    clearTimeout(huerfana);
-    huerfana = setTimeout(function(){
-      call("app_info").then(function(a){
-        var ses = a && a.session;
-        if (ses && ses.state === "preparing" && estadoPrevio === "preparando") return vigilarHuerfana();
-        huerfana = null;
-        if (ses && ses.state === "playing") onSession(ses);
-        else if (estadoPrevio === "preparando") onSession({ state: "idle" });
-      }).catch(vigilarHuerfana);
-    }, 3000);
+    if (s.state === "preparing") setProgress("Preparando", -1);
   }
 
-  /* ---- sesión ---- */
+  /* ---- sesión ----
+     Toda tarea larga —jugar, instalar, verificar, importar, añadir del catálogo—
+     anuncia `preparing` al empezar e `idle` al acabar, salga bien, falle o se cancele.
+     Al jugar, el `idle` no llega al lanzar sino cuando se cierra el juego. */
   function onSession(s){
     var st = s.state;
-    /* Un evento de verdad manda sobre la vigilancia de una tarea huérfana. */
-    if (st !== "preparing") { clearTimeout(huerfana); huerfana = null; }
     if (st === "preparing") {
       estadoPrevio = "preparando";
       mostrarEstado("preparando");
@@ -2903,7 +2884,10 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     } else {
       estadoPrevio = null;
       JUGANDO_ID = null;
+      cancelando = false;
       mostrarEstado("reposo");
+      /* La tarea pudo cambiar la biblioteca aunque fallara: una verificación cancelada
+         deja la instancia a medias. Por eso se relee siempre aquí. */
       refreshAll();
     }
   }
@@ -3021,12 +3005,11 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       btnVerify.disabled = true;
       var antes = btnVerify.textContent;
       btnVerify.textContent = "Verificando…";
-      tareaSinSesion("Verificando archivos");
+      empezarTarea("Verificando archivos");
       call("instance_verify", { id: PACK.id })
-        .then(refreshAll)
         .catch(function(e){ if (!esCancelado(e)) showError("No se pudo verificar.", e); })
         .then(function(){
-          finTareaSinSesion();
+          acabarTarea();
           btnVerify.disabled = false; btnVerify.textContent = antes;
         });
     });
@@ -3729,13 +3712,13 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
          después `play` lo instala y abre el juego. */
       cerrarJoin();
       document.querySelector('[data-go="jugar"]').click();
-      tareaSinSesion("Descargando el modpack");
+      empezarTarea("Descargando el modpack");
       call("catalog_add", { code: ultimoCodigo }).then(function(){
         joinEstado("pedir");
-        finTareaSinSesion();
+        acabarTarea();
         return refreshAll().then(function(){ return runPlay(); });
       }).catch(function(e){
-        finTareaSinSesion();
+        acabarTarea();
         if (!esCancelado(e)) showError("No se pudo añadir el modpack.", e);
       }).then(function(){ btn.disabled = false; });
     });
