@@ -49,11 +49,30 @@ pub struct Core {
     cancel: Arc<AtomicBool>,
 }
 
-/// Suelta el cerrojo de tarea al salir, pase lo que pase.
-struct BusyGuard<'a>(&'a Mutex<Option<(String, Option<String>)>>);
+/// Suelta el cerrojo de tarea al salir, pase lo que pase, y anuncia `idle`. Toda tarea
+/// larga (instalar, verificar, importar, añadir, jugar) dice `preparing` al empezar e `idle`
+/// al acabar, bien, mal o cancelada: la interfaz no tiene que sondear para enterarse.
+/// La excepción es Jugar cuando el juego arranca: entonces `idle` lo dice el hilo que
+/// sigue la partida, al terminarla ([`BusyGuard::hand_off`]).
+struct BusyGuard<'a> {
+    busy: &'a Mutex<Option<(String, Option<String>)>>,
+    emit: Emit,
+    instance: Option<String>,
+    handed_off: bool,
+}
+
+impl BusyGuard<'_> {
+    fn hand_off(mut self) {
+        self.handed_off = true;
+    }
+}
+
 impl Drop for BusyGuard<'_> {
     fn drop(&mut self) {
-        *self.0.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        *self.busy.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        if !self.handed_off {
+            (self.emit)(Event::Session(Session { state: SessionState::Idle, instance: self.instance.clone() }));
+        }
     }
 }
 
@@ -84,8 +103,15 @@ impl Core {
             return Err(e(ErrorCode::Busy, format!("ya hay una tarea en marcha: {t}")));
         }
         *b = Some((what.to_string(), instance.map(String::from)));
+        drop(b);
         self.cancel.store(false, Ordering::SeqCst);
-        Ok(BusyGuard(&self.busy))
+        (self.emit)(Event::Session(Session { state: SessionState::Preparing, instance: instance.map(String::from) }));
+        Ok(BusyGuard {
+            busy: &self.busy,
+            emit: self.emit.clone(),
+            instance: instance.map(String::from),
+            handed_off: false,
+        })
     }
 
     fn check_cancel(&self) -> R<()> {
@@ -466,23 +492,17 @@ impl Core {
         let id = req.instance.clone();
         let lib = self.store.library().map_err(internal)?;
         let entry = lib.find(&id).cloned().ok_or_else(|| e(ErrorCode::NotInstalled, format!("no hay «{id}»")))?;
-        (self.emit)(Event::Session(Session { state: SessionState::Preparing, instance: Some(id.clone()) }));
         let result = self.play_inner(&entry, req.launch).await;
-        drop(guard);
         match result {
             Ok(Some(session)) => {
+                // Desde aquí el estado lo cuenta el hilo de la partida (playing → idle).
+                guard.hand_off();
                 let core = self.clone();
                 std::thread::spawn(move || core.watch(session));
                 Ok(PlayOutcome::Launched)
             }
-            Ok(None) => {
-                (self.emit)(Event::Session(Session { state: SessionState::Idle, instance: None }));
-                Ok(if req.launch { PlayOutcome::NeedsAccount } else { PlayOutcome::Installed })
-            }
-            Err(x) => {
-                (self.emit)(Event::Session(Session { state: SessionState::Idle, instance: None }));
-                Err(x)
-            }
+            Ok(None) => Ok(if req.launch { PlayOutcome::NeedsAccount } else { PlayOutcome::Installed }),
+            Err(x) => Err(x),
         }
     }
 
@@ -1006,6 +1026,35 @@ mod tests {
         schema::save(&c.paths.instance_manifest("x"), &m, 1).unwrap();
         let out = c.play(PlayRequest { instance: "x".into(), launch: true }).await.unwrap();
         assert_eq!(out, PlayOutcome::NeedsAccount);
+    }
+
+    #[tokio::test]
+    async fn una_tarea_que_falla_tambien_anuncia_preparing_e_idle() {
+        let (c, log) = core("estados");
+        c.store
+            .update_library(|l| {
+                l.upsert(LibraryEntry {
+                    id: "x".into(),
+                    name: "X".into(),
+                    source: PackSource::File,
+                    pack_version: "1".into(),
+                    server: None,
+                    last_played: None,
+                })
+            })
+            .unwrap();
+        // Sin .mrpack: verificar falla, pero la interfaz tiene que saber que acabó.
+        assert_eq!(c.instance_verify("x").await.unwrap_err().code, ErrorCode::PackInvalid);
+        let states: Vec<SessionState> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                Event::Session(s) => Some(s.state),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(states, vec![SessionState::Preparing, SessionState::Idle]);
     }
 
     #[test]

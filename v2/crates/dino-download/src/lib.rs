@@ -264,13 +264,17 @@ impl Downloader {
         if self.cancelled() {
             return Err(DownloadError::Cancelled);
         }
-        if ya_esta(item).await {
+        if ya_esta(item, self.cancel.clone()).await {
             c.skipped.fetch_add(1, Ordering::Relaxed);
             return Ok(());
         }
+        // Comprobar el hash de un archivo grande también se corta al cancelar.
+        if self.cancelled() {
+            return Err(DownloadError::Cancelled);
+        }
         let cached = self.cache_path(item);
         if let Some(cp) = &cached {
-            if cache_ok(cp, item).await {
+            if cache_ok(cp, item, self.cancel.clone()).await {
                 link_or_copy(cp, &item.dest).await?;
                 c.from_cache.fetch_add(1, Ordering::Relaxed);
                 return Ok(());
@@ -409,7 +413,7 @@ fn part_path(item: &Item) -> PathBuf {
 }
 
 /// ¿El archivo ya está y es el correcto?
-async fn ya_esta(item: &Item) -> bool {
+async fn ya_esta(item: &Item, cancel: Option<Arc<std::sync::atomic::AtomicBool>>) -> bool {
     let Ok(meta) = tokio::fs::metadata(&item.dest).await else { return false };
     if let Some(size) = item.size {
         if meta.len() != size {
@@ -418,7 +422,7 @@ async fn ya_esta(item: &Item) -> bool {
     }
     match &item.sha1 {
         None => true,
-        Some(want) => match sha1_file(&item.dest).await {
+        Some(want) => match sha1_file_cancellable(&item.dest, cancel).await {
             Ok(got) => got.eq_ignore_ascii_case(want),
             Err(_) => false,
         },
@@ -427,9 +431,9 @@ async fn ya_esta(item: &Item) -> bool {
 
 /// La caché solo guarda archivos ya verificados, pero se comprueba el hash igualmente: un
 /// archivo de la caché que alguien tocó no debe repartirse a todos los packs.
-async fn cache_ok(path: &Path, item: &Item) -> bool {
+async fn cache_ok(path: &Path, item: &Item, cancel: Option<Arc<std::sync::atomic::AtomicBool>>) -> bool {
     let probe = Item { dest: path.to_path_buf(), ..item.clone() };
-    ya_esta(&probe).await
+    ya_esta(&probe, cancel).await
 }
 
 /// Enlace duro si se puede (mismo disco: 0 bytes extra), copia si no.
@@ -447,6 +451,14 @@ async fn link_or_copy(from: &Path, to: &Path) -> Result<(), DownloadError> {
 
 /// SHA-1 de un archivo, leyéndolo por trozos.
 pub async fn sha1_file(path: &Path) -> std::io::Result<String> {
+    sha1_file_cancellable(path, None).await
+}
+
+/// Como [`sha1_file`], pero mira la señal de cancelar en cada trozo.
+async fn sha1_file_cancellable(
+    path: &Path,
+    cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+) -> std::io::Result<String> {
     let path = path.to_path_buf();
     tokio::task::spawn_blocking(move || {
         use std::io::Read;
@@ -454,6 +466,9 @@ pub async fn sha1_file(path: &Path) -> std::io::Result<String> {
         let mut h = Sha1::new();
         let mut buf = vec![0u8; 256 * 1024];
         loop {
+            if cancel.as_ref().is_some_and(|c| c.load(Ordering::SeqCst)) {
+                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "cancelado"));
+            }
             let n = f.read(&mut buf)?;
             if n == 0 {
                 break;
@@ -525,9 +540,9 @@ mod tests {
         let sha = sha1_file(&p).await.unwrap();
         let mut it = item(p.to_str().unwrap(), Some(&sha));
         it.size = Some(4);
-        assert!(ya_esta(&it).await);
+        assert!(ya_esta(&it, None).await);
         let malo = Item { sha1: Some("00".into()), ..it };
-        assert!(!ya_esta(&malo).await);
+        assert!(!ya_esta(&malo, None).await);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
