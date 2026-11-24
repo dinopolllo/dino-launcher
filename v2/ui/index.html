@@ -3078,10 +3078,17 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     msaTexto.textContent = "Un momento: la primera vez se descarga el motor que hace de puente con Microsoft.";
     msaAntes = CUENTAS.filter(function(x){ return x.kind === "microsoft_bridge"; }).length;
     esperandoMSA = true;
-    call("account_microsoft_add").then(function(){
+    call("account_microsoft_add").then(function(r){
       if (!esperandoMSA) return;
-      msaTexto.innerHTML = 'Se abrió la ventana del motor. Ve a <span class="mono-i">Cuentas</span> ' +
-                           'y añade tu cuenta de Microsoft: en cuanto la detecte, la cierro yo.';
+      /* En Windows el núcleo enseña solo la ventana de Microsoft del motor; si no pudo
+         (u otra plataforma), el motor entero, y hay que ir a Cuentas a mano. */
+      if (r && r.only_microsoft_window) {
+        msaTexto.innerHTML = 'Se abrió la ventana de Microsoft. Pulsa <span class="mono-i">Sign in with Microsoft</span> ' +
+                             'o escribe el código en microsoft.com/link: en cuanto entres, la cierro yo.';
+      } else {
+        msaTexto.innerHTML = 'Se abrió la ventana del motor. Ve a <span class="mono-i">Cuentas</span> ' +
+                             'y añade tu cuenta de Microsoft: en cuanto la detecte, la cierro yo.';
+      }
       msaEstado.textContent = "esperando a que inicies sesión…";
     }).catch(function(e){
       esperandoMSA = false;
