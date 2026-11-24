@@ -617,6 +617,26 @@ impl Core {
         });
         tracing::info!(?out, "partida terminada");
         (self.emit)(Event::LibraryChanged);
+        // Tras un cierre limpio no queda nada que enseñar: lo que siga vivo del Java de Dino
+        // es un resto. Tras un fallo se deja en paz (el asistente de fallos puede estar
+        // preparando su informe); lo recogerá la próxima apertura si sigue sin ventana.
+        if out.exit_code == Some(0) {
+            std::thread::sleep(Duration::from_secs(3));
+            self.sweep_strays();
+        }
+    }
+
+    /// Cierra los procesos del Java de Dino que siguen vivos sin ventana y sin partida.
+    /// En 1.x lo hacía `kill_orphans`; aquí ya no hay motores colgados, pero algunos
+    /// modpacks dejan un proceso suyo vivo que retiene los archivos del Java.
+    pub fn sweep_strays(&self) -> usize {
+        let except: Vec<u32> = dino_session::running(&self.paths).map(|r| vec![r.pid]).unwrap_or_default();
+        let found = os::strays_under(&self.paths.java(), &except);
+        for pid in &found {
+            let exe = os::process_exe(*pid);
+            tracing::info!(pid, ?exe, ok = os::terminate(*pid), "resto de una partida cerrado");
+        }
+        found.len()
     }
 
     /// Al abrir la app: si una partida seguía abierta, se la vuelve a seguir.

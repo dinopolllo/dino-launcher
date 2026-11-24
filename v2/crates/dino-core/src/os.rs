@@ -72,6 +72,19 @@ pub fn close_windows(pid: u32, include_hidden: bool) -> usize {
     imp::close_windows(pid, include_hidden)
 }
 
+/// Procesos cuyo ejecutable vive bajo `dir` y no enseñan ninguna ventana: lo que dejó un
+/// juego al salir (p. ej. el «Crash Assistant» de algunos modpacks, que sobrevive a
+/// Minecraft y retiene los archivos del Java). Uno con ventana visible —el asistente
+/// enseñando un informe de fallo— no cuenta. Solo en Windows; fuera, vacío.
+pub fn strays_under(dir: &std::path::Path, except: &[u32]) -> Vec<u32> {
+    imp::pids()
+        .into_iter()
+        .filter(|p| !except.contains(p) && *p != std::process::id())
+        .filter(|p| process_exe(*p).is_some_and(|e| e.starts_with(dir)))
+        .filter(|p| has_visible_window(*p) == Some(false))
+        .collect()
+}
+
 /// ¿Tiene el proceso alguna ventana visible? Solo en Windows; fuera, `None`.
 pub fn has_visible_window(pid: u32) -> Option<bool> {
     imp::has_visible_window(pid)
@@ -104,6 +117,7 @@ mod imp {
         fn GetExitCodeProcess(h: isize, code: *mut u32) -> i32;
         fn TerminateProcess(h: isize, code: u32) -> i32;
         fn QueryFullProcessImageNameW(h: isize, flags: u32, buf: *mut u16, size: *mut u32) -> i32;
+        fn K32EnumProcesses(pids: *mut u32, bytes: u32, needed: *mut u32) -> i32;
     }
     #[link(name = "user32")]
     extern "system" {
@@ -186,6 +200,17 @@ mod imp {
         .flatten()
     }
 
+    pub fn pids() -> Vec<u32> {
+        let mut buf = vec![0u32; 4096];
+        let mut needed = 0u32;
+        // SAFETY: buffer y tamaño en bytes coherentes.
+        if unsafe { K32EnumProcesses(buf.as_mut_ptr(), (buf.len() * 4) as u32, &mut needed) } == 0 {
+            return Vec::new();
+        }
+        buf.truncate(needed as usize / 4);
+        buf
+    }
+
     pub fn terminate(pid: u32) -> bool {
         with_process(pid, PROCESS_TERMINATE, |h| (unsafe { TerminateProcess(h, 1) }) != 0).unwrap_or(false)
     }
@@ -261,6 +286,10 @@ mod imp {
         Some(kb * 1024)
     }
 
+    pub fn pids() -> Vec<u32> {
+        Vec::new() // sin ventanas que mirar no se puede distinguir un resto de un asistente útil
+    }
+
     pub fn process_alive(pid: u32) -> bool {
         Command::new("kill").args(["-0", &pid.to_string()]).status().is_ok_and(|s| s.success())
     }
@@ -301,6 +330,22 @@ mod tests {
         assert_eq!(recommended_memory(16384), (1024, 6144));
         assert_eq!(recommended_memory(4096), (1024, 1536));
         assert_eq!(recommended_memory(65536).1, 8192);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn los_restos_son_solo_los_de_esa_carpeta_y_sin_ventana() {
+        assert!(imp::pids().contains(&std::process::id()));
+        let dir = std::env::temp_dir().join("dino-no-hay-nada-aqui");
+        assert!(strays_under(&dir, &[]).is_empty());
+        // un proceso propio sin ventana bajo su carpeta: cuenta (salvo el propio test)
+        let mut c = std::process::Command::new("ping").args(["-n", "30", "127.0.0.1"]).spawn().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let sys = process_exe(c.id()).unwrap().parent().unwrap().to_path_buf();
+        assert!(strays_under(&sys, &[]).contains(&c.id()));
+        assert!(!strays_under(&sys, &[c.id()]).contains(&c.id()));
+        let _ = c.kill();
+        let _ = c.wait();
     }
 
     #[test]

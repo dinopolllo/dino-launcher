@@ -454,6 +454,9 @@ pub fn run() {
             }
             if let Some(id) = core.reattach() {
                 tracing::info!(instance = %id, "partida ya en curso al abrir: la sigo");
+            } else {
+                let c = core.clone();
+                std::thread::spawn(move || c.sweep_strays());
             }
             app.manage(core);
 
