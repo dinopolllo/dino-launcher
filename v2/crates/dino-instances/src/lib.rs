@@ -708,6 +708,8 @@ impl Core {
         if let Some(why) = login.fallback {
             tracing::info!(why, "login de Microsoft con el motor entero a la vista");
         }
+        let _ = self.accounts.sync_bridge(&self.engine.accounts());
+        let before = self.msa_uuids();
         let core = self.clone();
         std::thread::spawn(move || {
             // Se mira `accounts.json` mientras el jugador inicia sesión: en cuanto aparece
@@ -731,7 +733,16 @@ impl Core {
                         break;
                     }
                 }
-                if core.accounts.sync_bridge(&core.engine.accounts()).is_ok_and(|r| !r.added.is_empty()) {
+                // Nueva = no estaba al empezar. No vale fiarse de lo que añada *esta*
+                // sincronización: `accounts_list` también sincroniza y puede adelantarse.
+                let _ = core.accounts.sync_bridge(&core.engine.accounts());
+                let new = core.msa_uuids().into_iter().rfind(|u| !before.contains(u));
+                if let Some(uuid) = new.as_ref() {
+                    // Quien acaba de iniciar sesión con Microsoft quiere jugar con esa cuenta,
+                    // no con la que tuviera activa (p. ej. una sin conexión).
+                    if let Err(x) = core.accounts.select(uuid) {
+                        tracing::warn!(error = %x, "no pude activar la cuenta Microsoft nueva");
+                    }
                     (core.emit)(Event::AccountsChanged);
                     os::close_windows(pid, true);
                     let deadline = Instant::now() + Duration::from_secs(10);
@@ -748,6 +759,13 @@ impl Core {
             (core.emit)(Event::AccountsChanged);
         });
         Ok(view)
+    }
+
+    fn msa_uuids(&self) -> Vec<String> {
+        self.accounts
+            .list(&self.engine.accounts())
+            .map(|l| l.into_iter().filter(|a| a.kind == AccountKind::MicrosoftBridge).map(|a| a.uuid).collect())
+            .unwrap_or_default()
     }
 
     pub async fn server_status(&self, addr: &str) -> ServerStatus {

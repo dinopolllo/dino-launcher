@@ -49,6 +49,8 @@ impl std::fmt::Debug for LaunchIdentity {
 pub struct SyncReport {
     pub added: Vec<String>,
     pub removed: Vec<String>,
+    /// UUID de las cuentas añadidas, en el mismo orden que `added`.
+    pub added_uuids: Vec<String>,
 }
 
 pub struct Accounts {
@@ -163,6 +165,7 @@ impl Accounts {
                             uuid: m.uuid.clone(),
                         });
                         r.added.push(m.name.clone());
+                        r.added_uuids.push(m.uuid.clone());
                     }
                 }
             }
@@ -255,6 +258,7 @@ mod tests {
         engine_file(&e, &[("Nuevo", "u1", now() + 3600), ("Otro", "u2", now() + 3600)]);
         let r = a.sync_bridge(&e).unwrap();
         assert_eq!(r.added, vec!["Otro"]);
+        assert_eq!(r.added_uuids, vec!["u2"]);
         let names: Vec<String> = a.list(&e).unwrap().into_iter().map(|v| v.name).collect();
         assert_eq!(names, vec!["Nuevo", "Otro"], "cambiar de nombre en Microsoft no duplica la cuenta");
         engine_file(&e, &[("Otro", "u2", now() + 3600)]);
