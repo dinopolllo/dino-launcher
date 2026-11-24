@@ -43,12 +43,14 @@ pub struct Core {
     pub engine: Engine,
     emit: Emit,
     /// Una sola tarea larga a la vez (instalar o jugar): el segundo clic recibe `busy`.
-    busy: Mutex<Option<String>>,
-    cancel: AtomicBool,
+    /// Se guarda también de qué instancia, para contarlo al recargar la interfaz.
+    busy: Mutex<Option<(String, Option<String>)>>,
+    /// La comparte el descargador: «Cancelar» corta entre archivos y en cada trozo.
+    cancel: Arc<AtomicBool>,
 }
 
 /// Suelta el cerrojo de tarea al salir, pase lo que pase.
-struct BusyGuard<'a>(&'a Mutex<Option<String>>);
+struct BusyGuard<'a>(&'a Mutex<Option<(String, Option<String>)>>);
 impl Drop for BusyGuard<'_> {
     fn drop(&mut self) {
         *self.0.lock().unwrap_or_else(|p| p.into_inner()) = None;
@@ -64,7 +66,7 @@ impl Core {
             paths,
             emit,
             busy: Mutex::new(None),
-            cancel: AtomicBool::new(false),
+            cancel: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -73,23 +75,35 @@ impl Core {
         Downloader::new(cfg.download_concurrency.max(1) as usize)
             .with_cache(self.paths.shared_files())
             .with_rate_limit(cfg.download_limit)
+            .with_cancel(self.cancel.clone())
     }
 
-    fn begin(&self, what: &str) -> R<BusyGuard<'_>> {
+    fn begin(&self, what: &str, instance: Option<&str>) -> R<BusyGuard<'_>> {
         let mut b = self.busy.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(t) = b.as_ref() {
+        if let Some((t, _)) = b.as_ref() {
             return Err(e(ErrorCode::Busy, format!("ya hay una tarea en marcha: {t}")));
         }
-        *b = Some(what.to_string());
+        *b = Some((what.to_string(), instance.map(String::from)));
         self.cancel.store(false, Ordering::SeqCst);
         Ok(BusyGuard(&self.busy))
     }
 
     fn check_cancel(&self) -> R<()> {
-        if self.cancel.swap(false, Ordering::SeqCst) {
-            return Err(e(ErrorCode::Busy, "cancelado"));
+        if self.cancel.load(Ordering::SeqCst) {
+            return Err(e(ErrorCode::Cancelled, "cancelado por el jugador"));
         }
         Ok(())
+    }
+
+    /// El estado de la partida ahora mismo, para la interfaz al cargar (sin sondeo).
+    pub fn session_snapshot(&self) -> Session {
+        if let Some(r) = dino_session::running(&self.paths) {
+            return Session { state: SessionState::Playing, instance: Some(r.instance) };
+        }
+        match self.busy.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+            Some((_, inst)) => Session { state: SessionState::Preparing, instance: inst.clone() },
+            None => Session { state: SessionState::Idle, instance: None },
+        }
     }
 
     // ------------------------------------------------------------ biblioteca
@@ -126,20 +140,18 @@ impl Core {
         let manifest: Option<InstanceManifest> = schema::load(&self.paths.instance_manifest(&entry.id)).ok().flatten();
         let installed = manifest.as_ref().is_some_and(|m| m.state == InstallState::Ready);
         let mods = match (&manifest, remote) {
-            (Some(m), _) if installed && !m.managed_files.is_empty() => {
-                m.managed_files.iter().filter(|f| f.starts_with("mods/")).count() as u32
-            }
-            // Instalada antes de anotar sus archivos: lo que haya en `mods/`.
-            (Some(_), _) if installed => count_jars(&self.paths.game_dir(&entry.id).join("mods")),
+            (Some(m), _) if installed => mods_of(m, &self.paths.game_dir(&entry.id)),
             (_, Some(r)) => r.mods,
             _ => 0,
         };
         let action = if playing == Some(entry.id.as_str()) {
             PrimaryAction::Playing
         } else if let Some(r) = remote.filter(|r| r.version != entry.pack_version && installed) {
-            PrimaryAction::Update { to_version: r.version.clone(), bytes: Some(r.bytes).filter(|b| *b > 0) }
+            // `r.bytes` del catálogo es el peso del `.mrpack`, no lo que se va a descargar
+            // (mods, Minecraft, assets): eso no se sabe hasta leer el pack.
+            PrimaryAction::Update { to_version: r.version.clone(), bytes: None }
         } else if !installed {
-            PrimaryAction::Install { bytes: remote.map(|r| r.bytes).filter(|b| *b > 0) }
+            PrimaryAction::Install { bytes: None }
         } else {
             PrimaryAction::Play
         };
@@ -195,8 +207,12 @@ impl Core {
         Ok(())
     }
 
+    /// Funciona también con una instancia a medias (una actualización que falló): sus
+    /// mundos siguen en disco y el diálogo de quitar tiene que poder contarlos.
     pub fn instance_details(&self, id: &str) -> R<InstanceDetails> {
-        let m = self.manifest_ready(id)?;
+        let m: InstanceManifest = schema::load(&self.paths.instance_manifest(id))
+            .map_err(internal)?
+            .ok_or_else(|| e(ErrorCode::NotInstalled, format!("«{id}» no está instalada")))?;
         let game = self.paths.game_dir(id);
         let worlds = std::fs::read_dir(game.join("saves"))
             .map(|rd| rd.flatten().filter(|x| x.path().join("level.dat").exists()).count() as u32)
@@ -206,7 +222,7 @@ impl Core {
             path: game.to_string_lossy().into_owned(),
             minecraft: m.minecraft.clone(),
             loader: m.loader.clone(),
-            mods: m.managed_files.iter().filter(|f| f.starts_with("mods/")).count() as u32,
+            mods: mods_of(&m, &game),
             worlds,
             disk_bytes: dir_size(&self.paths.instance_dir(id)),
         })
@@ -243,7 +259,7 @@ impl Core {
                 if bin.exists() {
                     out.push(JavaOption {
                         path: bin.to_string_lossy().into_owned(),
-                        major: None,
+                        major: java_major(&bin),
                         origin: JavaOrigin::Mojang,
                     });
                 }
@@ -270,7 +286,7 @@ impl Core {
     /// Añade un pack del catálogo a la biblioteca: baja el `.mrpack` y el icono, y lo deja
     /// seleccionado listo para instalar con Jugar.
     pub async fn catalog_add(&self, text: &str) -> R<InstanceView> {
-        let _g = self.begin("añadir un pack")?;
+        let _g = self.begin("añadir un pack", None)?;
         let r = catalog::resolver(text).await.map_err(map_catalog)?;
         let code = catalog::normalizar_codigo(&r.code);
         let lib = self.store.library().map_err(internal)?;
@@ -312,7 +328,7 @@ impl Core {
                 finished: false,
             }))
         };
-        catalog::descargar_pack(r, &self.paths.pack_file(id), &on).await.map_err(map_catalog)?;
+        catalog::descargar_pack(r, &self.paths.pack_file(id), &on, &self.cancel).await.map_err(map_catalog)?;
         if let Err(x) = catalog::descargar_icono(r, &self.paths.pack_icon(id)).await {
             tracing::warn!(error = %x, "no pude bajar el icono del pack");
         }
@@ -371,8 +387,8 @@ impl Core {
             })
             .map_err(internal)?;
         (self.emit)(Event::LibraryChanged);
-        let _g = self.begin("instalar")?;
-        self.install(&id).await?;
+        let _g = self.begin("instalar", Some(&id))?;
+        self.install(&id, false).await?;
         Ok(self.view(&entry, None, None, Some(&id)))
     }
 
@@ -380,7 +396,7 @@ impl Core {
 
     /// Instala (o repara, o verifica) la instancia desde su `.mrpack`. Un archivo que ya
     /// está con el hash bueno no se baja: verificar es lo mismo que instalar sin cambios.
-    async fn install(&self, id: &str) -> R<()> {
+    async fn install(&self, id: &str, verify: bool) -> R<()> {
         let mrpack = self.paths.pack_file(id);
         if !mrpack.exists() {
             return Err(e(ErrorCode::PackInvalid, format!("falta el .mrpack de «{id}»")));
@@ -407,6 +423,7 @@ impl Core {
             Some(id.to_string()),
             self.emit.clone(),
             &[Phase::DownloadingLibraries, Phase::DownloadingAssets, Phase::InstallingJava, Phase::DownloadingMods],
+            verify.then_some(Phase::VerifyingFiles),
         );
         let report = |label: &str, p: Option<dino_download::Progress>| tracker.report(label, p);
         let dl = self.downloader();
@@ -435,8 +452,8 @@ impl Core {
 
     /// «Verificar archivos»: reinstala comprobando cada archivo por su hash.
     pub async fn instance_verify(&self, id: &str) -> R<()> {
-        let _g = self.begin("verificar")?;
-        self.install(id).await
+        let _g = self.begin("verificar", Some(id))?;
+        self.install(id, true).await
     }
 
     // ------------------------------------------------------------ jugar
@@ -445,7 +462,7 @@ impl Core {
     /// renueva la sesión de Microsoft si le queda poco y lanza. La partida la sigue un hilo
     /// que emite los eventos `session`.
     pub async fn play(self: &Arc<Self>, req: PlayRequest) -> R<PlayOutcome> {
-        let guard = self.begin("jugar")?;
+        let guard = self.begin("jugar", Some(&req.instance))?;
         let id = req.instance.clone();
         let lib = self.store.library().map_err(internal)?;
         let entry = lib.find(&id).cloned().ok_or_else(|| e(ErrorCode::NotInstalled, format!("no hay «{id}»")))?;
@@ -501,7 +518,7 @@ impl Core {
         }
         self.check_cancel()?;
         if need_install || !launch {
-            self.install(id).await?;
+            self.install(id, false).await?;
         }
         if !launch {
             return Ok(None);
@@ -601,7 +618,26 @@ impl Core {
         let mut child = self.engine.open_for_login().map_err(internal)?;
         let core = self.clone();
         std::thread::spawn(move || {
-            let _ = child.wait();
+            // Se mira `accounts.json` mientras el jugador inicia sesión: en cuanto aparece
+            // la cuenta, se avisa y se cierra el motor (como en 1.x), sin pedirle que lo cierre.
+            let pid = child.id();
+            loop {
+                if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
+                    break;
+                }
+                if core.accounts.sync_bridge(&core.engine.accounts()).is_ok_and(|r| !r.added.is_empty()) {
+                    (core.emit)(Event::AccountsChanged);
+                    os::close_windows(pid, true);
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
+                        std::thread::sleep(Duration::from_millis(200));
+                    }
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
             let _ = core.accounts.sync_bridge(&core.engine.accounts());
             (core.emit)(Event::AccountsChanged);
         });
@@ -638,16 +674,20 @@ struct Tracker {
     instance: Option<String>,
     emit: Emit,
     expected: Vec<Phase>,
+    /// Si se da, es la fase que se anuncia siempre (verificar es instalar sin cambios,
+    /// pero la interfaz no debe decir «Descargando» cuando no baja nada).
+    display: Option<Phase>,
     state: Mutex<TrackerState>,
 }
 
 impl Tracker {
-    fn new(task: String, instance: Option<String>, emit: Emit, expected: &[Phase]) -> Self {
+    fn new(task: String, instance: Option<String>, emit: Emit, expected: &[Phase], display: Option<Phase>) -> Self {
         Self {
             task,
             instance,
             emit,
             expected: expected.to_vec(),
+            display,
             state: Mutex::new((HashMap::new(), Instant::now(), None)),
         }
     }
@@ -674,7 +714,7 @@ impl Tracker {
             instance: self.instance.clone(),
             task_bytes_done: if known { done.min(total) } else { done },
             task_bytes_total: total,
-            phase,
+            phase: self.display.unwrap_or(phase),
             files_done: p.map_or(0, |p| p.files_done),
             files_total: p.map_or(0, |p| p.files_total),
             bytes_done: bd,
@@ -734,6 +774,7 @@ fn map_catalog(x: catalog::CatalogError) -> DinoError {
     use catalog::CatalogError as C;
     match x {
         C::NoExiste => e(ErrorCode::PackNotFound, x),
+        C::Cancelado => e(ErrorCode::Cancelled, x),
         C::Http(_) => e(ErrorCode::Offline, x),
         C::HashMalo => e(ErrorCode::HashMismatch, x),
         C::Estado(_) => e(ErrorCode::DownloadFailed, x),
@@ -745,6 +786,7 @@ fn map_catalog(x: catalog::CatalogError) -> DinoError {
 fn map_mc(x: dino_minecraft::Error) -> DinoError {
     use dino_download::DownloadError as D;
     match &x {
+        dino_minecraft::Error::Download(D::Cancelled) => e(ErrorCode::Cancelled, x),
         dino_minecraft::Error::Download(D::Hash { .. }) => e(ErrorCode::HashMismatch, x),
         dino_minecraft::Error::Download(D::Http(_)) => e(ErrorCode::Offline, x),
         dino_minecraft::Error::Download(_) => e(ErrorCode::DownloadFailed, x),
@@ -818,10 +860,35 @@ fn extract_icon(mrpack: &Path, dest: &Path) {
     }
 }
 
+/// Mods de una instancia: los que anotó el pack o, si es de antes de anotarlos, los `.jar`
+/// que haya en `mods/`. La ficha y el detalle usan esta misma cuenta.
+fn mods_of(m: &InstanceManifest, game: &Path) -> u32 {
+    if m.managed_files.is_empty() {
+        count_jars(&game.join("mods"))
+    } else {
+        m.managed_files.iter().filter(|f| f.starts_with("mods/") && f.ends_with(".jar")).count() as u32
+    }
+}
+
 fn count_jars(dir: &Path) -> u32 {
     std::fs::read_dir(dir)
         .map(|rd| rd.flatten().filter(|x| x.file_name().to_string_lossy().ends_with(".jar")).count() as u32)
         .unwrap_or(0)
+}
+
+/// La versión mayor de un Java por su archivo `release` (`JAVA_VERSION="21.0.3"`, o
+/// `"1.8.0_402"` para Java 8).
+fn java_major(bin: &Path) -> Option<u32> {
+    let home = bin.parent()?.parent()?;
+    let text = std::fs::read_to_string(home.join("release")).ok()?;
+    let v = text.lines().find_map(|l| l.strip_prefix("JAVA_VERSION="))?.trim_matches('"');
+    let mut parts = v.split(['.', '_', '+']);
+    let first: u32 = parts.next()?.parse().ok()?;
+    if first == 1 {
+        parts.next()?.parse().ok()
+    } else {
+        Some(first)
+    }
 }
 
 fn dir_size(p: &Path) -> u64 {
@@ -872,7 +939,8 @@ mod tests {
     #[test]
     fn la_barra_no_sabe_el_total_hasta_que_todas_las_fases_lo_dicen() {
         let (c, log) = core("tracker");
-        let t = Tracker::new("t".into(), None, c.emit.clone(), &[Phase::DownloadingMods, Phase::DownloadingAssets]);
+        let t =
+            Tracker::new("t".into(), None, c.emit.clone(), &[Phase::DownloadingMods, Phase::DownloadingAssets], None);
         let p = |d, t| dino_download::Progress {
             files_done: 0,
             files_total: 10,
@@ -943,9 +1011,12 @@ mod tests {
     #[test]
     fn dos_tareas_a_la_vez_no() {
         let (c, _) = core("busy");
-        let _g = c.begin("una").unwrap();
-        assert_eq!(c.begin("otra").err().unwrap().code, ErrorCode::Busy);
+        let _g = c.begin("una", Some("x")).unwrap();
+        assert_eq!(c.begin("otra", None).err().unwrap().code, ErrorCode::Busy);
+        let s = c.session_snapshot();
+        assert_eq!((s.state, s.instance.as_deref()), (SessionState::Preparing, Some("x")));
         drop(_g);
-        assert!(c.begin("otra").is_ok());
+        assert_eq!(c.session_snapshot().state, SessionState::Idle);
+        assert!(c.begin("otra", None).is_ok());
     }
 }

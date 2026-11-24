@@ -67,6 +67,7 @@ fn app_info(app: tauri::AppHandle, core: State<'_, Arc<Core>>, glass: State<'_, 
         data_dir: core.paths.root.to_string_lossy().into_owned(),
         glass: glass.0,
         platform: std::env::consts::OS.into(),
+        session: core.session_snapshot(),
     }
 }
 

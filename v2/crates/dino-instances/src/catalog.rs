@@ -58,6 +58,8 @@ pub enum CatalogError {
     Estado(u16),
     #[error("lo descargado no es una imagen")]
     NoEsImagen,
+    #[error("cancelado")]
+    Cancelado,
 }
 
 /// Un modpack publicado.
@@ -188,6 +190,7 @@ pub async fn descargar_pack(
     pack: &PackRemoto,
     destino: &std::path::Path,
     progreso: &(dyn Fn(u64, u64) + Send + Sync),
+    cancelar: &std::sync::atomic::AtomicBool,
 ) -> Result<(), CatalogError> {
     if let Some(p) = destino.parent() {
         std::fs::create_dir_all(p)?;
@@ -205,7 +208,7 @@ pub async fn descargar_pack(
     // que había sobra o ya no cuadra—, se tira ese resto y se baja entero.
     for intento in 0..2 {
         let desde = if intento == 0 { ya } else { 0 };
-        match bajar(pack, &parcial, desde, progreso).await {
+        match bajar(pack, &parcial, desde, progreso, cancelar).await {
             Err(CatalogError::Estado(416)) if intento == 0 => {
                 tracing::info!("lo que había a medias ya no sirve: lo bajo entero");
                 let _ = std::fs::remove_file(&parcial);
@@ -250,6 +253,7 @@ async fn bajar(
     parcial: &std::path::Path,
     desde: u64,
     progreso: &(dyn Fn(u64, u64) + Send + Sync),
+    cancelar: &std::sync::atomic::AtomicBool,
 ) -> Result<String, CatalogError> {
     use futures_util::StreamExt;
     use sha2::{Digest, Sha512};
@@ -301,6 +305,11 @@ async fn bajar(
         f.write_all(&trozo)?;
         bajado += trozo.len() as u64;
         progreso(bajado, total);
+        // Lo bajado se queda en el `.parcial`: la próxima vez se reanuda desde ahí.
+        if cancelar.load(std::sync::atomic::Ordering::SeqCst) {
+            f.flush()?;
+            return Err(CatalogError::Cancelado);
+        }
     }
     f.flush()?;
     Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
@@ -463,11 +472,17 @@ mod tests {
 
         let destino = std::env::temp_dir().join("dinosmp-prueba.mrpack");
         let _ = std::fs::remove_file(&destino);
-        descargar_pack(&p, &destino, &|bajado, total| {
-            if bajado == total {
-                println!("  descargado: {bajado} de {total} B");
-            }
-        })
+        let no = std::sync::atomic::AtomicBool::new(false);
+        descargar_pack(
+            &p,
+            &destino,
+            &|bajado, total| {
+                if bajado == total {
+                    println!("  descargado: {bajado} de {total} B");
+                }
+            },
+            &no,
+        )
         .await
         .expect("descarga y verificación de hash");
 

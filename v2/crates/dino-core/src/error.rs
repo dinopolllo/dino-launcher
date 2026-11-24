@@ -40,6 +40,8 @@ pub enum ErrorCode {
     Busy,
     /// Se pidió algo que solo existe con la instancia instalada (p. ej. `instance_details`).
     NotInstalled,
+    /// El jugador canceló. Lo bajado se conserva y se reanuda.
+    Cancelled,
     /// No se pudo instalar la actualización del launcher.
     UpdateFailed,
     /// Todo lo demás. Siempre lleva `detail` y siempre se registra.
@@ -82,7 +84,7 @@ impl DinoError {
             ErrorCode::GameCrashed | ErrorCode::Internal | ErrorCode::UpdateFailed | ErrorCode::JavaUnavailable => {
                 (true, Action::OpenLogs)
             }
-            ErrorCode::Busy => (true, Action::None),
+            ErrorCode::Busy | ErrorCode::Cancelled => (true, Action::None),
             ErrorCode::PackNotFound
             | ErrorCode::PackInvalid
             | ErrorCode::UnsupportedLoader

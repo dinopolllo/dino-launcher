@@ -35,6 +35,8 @@ pub enum DownloadError {
     Hash { path: PathBuf, expected: String, got: String },
     #[error("JSON inválido en {url}: {source}")]
     Json { url: String, source: serde_json::Error },
+    #[error("cancelado")]
+    Cancelled,
 }
 
 impl DownloadError {
@@ -130,6 +132,7 @@ pub struct Downloader {
     retries: u32,
     cache: Option<PathBuf>,
     limiter: Option<Arc<Limiter>>,
+    cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Downloader {
@@ -141,7 +144,7 @@ impl Downloader {
             .pool_max_idle_per_host(concurrency)
             .build()
             .expect("cliente HTTP");
-        Self { client, concurrency: concurrency.max(1), retries: 3, cache: None, limiter: None }
+        Self { client, concurrency: concurrency.max(1), retries: 3, cache: None, limiter: None, cancel: None }
     }
 
     /// Carpeta de la caché compartida por hash (`<dir>/<aa>/<sha1>`).
@@ -156,6 +159,17 @@ impl Downloader {
             .filter(|b| *b > 0)
             .map(|b| Arc::new(Limiter { bytes_per_sec: b, state: tokio::sync::Mutex::new((Instant::now(), 0)) }));
         self
+    }
+
+    /// Señal para cancelar: se mira entre archivos y en cada trozo. Lo ya escrito se
+    /// queda en su `.part` y se reanuda la próxima vez.
+    pub fn with_cancel(mut self, flag: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.cancel = Some(flag);
+        self
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancel.as_ref().is_some_and(|c| c.load(Ordering::SeqCst))
     }
 
     pub fn with_retries(mut self, retries: u32) -> Self {
@@ -247,6 +261,9 @@ impl Downloader {
     }
 
     async fn fetch_one(&self, item: &Item, c: &Counters) -> Result<(), DownloadError> {
+        if self.cancelled() {
+            return Err(DownloadError::Cancelled);
+        }
         if ya_esta(item).await {
             c.skipped.fetch_add(1, Ordering::Relaxed);
             return Ok(());
@@ -346,6 +363,10 @@ impl Downloader {
             h.update(&chunk);
             f.write_all(&chunk).await.map_err(io(&part))?;
             c.net.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+            if self.cancelled() {
+                let _ = f.flush().await;
+                return Err(DownloadError::Cancelled);
+            }
             if let Some(l) = &self.limiter {
                 l.take(chunk.len() as u64).await;
             }

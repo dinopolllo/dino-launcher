@@ -303,7 +303,15 @@ async fn cmd_install(paths: &Paths, src: &str, id: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
         dest
     } else {
-        PathBuf::from(src)
+        // El `.mrpack` se guarda en `packs/`: sin él no se puede verificar ni reparar luego.
+        let dest = paths.pack_file(id);
+        if std::fs::canonicalize(src).ok() != std::fs::canonicalize(&dest).ok() {
+            if let Some(d) = dest.parent() {
+                std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+            }
+            std::fs::copy(src, &dest).map_err(|e| e.to_string())?;
+        }
+        dest
     };
 
     let index = mrpack::read_index(&mrpack).map_err(|e| e.to_string())?;

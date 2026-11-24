@@ -191,3 +191,30 @@ async fn el_limite_de_velocidad_se_respeta() {
     // 600 KB a 1 MB/s: al menos ~0,55 s (con margen para el primer trozo).
     assert!(t0.elapsed().as_secs_f64() >= 0.45, "fue demasiado rápido: {:?}", t0.elapsed());
 }
+
+#[tokio::test]
+async fn cancelar_para_a_mitad_y_lo_bajado_se_reanuda_despues() {
+    let reg = Arc::new(Mutex::new(Registro::default()));
+    let port = servidor(reg.clone()).await;
+    let dir = tmp("cancelar");
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let items: Vec<Item> = (0..50).map(|n| item(port, &dir, n, 200_000)).collect();
+    let f2 = flag.clone();
+    let dl = Downloader::new(2).with_rate_limit(Some(2 * 1024 * 1024)).with_cancel(flag.clone());
+    let on = move |p: dino_download::Progress| {
+        if p.files_done >= 3 {
+            f2.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    };
+    let r = dl.fetch_all(items.clone(), &on).await;
+    assert!(matches!(r, Err(dino_download::DownloadError::Cancelled)), "{r:?}");
+    let hechos = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == "bin"))
+        .count();
+    assert!(hechos < 50, "paró antes de acabar ({hechos} de 50)");
+    // Sin cancelar, termina y no vuelve a bajar lo que ya estaba.
+    flag.store(false, std::sync::atomic::Ordering::SeqCst);
+    let st = Downloader::new(4).fetch_all(items, &|_| {}).await.unwrap();
+    assert_eq!(st.skipped as usize, hechos);
+}

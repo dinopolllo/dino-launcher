@@ -200,6 +200,9 @@ pub struct AppInfo {
     /// Si el vidrio nativo de la ventana está disponible (antes `window_glass`).
     pub glass: bool,
     pub platform: String,
+    /// El estado de la partida al cargar: si la página se recarga a mitad de una
+    /// instalación, sabe que está `preparing` sin tener que sondear.
+    pub session: crate::events::Session,
 }
 
 #[cfg(test)]

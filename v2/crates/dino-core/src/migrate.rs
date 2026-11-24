@@ -38,6 +38,9 @@ pub struct Plan {
     pub manifests: Vec<InstanceManifest>,
     pub accounts: AccountsFile,
     pub moves: Vec<Move>,
+    /// `.mrpack` que se **copian** a `packs/` (el original puede estar en Descargas: no se
+    /// toca). Sin él, «Verificar archivos» no podría reparar la instancia.
+    pub copies: Vec<Move>,
     /// Lo que no se pudo migrar y por qué. La interfaz lo enseña; los datos se quedan en 1.x.
     pub warnings: Vec<String>,
 }
@@ -62,6 +65,9 @@ struct PackV1 {
     server: Option<String>,
     #[serde(default)]
     max_mem: Option<u32>,
+    /// Ruta del `.mrpack` en 1.x: a veces en `packs/`, a veces en Descargas.
+    #[serde(default)]
+    mrpack: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -110,6 +116,7 @@ pub fn plan(
     let mut lib = Library::default();
     let mut manifests = Vec::new();
     let mut moves = Vec::new();
+    let mut copies = Vec::new();
     let mut warnings = Vec::new();
 
     for p in &v1.packs {
@@ -164,6 +171,12 @@ pub fn plan(
             managed_files,
         });
         moves.push(Move { from: engine.join("instances").join(&p.id).join("minecraft"), to: paths.game_dir(&p.id) });
+        if let Some(src) = p.mrpack.as_deref().filter(|s| !s.is_empty()) {
+            let to = paths.pack_file(&p.id);
+            if std::path::Path::new(src) != to {
+                copies.push(Move { from: PathBuf::from(src), to });
+            }
+        }
     }
     lib.selected = v1.selected.filter(|s| lib.instances.iter().any(|i| &i.id == s));
 
@@ -195,7 +208,7 @@ pub fn plan(
         }
     }
 
-    Ok(Plan { library: lib, manifests, accounts, moves, warnings })
+    Ok(Plan { library: lib, manifests, accounts, moves, copies, warnings })
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -228,6 +241,14 @@ pub fn apply(paths: &Paths, plan: &Plan) -> Result<Vec<String>, String> {
         journal.done.push(m.clone());
         // Se anota en cada paso: si se corta la luz a mitad, el diario sigue siendo cierto.
         schema::write_atomic(&jp, &serde_json::to_vec_pretty(&journal).unwrap()).map_err(|e| e.to_string())?;
+    }
+    for c in &plan.copies {
+        if c.from.exists() && !c.to.exists() {
+            if let Some(p) = c.to.parent() {
+                std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+            }
+            std::fs::copy(&c.from, &c.to).map_err(|e| format!("no pude copiar {}: {e}", c.from.display()))?;
+        }
     }
     for m in &plan.manifests {
         schema::save(&paths.instance_manifest(&m.id), m, schema::INSTANCE_SCHEMA).map_err(|e| e.to_string())?;
@@ -325,6 +346,11 @@ mod tests {
         assert_eq!((v.pack_version.as_str(), v.server.as_deref()), ("3.15.0", Some("voidsafio.minecra.fr")));
         assert_eq!(v.last_played, Some(1795434034));
         assert_eq!(plan.library.instances[1].source, PackSource::File);
+        // El .mrpack de 1.x se copia a packs/ (no se mueve: puede estar en Descargas).
+        assert!(plan
+            .copies
+            .iter()
+            .any(|c| c.from == std::path::Path::new(r"C:\x\voidsafio.mrpack") && c.to == p.pack_file("voidsafio")));
     }
 
     #[test]
