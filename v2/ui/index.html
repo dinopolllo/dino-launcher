@@ -18,12 +18,13 @@
      estado seguro, y pasar de opaco a translúcido es un fundido. Al revés sería
      un frame de escritorio sin desenfocar, y eso sí se ve. */
   try{
-    window.__TAURI__.core.invoke("window_glass").then(function(on){
-      if(on) document.documentElement.classList.add("glass");
+    window.__TAURI__.core.invoke("app_info").then(function(a){
+      if(a && a.glass) document.documentElement.classList.add("glass");
     });
   }catch(e){}
 
-  function ping(m){ try{ window.__TAURI__.core.invoke("boot_ping",{msg:m}); }catch(e){} }
+  /* En 2.0 el registro lo lleva Rust con `tracing`: aquí, a la consola de depuración. */
+  function ping(m){ try{ console.debug("[dino] " + m); }catch(e){} }
   window.addEventListener("error", function(e){
     ping("JS ERROR: "+e.message+" @ "+(e.filename||"?")+":"+e.lineno);
   });
@@ -363,7 +364,9 @@ html.win{--r-window:10px}
   border:0;background:none;cursor:pointer;border-radius:inherit;
 }
 .tile-main:focus-visible{outline:2px solid var(--green);outline-offset:2px}
-.tile-head{display:flex;align-items:center;gap:11px;min-width:0}
+/* El × de quitar va posicionado encima de la esquina; sin este hueco, un nombre largo
+   corría por debajo y la elipsis acababa tapada por el botón. */
+.tile-head{display:flex;align-items:center;gap:11px;min-width:0;padding-right:20px}
 .tile-id{min-width:0}
 .tile-name{font-size:13.5px;font-weight:600;line-height:1.2;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -784,6 +787,18 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   color:rgba(245,201,206,.62);
   overflow-wrap:anywhere;
 }
+/* El detalle técnico va plegado: quien tiene que mirarlo lo abre, y quien solo quería
+   jugar no se encuentra una ruta y un código de error en mitad del aviso. */
+.alert-more{margin-top:7px}
+.alert-more summary{
+  cursor:pointer;list-style:none;width:max-content;
+  font-family:var(--font-mono);font-size:10.5px;color:rgba(245,201,206,.72);
+}
+.alert-more summary::-webkit-details-marker{display:none}
+.alert-more summary::before{content:"▸ "}
+.alert-more[open] summary::before{content:"▾ "}
+.alert-more summary:focus-visible{outline:2px solid var(--rose);outline-offset:2px}
+.alert-act{margin-top:10px;padding:6px 13px;font-size:11.5px}
 .alert{
   margin-top:16px;border-radius:var(--r-card);padding:12px 14px;
   background:rgba(255,107,122,.09);
@@ -1480,18 +1495,18 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
             <div class="field">
               <label>Runtime</label>
-              <select id="javaSelect"><option>lo administra el motor</option></select>
+              <select id="javaSelect"><option value="">Automático</option></select>
             </div>
 
             <div class="field">
               <label>Argumentos de la JVM</label>
-              <div class="args">Los define <b>Minecraft 26.2</b>: Shenandoah generacional. El pack no los sobrescribe.</div>
+              <div class="args" id="jvmArgs">Los elige Dino según la versión de Minecraft.</div>
             </div>
           </div>
 
           <div class="panel">
             <h2>Instalación</h2>
-            <p class="sub">Dino administra Prism por debajo. No necesitas abrirlo nunca.</p>
+            <p class="sub">Dino instala y abre el juego por su cuenta. No hace falta ningún otro launcher.</p>
 
             <div class="kv">
               <div class="kv-row"><div class="k">Instancia</div><div class="v v-wrap" id="kvPath">—</div></div>
@@ -1852,8 +1867,8 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
         <h2 class="ob-title">Inicia sesión con Microsoft</h2>
         <p class="ob-body" id="sp-msa-texto">Abriendo…</p>
         <div class="note">
-          <b>No cierres esta ventana.</b> En cuanto detecte tu cuenta sigo yo solo.
-          No tienes que volver aquí a mano.
+          <b>Cuando termines, cierra la ventana del motor.</b> En cuanto la cierres
+          detecto tu cuenta y sigo yo solo.
         </div>
         <div class="hint" id="sp-msa-estado">esperando…</div>
         <button type="button" class="link-min" id="sp-msa-cancelar">Cancelar y volver</button>
@@ -2059,13 +2074,139 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   ram.addEventListener("input", ramUpdate);
   ramUpdate();
 
-  /* ================= invitación por link =================
-     La vista que antes solo se enseñaba de muestra con «Ver lo que verá un amigo»,
-     ahora de verdad. La abre un link `dinolauncher://join/CODIGO`, que llega a Rust
-     tanto con el launcher cerrado como abierto; la interfaz lo recoge siempre con
-     `invitacion_pendiente`. Tres pasos: qué es, instalarlo con su progreso real, y
-     listo. La cuenta no se pide aquí: al darle a Jugar, el camino de siempre ya abre el
-     setup si falta, y así el login no queda repetido en dos sitios. */
+  /* ================= estado real: lo que dice el núcleo ================= */
+  var call = function(cmd, args){
+    return tauri ? tauri.core.invoke(cmd, args || {})
+                 : Promise.reject({ code: "internal", detail: "sin backend" });
+  };
+  var $ = function(id){ return document.getElementById(id); };
+  /* El registro de 2.0 lo lleva Rust con `tracing`; aquí basta la consola de depuración. */
+  function dlog(m){ try { console.debug("[dino] " + m); } catch (e) {} }
+
+  function humanBytes(n){
+    if (!n) return "0 MB";
+    var mb = n / 1048576;
+    return mb >= 1024 ? (mb/1024).toFixed(2) + " GB" : Math.round(mb) + " MB";
+  }
+  function escapar(t){
+    return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;");
+  }
+
+  /* `loader` llega como objeto `{kind, version}`: el texto lo pone la interfaz. */
+  var LOADERS = { vanilla: "Vanilla", fabric: "Fabric", neo_forge: "NeoForge" };
+  function loaderNombre(l){ return l ? (LOADERS[l.kind] || l.kind || "") : ""; }
+  function loaderTexto(l){
+    if (!l) return "";
+    var n = loaderNombre(l);
+    return l.version ? n + " " + l.version : n;
+  }
+
+  /* ---- errores ----
+     En 2.0 cada error llega con un código estable: `{code, retryable, action, detail}`.
+     La frase la elige la interfaz según el código; el `detail` técnico queda plegado
+     detrás de «Detalles», que es donde lo busca quien tiene que mirarlo y donde no
+     asusta a quien solo quería jugar. */
+  var MENSAJES = {
+    offline: "Parece que no hay internet. Revisa tu conexión y vuelve a intentarlo.",
+    download_failed: "Una descarga falló. Vuelve a darle: sigue desde donde se quedó.",
+    hash_mismatch: "Un archivo llegó dañado. Vuelve a darle y se baja de nuevo.",
+    disk_full: "No queda espacio en el disco para instalarlo.",
+    disk_permission: "Windows no dejó escribir en la carpeta de Dino. Cierra el juego y vuelve a intentarlo.",
+    pack_not_found: "Ese modpack no está en el catálogo.",
+    pack_invalid: "Falta el archivo del modpack o está dañado.",
+    unsupported_loader: "Este modpack usa Forge o Quilt, que Dino todavía no soporta.",
+    java_unavailable: "No pude conseguir Java para esta versión de Minecraft.",
+    account_required: "Necesitas una cuenta para jugar.",
+    session_expired: "Tu sesión de Microsoft caducó. Vuelve a iniciar sesión.",
+    microsoft_rejected: "Microsoft rechazó la cuenta. ¿Tiene Minecraft comprado?",
+    game_crashed: "Minecraft se cerró antes de llegar al menú.",
+    busy: "Ya hay algo en marcha. Espera a que termine.",
+    not_installed: "Ese modpack no está instalado.",
+    update_failed: "No se pudo instalar la actualización del launcher.",
+    internal: "Algo salió mal."
+  };
+  /* Botones que tienen sentido junto al aviso. El resto de acciones del contrato
+     (`retry`, `free_space`, `choose_folder`) no tienen aquí nada que pulsar todavía. */
+  var ACCIONES = { sign_in: "Iniciar sesión", renew_session: "Iniciar sesión", open_logs: "Abrir registros" };
+
+  function codigoDe(e){ return (e && typeof e === "object" && e.code) ? e.code : null; }
+  function detalleDe(e){ return (e && typeof e === "object") ? (e.detail || "") : String(e || ""); }
+  function mensajeError(e){
+    var c = codigoDe(e);
+    return (c && MENSAJES[c]) || detalleDe(e) || "Algo salió mal.";
+  }
+
+  function showError(titulo, err){
+    var html = "<b>" + escapar(titulo) + "</b> " + escapar(mensajeError(err));
+    var accion = err && err.action && ACCIONES[err.action];
+    if (accion) html += '<br><button type="button" class="btn alert-act" data-act="' +
+                        escapar(err.action) + '">' + accion + "</button>";
+    /* Sin código el detalle ya es el mensaje: repetirlo plegado no añade nada. */
+    var d = detalleDe(err);
+    if (d && codigoDe(err)) {
+      html += '<details class="alert-more"><summary>Detalles</summary>' +
+              '<small class="alert-raw">' + escapar(d) + "</small></details>";
+    }
+    showAlert(html);
+  }
+  function showAlert(html){
+    var el = $("alert");
+    if (!el) return;
+    if (!html) { el.hidden = true; return; }
+    el.innerHTML = html; el.hidden = false;
+  }
+  document.getElementById("alert").addEventListener("click", function(e){
+    var b = e.target.closest("[data-act]");
+    if (!b) return;
+    var act = b.dataset.act;
+    if (act === "sign_in" || act === "renew_session") { showAlert(null); spAbrir(); }
+    else if (act === "open_logs") call("open_folder", { target: "logs" }).catch(function(){});
+  });
+
+  /* Pinta un icono: el del pack si lo hay, si no el dino. Con DOM y no con `innerHTML`:
+     la URL de un icono del catálogo es remota, y concatenarla en marcado sería dejar que
+     el catálogo inyecte atributos. Si la imagen no carga —el protocolo de iconos mal
+     servido falla sin error— vuelve el dino en vez de quedar un hueco roto. */
+  function setIcon(host, url){
+    if (!host) return;
+    if (url) {
+      var img = document.createElement("img");
+      img.alt = "";
+      img.style.cssText = "width:70%;height:auto;border-radius:14%;image-rendering:auto";
+      img.onerror = function(){ setIcon(host, null); };
+      img.src = url;
+      host.innerHTML = ""; host.appendChild(img);
+    } else if (!host.querySelector("canvas")) {
+      var c = document.createElement("canvas");
+      c.width = 22; c.height = 21; c.dataset.dino = "";
+      host.innerHTML = ""; host.appendChild(c);
+      paintDino(c);
+    }
+  }
+
+  var LIB = [];          /* `library_list`: todas las fichas */
+  var PACK = null;       /* la elegida */
+  var CUENTAS = [];      /* `accounts_list` */
+  var APP = null;        /* `app_info` */
+  var SETTINGS = null;   /* `instance_settings_get` de la elegida, para no pisar al guardar */
+  var RAM_REC = null;    /* la recomendación para esta máquina, en GB */
+  var JUGANDO_ID = null; /* la instancia con una partida abierta, si la hay */
+  var estadoPrevio = null; /* "preparando" | "jugando" | null */
+  var cancelando = false;  /* se pidió cancelar la preparación en curso */
+
+  /* «Instalada» sale de la acción del botón: `install` es lo único que dice que no.
+     Ojo: una actualización que falló a medias también da `install`, y su carpeta puede
+     seguir teniendo mundos; por eso nada de lo que se deduce de aquí borra archivos. */
+  function instalado(p){ return !!(p && p.action && p.action.kind !== "install"); }
+
+  /* ---- invitación por link ----
+     La abre un link `dinolauncher://join/CODIGO`, que llega a Rust tanto con el launcher
+     cerrado como abierto. La interfaz la recoge siempre con `invite_pending`, que la
+     consume: así no puede abrirse dos veces, ni volver a salir cuando la ventana se
+     recrea al acabar una partida. Tres pasos: qué es, instalarlo con su progreso real,
+     y listo. La cuenta no se pide aquí: si falta, `play` responde `needs_account` y se
+     abre el setup, que es el camino de siempre. */
   var INVITE_URL = "https://dinopolllo.github.io/dino-launcher-releases/invitar/#";
 
   /* Copiar al portapapeles sin fallar en silencio. La API moderna puede no estar o
@@ -2094,7 +2235,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   var obNext  = document.getElementById("ob-next");
   var LABELS  = { 1: "Instalar", 2: "Preparando…", 3: "Jugar" };
   var cur = 1;
-  var INVITACION = null;     /* la ficha del catálogo del pack al que se invitó */
+  var INVITACION = null;     /* la vista previa del catálogo del pack al que se invitó */
   var obInstalando = false;
 
   function renderOb(){
@@ -2118,29 +2259,26 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
   /* Lo que viene del catálogo es texto remoto: siempre `textContent`, nunca HTML. */
   function pintarInvitacion(p){
-    document.getElementById("obName").textContent = p.name;
-    setIcon(document.getElementById("obIcon"), p.icon || null);
-    setIcon(document.getElementById("obReadyIcon"), p.icon || null);
-    document.getElementById("obBody").textContent = p.server
+    $("obName").textContent = p.name;
+    setIcon($("obIcon"), p.icon || null);
+    setIcon($("obReadyIcon"), p.icon || null);
+    $("obBody").textContent = p.server
       ? "Todo viene listo: los mods, la configuración y el servidor. No tienes que instalar nada por tu cuenta."
       : "Todo viene listo: los mods y la configuración. No tienes que instalar nada por tu cuenta.";
-    var chips = document.getElementById("obChips");
+    var chips = $("obChips");
     chips.innerHTML = "";
     if (p.minecraft) chips.appendChild(chip("Minecraft", p.minecraft));
-    if (p.loader) {
-      var partes = p.loader.split(" ");
-      chips.appendChild(chip(partes[0], p.mods ? p.mods + " mods" : (partes[1] || "")));
+    if (p.loader && p.loader.kind !== "vanilla") {
+      chips.appendChild(chip(loaderNombre(p.loader), p.mods ? p.mods + " mods" : (p.loader.version || "")));
     } else if (p.mods) {
       chips.appendChild(chip("Mods", String(p.mods)));
     }
-    /* Sin chip de tamaño: el catálogo solo sabe lo que pesa el .mrpack, no lo que
-       descargan sus mods, y un número que no es el real es peor que ninguno. */
+    /* Sin chip de tamaño: del catálogo solo se sabe lo que pesa el .mrpack, no lo que
+       bajan sus mods, y un número que no es el real es peor que ninguno. */
   }
 
   function abrirInvitacion(codigo){
     call("catalog_lookup", { code: codigo }).then(function(p){
-      /* Al log: es lo único que queda para saber qué pasó con una invitación en la
-         máquina de un amigo. */
       dlog("invitación: " + p.code + " (" + p.name + ")");
       INVITACION = p;
       pintarInvitacion(p);
@@ -2148,14 +2286,18 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       if (foot) foot.hidden = false;
       /* Si ya lo tiene, invitarle a instalarlo otra vez no tiene sentido: se elige y se
          salta directo a «listo». */
-      return call("list_packs").then(function(r){
-        var suyo = ((r && r.packs) || []).filter(function(x){ return x.code === p.code; })[0];
+      return call("library_list").then(function(lib){
+        var suyo = (lib || []).filter(function(x){
+          return x.source && x.source.kind === "catalog" && x.source.code === p.code;
+        })[0];
         ob.hidden = false;
-        if (suyo) return call("select_pack", { id: suyo.id }).then(refreshAll).then(mostrarListo);
+        if (suyo) {
+          return call("library_select", { id: suyo.id }).then(refreshAll).then(mostrarListo);
+        }
         cur = 1; renderOb(); obNext.focus();
       });
     }, function(e){
-      dlog("invitación: no pude resolver " + codigo + ": " + String(e));
+      dlog("invitación: no pude resolver " + codigo + ": " + detalleDe(e));
       /* El cuadro del código ya distingue «no existe» de «sin conexión»: mejor que
          repetirlo aquí, se le pasa el código y que lo cuente él. */
       closeOb();
@@ -2165,37 +2307,42 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     });
   }
 
+  function recogerInvitacion(){
+    call("invite_pending").then(function(c){ if (c) abrirInvitacion(c); }).catch(function(){});
+  }
+
   function prepararInvitacion(){
     if (!INVITACION || obInstalando) return;
-    /* Con una partida abierta no se instala otro pack: instalar marca la sesión como
-       «preparando» y al acabar la devolvería a «inactiva» con el juego corriendo. */
+    /* Con una partida abierta no se instala otro pack: el núcleo rechazaría la segunda
+       tarea, y aquí se dice antes y mejor. */
     if (estadoPrevio === "jugando" || estadoPrevio === "preparando") {
-      document.getElementById("obBody").textContent =
-        "Hay una partida abierta: ciérrala y vuelve a darle a Instalar.";
+      $("obBody").textContent = "Hay una partida abierta: ciérrala y vuelve a darle a Instalar.";
       return;
     }
     obInstalando = true;
     cur = 2; renderOb();
     progresoInvitacion("Descargando el modpack", -1);
-    call("catalog_install", { code: INVITACION.code })
+    /* `catalog_add` baja el pack y lo deja elegido; la instalación la hace `play` sin
+       abrir el juego. Los dos emiten progreso, y la barra de aquí lo sigue. */
+    call("catalog_add", { code: INVITACION.code })
       .then(refreshAll)
       .then(function(){ return runPlay({ installOnly: true }); })
       .then(function(){ obInstalando = false; mostrarListo(); })
       .catch(function(e){
         obInstalando = false;
-        document.getElementById("obPct").textContent = "";
-        document.getElementById("obAmt").textContent = "No se pudo instalar: " + String(e);
+        $("obPct").textContent = "";
+        $("obAmt").textContent = "No se pudo instalar: " + mensajeError(e);
         obNext.disabled = false;
         obNext.textContent = "Cerrar";
         obNext.setAttribute("data-cerrar", "");
       });
   }
 
-  /* Lo llama el mismo aviso `install` que mueve la barra de la vista de Jugar. */
+  /* La llama el mismo evento `progress` que mueve la barra de la vista de Jugar. */
   function progresoInvitacion(paso, frac){
     if (!obInstalando) return;
-    var bar = document.getElementById("obBar");
-    var pct = document.getElementById("obPct");
+    var bar = $("obBar");
+    var pct = $("obPct");
     if (typeof frac === "number" && frac >= 0) {
       bar.removeAttribute("data-indeterminate");
       bar.style.setProperty("--frac", Math.round(frac * 100) + "%");
@@ -2204,31 +2351,29 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       bar.setAttribute("data-indeterminate", "");
       pct.textContent = "";
     }
-    if (paso) document.getElementById("obAmt").textContent = paso;
+    if (paso) $("obAmt").textContent = paso;
   }
 
   function mostrarListo(){
     var p = INVITACION;
     cur = 3; renderOb();
-    var srv = document.getElementById("obServer");
+    var srv = $("obServer");
     if (!p || !p.server) {
       srv.hidden = true;
-      document.getElementById("obReadyBody").textContent = "Todo instalado. Dale a Jugar cuando quieras.";
+      $("obReadyBody").textContent = "Todo instalado. Dale a Jugar cuando quieras.";
       return;
     }
     srv.hidden = false;
-    document.getElementById("obServerName").textContent = p.server;
-    document.getElementById("obServerStats").innerHTML = "";
-    document.getElementById("obReadyBody").textContent =
+    $("obServerName").textContent = p.server;
+    $("obServerStats").innerHTML = "";
+    $("obReadyBody").textContent =
       "Dale a Jugar y entras directo al servidor, sin buscar la IP ni configurar nada.";
     call("server_status", { addr: p.server }).then(function(st){
-      var stats = document.getElementById("obServerStats");
+      var stats = $("obServerStats");
       stats.innerHTML = "";
       var partes = (!st || !st.online) ? ["no responde"] : [
         st.ping_ms != null ? st.ping_ms + " ms" : "",
-        st.players != null
-          ? st.players.toLocaleString("es-MX") + " / " + (st.max_players || 0).toLocaleString("es-MX")
-          : ""
+        st.players.toLocaleString("es-MX") + " / " + (st.max_players || 0).toLocaleString("es-MX")
       ];
       partes.forEach(function(t){
         var sp = document.createElement("span");
@@ -2243,228 +2388,63 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     if (cur === 1) prepararInvitacion();
     else if (cur === 3) { closeOb(); runPlay().catch(function(){}); }
   });
-  document.getElementById("ob-exit").addEventListener("click", closeOb);
+  $("ob-exit").addEventListener("click", closeOb);
   document.addEventListener("keydown", function(e){
     if (e.key === "Escape" && !ob.hidden) closeOb();
   });
   renderOb();
 
-  /* Con el launcher ya abierto, Rust avisa de que llegó un link. La invitación en sí se
-     recoge siempre del mismo sitio, así que no puede abrirse dos veces. */
-  if (window.__TAURI__) {
-    window.__TAURI__.event.listen("invitacion", function(){
-      window.__TAURI__.core.invoke("invitacion_pendiente").then(function(c){
-        if (c) abrirInvitacion(c);
-      });
-    });
-  }
+  /* ---- la ficha del elegido ---- */
+  function renderPack(){
+    $("packName").textContent = PACK ? PACK.name : "Sin modpack";
+    setIcon($("packIcon"), PACK && PACK.icon);
 
-
-  /* ================= estado real: pack, cuenta, servidor, instancia ================= */
-  var call = function(cmd, args){
-    return tauri ? tauri.core.invoke(cmd, args || {}) : Promise.reject("sin backend");
-  };
-  var $ = function(id){ return document.getElementById(id); };
-
-  function humanBytes(n){
-    if (!n) return "0 MB";
-    var mb = n / 1048576;
-    return mb >= 1024 ? (mb/1024).toFixed(2) + " GB" : Math.round(mb) + " MB";
-  }
-  function slug(name){
-    return name.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
-               .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "modpack";
-  }
-  function escapar(t){
-    return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-
-  /* Traduce lo que devuelve el backend a algo que diga **qué hacer**. El texto técnico
-     se queda debajo en pequeño: sirve para diagnosticar sin asustar a quien solo quería
-     jugar, y es lo que se puede copiar y mandar si hay que mirarlo. */
-  var ERRORES = [
-    [/sin conexión|error de red|dns|connect|tiempo de espera|timed out/i,
-     "Parece que no hay internet. Revisa tu conexión y vuelve a intentarlo."],
-    [/hash|dañad|corrupt|incomplet/i,
-     "La descarga llegó incompleta. Vuelve a darle: sigue desde donde se quedó."],
-    [/no encontré ningún modpack/i,
-     "Ese código no existe. Pídeselo otra vez a quien te lo pasó."],
-    [/espacio|os error 112/i,
-     "No queda espacio en el disco para instalarlo."],
-    [/permiso|denied|os error 5/i,
-     "Windows no dejó escribir en la carpeta. Cierra el juego, y si sigue, reinicia el launcher."],
-    [/404|not found|no such file/i,
-     "El archivo ya no está donde decía el catálogo. Avisa a quien lo publicó."]
-  ];
-
-  function showError(titulo, err){
-    var crudo = String(err || "");
-    for (var i = 0; i < ERRORES.length; i++) {
-      if (ERRORES[i][0].test(crudo)) {
-        showAlert("<b>" + escapar(titulo) + "</b> " + ERRORES[i][1] +
-                  '<small class="alert-raw">' + escapar(crudo) + "</small>");
-        return;
+    var meta = [];
+    if (PACK) {
+      if (PACK.loader) meta.push(loaderTexto(PACK.loader));
+      if (PACK.minecraft) meta.push("MC " + PACK.minecraft);
+      if (PACK.mods) meta.push(PACK.mods + " mods");
+      /* Instalada, lo que ocupa; sin instalar, lo que falta por bajar —si se sabe—. El
+         «por descargar» no sobra: en el mismo sitio, un número a secas diría dos cosas
+         distintas según el estado sin avisar de cuál. */
+      if (PACK.disk_bytes != null) {
+        meta.push(humanBytes(PACK.disk_bytes));
+      } else if (PACK.action && PACK.action.bytes) {
+        meta.push(humanBytes(PACK.action.bytes) + " por descargar");
       }
-    }
-    showAlert("<b>" + escapar(titulo) + "</b> " + escapar(crudo));
-  }
-
-  function showAlert(html){
-    var el = $("alert");
-    if (!el) return;
-    if (!html) { el.hidden = true; return; }
-    el.innerHTML = html; el.hidden = false;
-  }
-  /* Pinta un icono: el del pack si lo trajo, si no el dino de siempre. */
-  function setIcon(host, dataUrl){
-    if (!host) return;
-    if (dataUrl) {
-      host.innerHTML = '<img src="' + dataUrl + '" alt="" style="width:70%;height:auto;border-radius:14%;image-rendering:auto">';
-    } else if (!host.querySelector("canvas")) {
-      var c = document.createElement("canvas");
-      c.width = 22; c.height = 21; c.dataset.dino = "";
-      host.innerHTML = ""; host.appendChild(c);
-      paintDino(c);
-    }
-  }
-
-  var PACK = null;   /* lo que hay instalado, leído del disco */
-
-  function renderPack(info){
-    var name = PACK ? PACK.name : "Sin modpack";
-    $("packName").textContent = name;
-    setIcon($("packIcon"), info && info.icon);
-
-    var meta = [], chips = [];
-    if (info && info.installed) {
-      if (info.loader) meta.push(info.loader);
-      if (info.minecraft) meta.push("MC " + info.minecraft);
-      meta.push(info.mods + " mods");
-      meta.push(humanBytes(info.bytes));
-    } else if (PACK && CATALOGO && (CATALOGO.loader || CATALOGO.mods || CATALOGO.bytes)) {
-      /* Sin instalar, lo que sabe qué es el pack es el catálogo. Antes aquí solo ponía
-         «no instalado todavía», que es no decir nada justo cuando alguien está
-         decidiendo si instalarlo.
-         Y el tamaño vive en esta línea, no dentro del botón: el ancho de un botón debe
-         depender de su propio vocabulario —Jugar, Instalar, Actualizar, tres palabras
-         fijas— y no del catálogo, porque con `1fr auto` lo que crece el botón lo paga
-         el título. */
-      if (CATALOGO.loader) meta.push(CATALOGO.loader);
-      if (CATALOGO.minecraft) meta.push("MC " + CATALOGO.minecraft);
-      if (CATALOGO.mods) meta.push(CATALOGO.mods + " mods");
-      if (CATALOGO.bytes) meta.push(humanBytes(CATALOGO.bytes) + " por descargar");
+      if (!meta.length) meta.push("no instalado todavía");
     } else {
-      meta.push(PACK ? "no instalado todavía" : "importa un .mrpack para empezar");
+      meta.push("añade uno con el +");
     }
     $("packMeta").innerHTML = meta.map(function(t, i){
-      return (i ? "<i></i>" : "") + "<span>" + t + "</span>";
+      return (i ? "<i></i>" : "") + "<span>" + escapar(t) + "</span>";
     }).join("");
-    $("packChips").innerHTML = chips.join("");
-
-    var play = document.querySelector(".play");
-    if (play) play.disabled = !PACK;
   }
 
-  /* El botón principal dice lo que va a pasar al pulsarlo, con el peso de lo que haya
-     que bajar cuando se sepa. Antes siempre ponía «Jugar»: el primer clic de un amigo
-     se iba media hora a descargar sin haberle avisado de nada, y eso se parece
-     demasiado a que el launcher se colgó. */
+  /* El botón principal dice lo que va a pasar al pulsarlo. Lo decide el núcleo en
+     `action`, así que su ancho depende de tres palabras fijas y no del catálogo. */
+  var ETIQUETAS = { play: "Jugar", install: "Instalar", update: "Actualizar", playing: "Jugar" };
   function renderBoton(){
-    var play = document.querySelector(".play");
-    if (!play || !playLabel) return Promise.resolve();
-    if (!PACK) { playLabel.textContent = "Jugar"; return Promise.resolve(); }
-    return call("pack_state", { id: PACK.id }).then(function(e){
-      CATALOGO = e || null;
-      var txt = ({ instalar: "Instalar", actualizar: "Actualizar" })[e && e.estado] || "Jugar";
-      playLabel.textContent = txt;
-      /* La ficha depende de esto cuando no hay nada instalado, y las dos consultas van
-         en paralelo: se repinta con lo que ya hubiera del disco. */
-      renderPack(INSTANCIA);
-      dlog("botón: " + txt + " (" + ((e && e.estado) || "?") +
-           (e && e.bytes ? ", " + humanBytes(e.bytes) : "") + ")");
-    }).catch(function(){ playLabel.textContent = "Jugar"; });
+    if (!playBtn || !playLabel) return;
+    var k = (PACK && PACK.action) ? PACK.action.kind : "play";
+    playLabel.textContent = ETIQUETAS[k] || "Jugar";
+    playBtn.disabled = !PACK;
   }
 
-  var RAM_REC = null;     /* la recomendación para esta máquina, en GB */
-  var INSTANCIA = null;   /* lo último que dijo el disco sobre la instancia */
-  var CATALOGO = null;    /* lo último que dijo el catálogo sobre el pack */
-
-  function renderMemory(){
-    return call("memory_info").then(function(m){
-      if (!m || !m.total) return;
-      var gb = Math.round(m.total / 1024), rec = Math.round(m.max / 1024);
-      RAM_REC = rec;
-      /* Lo elegido a mano para este pack manda; sin nada guardado, la recomendación. */
-      var elegida = (PACK && PACK.max_mem) ? Math.round(PACK.max_mem / 1024) : null;
-      var usar = elegida || rec;
-      var slider = $("ram");
-      if (slider) {
-        slider.max = String(gb);
-        slider.value = String(usar);
-        slider.dispatchEvent(new Event("input"));
-      }
-      var scale = document.querySelector(".ram-scale");
-      if (scale) scale.lastElementChild.textContent = gb + " GB en esta máquina";
-      var hint = $("ramHint");
-      if (hint) hint.textContent = elegida
-        ? "Elegiste " + usar + " GB para este pack. Aquí se recomiendan " + rec +
-          ": déjalo en " + rec + " para volver a automático."
-        : "De " + gb + " GB, le tocan " + rec + " al juego; el resto es para el sistema.";
-      var chips = $("packChips");
-      if (chips && PACK) chips.innerHTML = '<span class="chip">RAM <b>' + usar + ' GB</b></span>';
-    });
-  }
-
-  /* `change` y no `input`: se guarda al soltar el control, no en cada paso del arrastre.
-     Por `getElementById` y no `$`, porque esto corre al cargar el script. */
-  document.getElementById("ram").addEventListener("change", function(){
-    if (!PACK) return;
-    var gb = Number(this.value);
-    /* Dejarlo en la recomendación es volver a automático: así el pack sigue a la
-       máquina si cambia de RAM, en vez de quedarse clavado en un número que
-       coincidía por casualidad. */
-    var mb = (gb === RAM_REC) ? null : gb * 1024;
-    var id = PACK.id;
-    call("set_pack_memory", { id: id, mb: mb }).then(function(){
-      if (PACK && PACK.id === id) PACK.max_mem = mb;
-      return renderMemory();
-    }).catch(function(e){
-      showError("No pude guardar la RAM.", e);
-    });
-  });
-
-  function renderInstance(){
-    if (!PACK) { INSTANCIA = null; CATALOGO = null; renderPack(null); return Promise.resolve(); }
-    return call("instance_info", { id: PACK.id }).then(function(info){
-      INSTANCIA = info;
-      renderPack(info);
-      if (!info || !info.installed) return;
-      $("kvPath").textContent = String(info.path).replace(/^\/Users\/[^/]+/, "~");
-      $("kvPath").title = info.path;
-      $("kvLoader").textContent = info.loader || "—";
-      $("kvSize").textContent = humanBytes(info.bytes) + " · " + info.mods + " mods";
-      $("kvWorlds").textContent = info.worlds + (info.worlds === 1 ? " mundo · intocable" : " mundos · intocables");
-      $("setEyebrow").textContent = PACK.name + (info.minecraft ? " · " + info.minecraft : "");
-    });
-  }
-
+  var TIPOS = { offline: "sin conexión", microsoft_bridge: "Microsoft" };
   function renderAccount(){
-    return call("active_account").then(function(a){
-      var nameEl = document.querySelector(".account-name");
-      var kindEl = document.querySelector(".account-kind");
-      if (!a) {
-        if (nameEl) nameEl.textContent = "Sin cuenta";
-        if (kindEl) kindEl.textContent = "inicia sesión al jugar";
-        return;
-      }
-      if (nameEl) nameEl.textContent = a.name || "—";
-      if (kindEl) {
-        var kinds = { MSA: "Microsoft", Ely: "Ely.by", Offline: "sin conexión" };
-        kindEl.textContent = kinds[a.kind] || a.kind || "";
-      }
-      var head = document.querySelector(".account canvas[data-head]");
-      if (head && a.name) { head.dataset.head = a.name; paintHead(head); }
-    });
+    var a = CUENTAS.filter(function(x){ return x.active; })[0] || null;
+    var nameEl = document.querySelector(".account-name");
+    var kindEl = document.querySelector(".account-kind");
+    if (!a) {
+      if (nameEl) nameEl.textContent = "Sin cuenta";
+      if (kindEl) kindEl.textContent = "inicia sesión al jugar";
+      return;
+    }
+    if (nameEl) nameEl.textContent = a.name || "—";
+    if (kindEl) kindEl.textContent = TIPOS[a.kind] || a.kind || "";
+    var head = document.querySelector(".account canvas[data-head]");
+    if (head && a.name) { head.dataset.head = a.name; paintHead(head); }
   }
 
   function renderServer(){
@@ -2483,23 +2463,125 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       }
       dot.style.background = "var(--green)";
       dot.style.boxShadow = "0 0 10px var(--green-glow)";
-      var players = st.players != null
-        ? st.players.toLocaleString("es-MX") + " / " + (st.max_players || 0).toLocaleString("es-MX")
-        : "";
-      $("srvStats").innerHTML = "<span>" + (st.ping_ms != null ? st.ping_ms + " ms" : "") + "</span><span>" + players + "</span>";
+      var players = st.players.toLocaleString("es-MX") + " / " +
+                    (st.max_players || 0).toLocaleString("es-MX");
+      $("srvStats").innerHTML = "<span>" + (st.ping_ms != null ? st.ping_ms + " ms" : "") +
+                                "</span><span>" + players + "</span>";
       if (st.motd) $("srvName").title = st.motd;
-    });
+    }).catch(function(){});
   }
 
-  function renderJava(){
-    return call("java_runtimes").then(function(list){
-      var sel = $("javaSelect");
-      if (!sel) return;
-      sel.innerHTML = (list && list.length)
-        ? list.map(function(r){ return "<option>" + r + "</option>"; }).join("")
-        : "<option>lo descarga el motor al jugar</option>";
-    });
+  /* ---- Ajustes ----
+     Todo sale de dos llamadas: `instance_settings_get` (memoria, Java y argumentos) e
+     `instance_details` (carpeta, mundos y tamaño). Las dos piden la instancia instalada;
+     sin instalar, la pantalla lo dice en vez de enseñar valores de otra. */
+  function rutaCorta(p){
+    return String(p).replace(/^\/Users\/[^/]+/, "~").replace(/^[A-Za-z]:\\Users\\[^\\]+/, "~");
   }
+  function opcionJava(valor, texto){
+    var o = document.createElement("option");
+    o.value = valor; o.textContent = texto;
+    return o;
+  }
+
+  function renderAjustes(){
+    $("kvEngine").textContent = APP ? "Dino " + APP.version + " · núcleo propio" : "—";
+    var sel = $("javaSelect");
+    if (!PACK || !instalado(PACK)) {
+      SETTINGS = null;
+      ["kvPath", "kvLoader", "kvSize", "kvWorlds"].forEach(function(k){ $(k).textContent = "—"; });
+      $("kvPath").title = "";
+      $("setEyebrow").textContent = PACK ? PACK.name : "Instancia";
+      $("ramHint").textContent = PACK ? "Instálalo para ajustar la memoria."
+                                      : "Elige un modpack para ajustarlo.";
+      $("jvmArgs").textContent = "Los elige Dino según la versión de Minecraft.";
+      sel.innerHTML = ""; sel.appendChild(opcionJava("", "Automático"));
+      $("packChips").innerHTML = "";
+      return Promise.resolve();
+    }
+    var id = PACK.id;
+    return Promise.all([
+      call("instance_settings_get", { id: id }),
+      call("instance_details", { id: id })
+    ]).then(function(r){
+      if (!PACK || PACK.id !== id) return;   /* se cambió de pack mientras tanto */
+      var s = r[0], d = r[1];
+      SETTINGS = s;
+
+      var gb = Math.max(1, Math.round(s.machine_ram_mb / 1024));
+      var rec = Math.max(1, Math.round(s.recommended_max_mb / 1024));
+      RAM_REC = rec;
+      /* Lo elegido a mano para este pack manda; sin nada guardado, la recomendación. */
+      var elegida = (s.memory && s.memory.mode === "fixed") ? Math.round(s.memory.max_mb / 1024) : null;
+      var usar = elegida || rec;
+      var slider = $("ram");
+      slider.max = String(gb);
+      slider.value = String(usar);
+      slider.dispatchEvent(new Event("input"));
+      var scale = document.querySelector(".ram-scale");
+      if (scale) scale.lastElementChild.textContent = gb + " GB en esta máquina";
+      $("ramHint").textContent = elegida
+        ? "Elegiste " + usar + " GB para este pack. Aquí se recomiendan " + rec +
+          ": déjalo en " + rec + " para volver a automático."
+        : "De " + gb + " GB, le tocan " + rec + " al juego; el resto es para el sistema.";
+      $("packChips").innerHTML = '<span class="chip">RAM <b>' + usar + " GB</b></span>";
+
+      sel.innerHTML = "";
+      sel.appendChild(opcionJava("", "Automático"));
+      (s.available_java || []).forEach(function(j){
+        /* Sin versión mayor, el nombre del runtime de Mojang («java-runtime-delta») dice
+           más que la ruta entera hasta el ejecutable. */
+        var tramos = j.path.split(/[\\/]/);
+        var runtime = tramos.filter(function(t){ return /^(java-runtime|jre)/.test(t); })[0];
+        var nombre = j.major ? "Java " + j.major : (runtime || tramos.slice(-3).join("/"));
+        sel.appendChild(opcionJava(j.path, nombre + (j.origin === "system" ? " · del sistema" : " · de Dino")));
+      });
+      sel.value = (s.java && s.java.mode === "path") ? s.java.path : "";
+
+      if (s.jvm_args && s.jvm_args.length) {
+        $("jvmArgs").textContent = s.jvm_args.join(" ");
+      } else {
+        $("jvmArgs").innerHTML = "Los elige Dino según <b>Minecraft " + escapar(d.minecraft) +
+                                 "</b>. El pack no los sobrescribe.";
+      }
+
+      $("kvPath").textContent = rutaCorta(d.path);
+      $("kvPath").title = d.path;
+      $("kvLoader").textContent = loaderTexto(d.loader) || "—";
+      $("kvSize").textContent = humanBytes(d.disk_bytes) + " · " + d.mods + " mods";
+      $("kvWorlds").textContent = d.worlds + (d.worlds === 1 ? " mundo · intocable" : " mundos · intocables");
+      $("setEyebrow").textContent = PACK.name + " · " + d.minecraft;
+    }).catch(function(e){ dlog("ajustes: " + detalleDe(e)); });
+  }
+
+  /* Guarda conservando lo demás: el contrato pide los tres campos a la vez, y mandar
+     solo el que cambió borraría los otros dos. */
+  function guardarAjustes(cambio){
+    if (!PACK || !SETTINGS) return Promise.resolve();
+    var datos = {
+      id: PACK.id,
+      memory: SETTINGS.memory,
+      jvm_args: SETTINGS.jvm_args || [],
+      java: SETTINGS.java
+    };
+    for (var k in cambio) datos[k] = cambio[k];
+    return call("instance_settings_set", datos).then(renderAjustes);
+  }
+
+  /* `change` y no `input`: se guarda al soltar el control, no en cada paso del arrastre. */
+  $("ram").addEventListener("change", function(){
+    var gb = Number(this.value);
+    /* Dejarlo en la recomendación es volver a automático: así el pack sigue a la
+       máquina si cambia de RAM, en vez de quedarse clavado en un número que
+       coincidía por casualidad. */
+    var memory = (gb === RAM_REC) ? { mode: "auto" } : { mode: "fixed", max_mb: gb * 1024 };
+    guardarAjustes({ memory: memory }).catch(function(e){ showError("No pude guardar la RAM.", e); });
+  });
+  $("javaSelect").addEventListener("change", function(){
+    var v = this.value;
+    guardarAjustes({ java: v ? { mode: "path", path: v } : { mode: "auto" } })
+      .catch(function(e){ showError("No pude cambiar el Java.", e); });
+  });
 
   function setSync(text, ok){
     var t = $("syncText"), d = $("syncDot");
@@ -2510,14 +2592,37 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     }
   }
 
+  /* ---- refresco ----
+     La página no guarda nada entre aperturas: mientras se juega, el núcleo destruye la
+     ventana y la recrea al acabar, así que todo se reconstruye desde aquí. Los avisos
+     `library_changed` llegan en ráfaga (seleccionar, instalar, acabar una partida), y
+     se juntan: si ya hay un refresco en vuelo, se hace uno más al terminar y no diez. */
+  var refrescando = null, otraVez = false;
   function refreshAll(){
-    return call("get_pack").then(function(p){
-      PACK = p && p.id ? p : null;
-      $("kvEngine").textContent = "ElyPrism 11.1.0 · administrado";
+    if (refrescando) { otraVez = true; return refrescando; }
+    refrescando = Promise.all([call("library_list"), call("accounts_list")]).then(function(r){
+      LIB = r[0] || [];
+      CUENTAS = r[1] || [];
+      PACK = LIB.filter(function(x){ return x.selected; })[0] || null;
       setSync(PACK ? "listo para jugar" : "sin modpack", !!PACK);
-      return Promise.all([renderInstance(), renderAccount(), renderServer(), renderMemory(),
-                          renderJava(), renderBiblioteca(), renderBoton()]);
-    }).catch(function(){});
+      renderPack(); renderBoton(); renderAccount(); renderBiblioteca();
+
+      /* Sin sondeo, una partida que ya estaba abierta al cargar —la sigue el núcleo desde
+         otra apertura, o la ventana no se cerró al jugar— solo se ve aquí: la biblioteca
+         marca con `playing` a la que corre. «Preparando» no lo marca nadie, así que ese
+         estado se deja como esté. */
+      var jugando = LIB.filter(function(x){ return x.action && x.action.kind === "playing"; })[0];
+      if (jugando && estadoPrevio !== "preparando" && estadoPrevio !== "jugando") {
+        onSession({ state: "playing", instance: jugando.id });
+      } else if (!jugando && estadoPrevio === "jugando") {
+        estadoPrevio = null; JUGANDO_ID = null; mostrarEstado("reposo");
+      }
+      return Promise.all([renderServer(), renderAjustes()]);
+    }).catch(function(e){ dlog("refresco: " + detalleDe(e)); }).then(function(){
+      refrescando = null;
+      if (otraVez) { otraVez = false; return refreshAll(); }
+    });
+    return refrescando;
   }
 
   /* ================= importar un .mrpack ================= */
@@ -2525,18 +2630,24 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
   function showPreview(path, info){
     pending = { path: path, info: info };
-    $("previewSub").textContent = "Revisa y confirma.";
+    $("previewSub").textContent = info.supported
+      ? "Revisa y confirma."
+      : "Este modpack usa Forge o Quilt, que Dino todavía no soporta.";
     $("previewBody").hidden = false;
     $("previewName").textContent = info.name;
     setIcon($("previewIcon"), info.icon);
     var meta = [];
-    if (info.loader) meta.push(info.loader);
+    if (info.loader) meta.push(loaderTexto(info.loader));
     if (info.minecraft) meta.push("MC " + info.minecraft);
-    meta.push(info.files + " archivos");
-    meta.push(humanBytes(info.bytes));
+    meta.push(info.mods + " mods");
+    /* `pack_bytes` es el archivo y `download_bytes` lo que se baja: solo el segundo
+       dice cuánto va a tardar. */
+    meta.push(info.download_bytes ? humanBytes(info.download_bytes) + " por descargar"
+                                  : humanBytes(info.pack_bytes));
     $("previewMeta").innerHTML = meta.map(function(t, i){
-      return (i ? "<i></i>" : "") + "<span>" + t + "</span>";
+      return (i ? "<i></i>" : "") + "<span>" + escapar(t) + "</span>";
     }).join("");
+    btnInstall.disabled = !info.supported;
   }
 
   function takeFile(path){
@@ -2545,11 +2656,11 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       return;
     }
     $("dropHint").textContent = "leyendo…";
-    call("inspect_mrpack", { path: path }).then(function(info){
-      $("dropHint").textContent = path.split("/").pop();
+    call("mrpack_inspect", { path: path }).then(function(info){
+      $("dropHint").textContent = path.split(/[\\/]/).pop();
       showPreview(path, info);
     }).catch(function(e){
-      $("dropHint").textContent = "no pude leerlo: " + e;
+      $("dropHint").textContent = "no pude leerlo: " + mensajeError(e);
     });
   }
 
@@ -2575,7 +2686,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
          mismo archivo. Manda el segmento abierto: ir siempre a importar haría
          imposible soltar un .mrpack en el panel de publicar. */
       var admin = $("navAdmin");
-      if (admin && admin.hidden) return;   // sin `gh` no hay dónde soltarlo
+      if (admin && admin.hidden) return;
       var enPublicar = $("adminPublish") && !$("adminPublish").hidden;
       document.querySelector('[data-go="admin"]').click();
       if (enPublicar) {
@@ -2589,34 +2700,50 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     });
   }
 
+  /* Tareas que no pasan por `play` —importar, verificar, añadir del catálogo— no emiten
+     eventos de sesión, así que el panel de progreso se enseña a mano. Tampoco miran la
+     cancelación, y por eso esconden el botón: uno que no hace nada es peor que ninguno. */
+  function tareaSinSesion(texto){
+    /* Un aviso de un intento anterior no puede quedarse encima de uno nuevo. */
+    showAlert(null);
+    estadoPrevio = "preparando";
+    faseVista = null;
+    setProgress(texto, -1);
+    if (launchCancel) launchCancel.hidden = true;
+    mostrarEstado("preparando");
+  }
+  function finTareaSinSesion(){
+    estadoPrevio = null;
+    if (launchCancel) launchCancel.hidden = false;
+    mostrarEstado("reposo");
+  }
+
   var btnInstall = $("btnInstall");
   if (btnInstall) {
     btnInstall.addEventListener("click", function(){
-      if (!pending) return;
-      var info = pending.info;
+      if (!pending || !pending.info.supported) return;
+      /* El servidor entra solo con el interruptor encendido: en 2.0, que un pack tenga
+         servidor es justo lo que hace que el juego entre directo a él. */
+      var directo = document.querySelector("#adminImport .field-switch .switch");
       var srv = ($("srvInput").value || "").trim();
-      var autoJoin = document.querySelector('#previewPanel, .field-switch .switch[data-toggle]');
-      var pack = {
-        id: slug(info.name),
-        name: info.name,
-        version: info.version,
-        mrpack: pending.path,
-        server: srv || null
-      };
+      if (directo && directo.getAttribute("aria-checked") !== "true") srv = "";
+      var path = pending.path;
       btnInstall.disabled = true;
       btnInstall.textContent = "Instalando…";
-      call("set_pack", { pack: pack })
-        .then(function(guardado){
-          /* Manda lo que devolvió el backend: puede haberle asignado otra carpeta si la
-             que pedía ya era de otro pack, y seguir con la nuestra instalaría encima. */
-          PACK = guardado || pack;
-          return runPlay({ installOnly: true });
-        })
+      /* A Jugar antes de empezar, no al acabar: es donde se ve el progreso. */
+      document.querySelector('[data-go="jugar"]').click();
+      tareaSinSesion("Preparando la instalación");
+      call("mrpack_import", { path: path, server: srv || null })
         .then(function(){
-          document.querySelector('[data-go="jugar"]').click();
+          pending = null;
+          $("previewBody").hidden = true;
+          $("previewSub").textContent = "Suelta un archivo para verlo antes de instalar.";
+          $("dropHint").textContent = "solo archivos .mrpack";
           return refreshAll();
         })
-        .finally(function(){
+        .catch(function(e){ showError("No se pudo importar.", e); })
+        .then(function(){
+          finTareaSinSesion();
           btnInstall.disabled = false;
           btnInstall.textContent = "Instalar este modpack";
         });
@@ -2628,9 +2755,9 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   var playLabel = $("playLabel");
 
   /* ================= los tres estados del panel de lanzamiento =================
-     Reposo (botón Jugar), preparando (barra) y jugando (detener). Cuál toca lo dice
-     el backend en `session_state`, que es la lectura de un atómico y no cuesta nada,
-     así que se puede preguntar seguido.
+     Reposo (botón Jugar), preparando (barra) y jugando (detener). En 1.x se preguntaba
+     cada segundo; en 2.0 lo dicen los eventos `session` del núcleo, y al cargar, la
+     biblioteca.
 
      El ancho de la barra entra por la variable `--frac` y no por `style.width`: un
      ancho en línea le ganaría a cualquier selector y dejaría sin ancho al segmento del
@@ -2650,48 +2777,104 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     if (bloqueLaunch) bloqueLaunch.hidden = (cual !== "preparando");
     if (bloqueSession)bloqueSession.hidden= (cual !== "jugando");
     if (cual !== "jugando") desarmarStop();
+    if (cual === "preparando" && launchCancel) launchCancel.disabled = false;
     /* Una partida nueva vuelve a poder detenerse aunque la anterior se cerrara con él. */
     if (cual === "jugando" && sessionStop) sessionStop.disabled = false;
     marcarSesionEnBiblioteca(cual === "jugando");
   }
 
   function setProgress(paso, frac, bajado, total){
-    if (paso) launchPhase.textContent = paso;
+    /* Pedida la cancelación, el rótulo se queda diciéndolo: los avisos que siguen
+       llegando lo pisarían y parecería que no se hizo caso. */
+    if (paso && !cancelando) launchPhase.textContent = paso;
     /* Los megas cuando se sepan: en una descarga de cientos, un porcentaje a secas no
        dice si quedan dos minutos o veinte. Los pasos que no bajan nada lo dejan vacío. */
     if (launchAmt) {
-      launchAmt.textContent = total
-        ? humanBytes(bajado || 0) + " / " + humanBytes(total)
-        : "";
+      launchAmt.textContent = total ? humanBytes(bajado || 0) + " / " + humanBytes(total) : "";
     }
     if (typeof frac === "number" && frac >= 0) {
       launchBar.removeAttribute("data-indeterminate");
       launchBar.style.setProperty("--frac", Math.round(frac * 100) + "%");
     } else {
-      /* Sin dato no se finge uno: el motor no publica porcentaje por ninguna vía. */
       launchBar.setAttribute("data-indeterminate", "");
     }
   }
 
-  if (tauri) {
-    tauri.event.listen("install", function(e){
-      var p = e.payload || {};
-      setProgress(p.paso, p.frac, p.bajado, p.total);
-      progresoInvitacion(p.paso, p.frac);
-    });
+  /* ---- progreso ----
+     La barra lee el total de la tarea, que nunca retrocede; la fase solo pone el texto.
+     Un total 0 es «no se sabe»: barra indeterminada. */
+  var FASES = {
+    checking_updates: "Buscando versión nueva",
+    downloading_pack: "Descargando el modpack",
+    reading_versions: "Leyendo versiones",
+    downloading_libraries: "Descargando librerías",
+    downloading_assets: "Descargando recursos",
+    installing_java: "Preparando Java",
+    preparing_loader: "Preparando el cargador de mods",
+    downloading_mods: "Descargando mods",
+    verifying_files: "Verificando archivos",
+    renewing_session: "Renovando tu sesión",
+    launching: "Abriendo Minecraft",
+    done: "Listo"
+  };
+  /* Cuenta de archivos solo donde dice algo: «3 de 120 mods» orienta; «1532 de 3400
+     recursos» solo es ruido. */
+  var CON_CUENTA = { downloading_mods: 1, verifying_files: 1 };
+  var faseVista = null, faseDesde = 0, tareaVista = null, cuentas = {};
+
+  function onProgress(p){
+    if (p.task !== tareaVista) { tareaVista = p.task; faseVista = null; cuentas = {}; }
+    if (CON_CUENTA[p.phase] && p.files_total > 0) cuentas[p.phase] = p.files_done + " de " + p.files_total;
+    /* Librerías, recursos, Java y mods se bajan a la vez y se turnan en cada aviso; un
+       rótulo que salta varias veces por segundo no se llega a leer. Cambia como mucho
+       cada 0,7 s, salvo abrir el juego y terminar, que van en cuanto llegan. */
+    var ahora = Date.now();
+    if (p.phase !== faseVista &&
+        (faseVista === null || ahora - faseDesde > 700 || p.phase === "launching" || p.phase === "done")) {
+      faseVista = p.phase; faseDesde = ahora;
+    }
+    var texto = FASES[faseVista] || "Preparando";
+    if (cuentas[faseVista]) texto += " · " + cuentas[faseVista];
+
+    var total = p.task_bytes_total || 0, hecho = p.task_bytes_done || 0;
+    var frac = total > 0 ? Math.min(1, hecho / total) : -1;
+    setProgress(texto, frac, hecho, total);
+    progresoInvitacion(texto, frac);
+  }
+
+  /* ---- sesión ---- */
+  function onSession(s){
+    var st = s.state;
+    if (st === "preparing") {
+      estadoPrevio = "preparando";
+      mostrarEstado("preparando");
+    } else if (st === "playing" || st === "stopping") {
+      estadoPrevio = "jugando";
+      JUGANDO_ID = s.instance || (PACK && PACK.id) || null;
+      var p = LIB.filter(function(x){ return x.id === JUGANDO_ID; })[0];
+      if (sessionName) sessionName.textContent = p ? p.name : (PACK ? PACK.name : "");
+      mostrarEstado("jugando");
+      /* Cerrando: el núcleo espera hasta 30 s a que guarde el mundo. Pedirlo otra vez
+         no lo acelera. */
+      if (st === "stopping" && sessionStop) sessionStop.disabled = true;
+    } else {
+      estadoPrevio = null;
+      JUGANDO_ID = null;
+      mostrarEstado("reposo");
+      refreshAll();
+    }
   }
 
   /* ---- cancelar la preparación ----
-     Sustituye al botón Abort del motor, que desapareció al esconderle la ventana.
-     Sin esto no habría forma de parar una descarga de cientos de megas. */
+     El núcleo comprueba la cancelación entre pasos, no a mitad de una descarga: la que
+     ya empezó termina antes de parar. Se dice en el rótulo, para que el botón no parezca
+     que no responde mientras tanto. */
   if (launchCancel) {
     launchCancel.addEventListener("click", function(){
+      cancelando = true;
       launchCancel.disabled = true;
-      launchPhase.textContent = "Cancelando";
-      call("abort_launch").catch(function(e){ console.error(e); }).then(function(){
-        launchCancel.disabled = false;
-        mostrarEstado("reposo");
-      });
+      launchPhase.textContent = "Cancelando: termina el paso en curso…";
+      call("play_cancel").catch(function(){});
     });
   }
 
@@ -2713,11 +2896,11 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       }
       desarmarStop();
       /* Se le pide a Minecraft que se cierre como con su X: guarda y sale, y solo si no
-         responde se corta. Puede tardar lo que tarde en guardar, así que el botón se
-         bloquea hasta que cambie la sesión: un segundo clic volvería a pedirlo. */
+         responde se corta. El botón se bloquea hasta que cambie la sesión: un segundo
+         clic volvería a pedirlo. */
       sessionStop.disabled = true;
-      call("stop_game").catch(function(e){
-        console.error(e);
+      call("game_stop").catch(function(e){
+        showError("No pude cerrar el juego.", e);
         sessionStop.disabled = false;
       });
     });
@@ -2731,104 +2914,48 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     if (joinOverlay && !joinOverlay.hidden) cerrarJoin();
   });
 
-  /* ---- seguir al backend ----
-     Se sondea siempre, no solo tras pulsar Jugar: la partida puede seguir viva de una
-     sesión anterior del launcher, y al abrirlo hay que encontrarla ya en marcha. */
-  var estadoPrevio = null;
-  var preguntaPrevia = null;
-
-  /* Una ventana del motor que espera respuesta no se esconde: taparla dejaría la
-     preparación colgada para siempre, que es justo lo que le pasó a un amigo con el
-     diálogo de migración. Si aparece una, aquí se explica por qué hay una ventana ajena
-     delante, en vez de dejar la barra girando sin decir nada. */
-  function vigilarPregunta(){
-    call("engine_question").then(function(t){
-      if (t === preguntaPrevia) return;
-      preguntaPrevia = t;
-      if (t) setProgress("El motor te está preguntando algo: respóndele en su ventana", -1);
-    }).catch(function(){});
-  }
-
-  function seguirSesion(){
-    call("session_state").then(function(st){
-      /* Se consulta aunque el estado no cambie: la pregunta asoma en mitad de la
-         preparación, no al pasar de un estado a otro. */
-      if (st === "preparando") vigilarPregunta();
-      else preguntaPrevia = null;
-      if (st === estadoPrevio) return;
-      estadoPrevio = st;
-      if (st === "jugando") {
-        if (sessionName) sessionName.textContent = PACK ? PACK.name : "";
-        mostrarEstado("jugando");
-      } else if (st === "preparando") {
-        /* Aquí manda el motor y no publica porcentaje, así que barra indeterminada. */
-        setProgress("Descargando Minecraft", -1);
-        mostrarEstado("preparando");
-      } else {
-        mostrarEstado("reposo");
-      }
-    }).catch(function(){});
-  }
-  setInterval(seguirSesion, 1000);
-  seguirSesion();
-
-  /* Un segundo Jugar mientras el primero sigue en marcha lanzaría el motor dos veces.
-     El botón ya se esconde al empezar, pero el teclado y un doble clic rápido llegan
-     igual, así que el cerrojo va aquí y no en el estado visual. */
+  /* Un segundo Jugar mientras el primero sigue en marcha pediría otra tarea. El botón
+     ya se esconde al empezar, pero el teclado y un doble clic rápido llegan igual, así
+     que el cerrojo va aquí y no en el estado visual. */
   var lanzando = false;
 
   function runPlay(opts){
     opts = opts || {};
     if (!PACK || lanzando) return Promise.resolve();
     lanzando = true;
+    cancelando = false;
     showAlert(null);
-    /* El botón desaparece y su sitio lo ocupa la barra. `estadoPrevio` se limpia para
-       que el sondeo vuelva a aplicar lo que diga el backend en cuanto cambie. */
-    estadoPrevio = null;
-    setProgress("Preparando", 0);
+    faseVista = null;
+    estadoPrevio = "preparando";
+    setProgress(opts.installOnly ? "Preparando la instalación" : "Preparando", -1);
     mostrarEstado("preparando");
     setSync(opts.installOnly ? "instalando…" : "preparando…", false);
 
-    return call("play", { args: {
-      mrpack: PACK.mrpack,
-      instance_id: PACK.id,
-      /* Con código, el backend mira si hay versión nueva antes de lanzar. Sin él
-         —un pack importado a mano— no hay contra qué comparar y se juega tal cual. */
-      code: PACK.code || null,
-      name: PACK.name,
-      version: PACK.version || "1.0.0",
-      server: PACK.server || null,
-      /* 0 es «decídelo tú según la máquina»; solo va un número si se eligió a mano. */
-      max_mem: PACK.max_mem || 0,
-      jvm_args: "",
-      install_only: !!opts.installOnly
-    }}).then(function(r){
-      /* Llegar aquí es que la instalación ya terminó, así que lo que escribió —el icono
-         que traiga el pack, la instancia montada— ya está en disco. Sin repintar, la
-         primera partida entera se veía con el dino genérico y la tarjeta seguía
-         diciendo «sin instalar». */
-      renderInstance();
-      renderBiblioteca();
-      if (r === "login") {
-        /* Ya no se deja al usuario frente a la ventana del motor sin contexto:
-           el setup pregunta primero qué cuenta tiene y guía la que elija. */
-        call("close_engine").catch(function(){});
+    return call("play", { request: { instance: PACK.id, launch: !opts.installOnly } }).then(function(r){
+      var k = r && r.kind;
+      if (k === "needs_account") {
+        /* Sin cuenta, el setup pregunta cuál tiene y guía la que elija. */
         estadoPrevio = null; mostrarEstado("reposo");
         spAbrir();
-      } else if (opts.installOnly) {
+      } else if (k === "installed") {
         estadoPrevio = null; mostrarEstado("reposo");
+        refreshAll();
       } else {
-        /* A partir de aquí manda el motor, que no publica porcentaje. El sondeo de
-           `session_state` es quien pasará a «jugando» cuando el juego arranque. */
-        setProgress("Descargando Minecraft", -1);
+        /* Lanzado: a partir de aquí mandan los eventos `session`. Al abrirse la ventana
+           del juego, el núcleo cierra esta interfaz y la recrea al terminar. */
+        setProgress("Abriendo Minecraft", -1);
       }
       return r;
     }).catch(function(err){
-      showError("No se pudo.", err);
       estadoPrevio = null; mostrarEstado("reposo");
+      /* Cancelar a propósito vuelve como `busy`; eso no es un error que contar. */
+      if (!(cancelando && codigoDe(err) === "busy")) {
+        showError(opts.installOnly ? "No se pudo instalar." : "No se pudo.", err);
+      }
       throw err;
     }).finally(function(){
       lanzando = false;
+      cancelando = false;
       setSync(PACK ? "listo para jugar" : "sin modpack", !!PACK);
     });
   }
@@ -2841,40 +2968,41 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   var btnFolder = $("btnFolder");
   if (btnFolder) {
     btnFolder.addEventListener("click", function(){
-      if (!PACK) return;
-      call("instance_info", { id: PACK.id }).then(function(i){
-        if (i && i.path) return call("open_folder", { path: i.path });
-      }).catch(function(e){ showError("No pude abrir la carpeta.", e); });
+      if (!PACK || !instalado(PACK)) return;
+      call("open_folder", { target: "instance", id: PACK.id })
+        .catch(function(e){ showError("No pude abrir la carpeta.", e); });
     });
   }
   var btnVerify = $("btnVerify");
   if (btnVerify) {
     btnVerify.addEventListener("click", function(){
-      if (!PACK) return;
+      if (!PACK || !instalado(PACK) || estadoPrevio) return;
       btnVerify.disabled = true;
       var antes = btnVerify.textContent;
       btnVerify.textContent = "Verificando…";
-      /* La instalación ya es idempotente: revalida hashes y repara lo que falte. */
-      runPlay({ installOnly: true })
+      tareaSinSesion("Verificando archivos");
+      call("instance_verify", { id: PACK.id })
         .then(refreshAll)
-        .finally(function(){ btnVerify.disabled = false; btnVerify.textContent = antes; });
+        .catch(function(e){ showError("No se pudo verificar.", e); })
+        .then(function(){
+          finTareaSinSesion();
+          btnVerify.disabled = false; btnVerify.textContent = antes;
+        });
     });
   }
 
-  /* ================= setup real de primera vez =================
-     La rama de Microsoft no se puede resolver aquí dentro: su flujo necesita un
-     client_id de Azure con acceso a la API de Minecraft aprobado por Mojang. Así que
-     abre el motor, pero vigila accounts.json y lo cierra sola en cuanto entra la
-     cuenta — antes te dejaba con una ventana ajena abierta y sin instrucciones.
-     La de Ely.by sí es nativa: código de dispositivo, sin ventana del motor y sin
-     que nadie escriba una contraseña aquí dentro. */
-  function dlog(m){ try{ window.__TAURI__.core.invoke("boot_ping", { msg: m }); }catch(e){} }
+  /* ================= setup de cuenta =================
+     Sin conexión: la cuenta se crea aquí y el motor ni se abre.
+     Microsoft: el login va por el motor, que hace de puente con su `client_id`. En 2.0
+     el núcleo abre el motor y sincroniza las cuentas cuando se cierra; ese momento llega
+     como `accounts_changed`. Por eso aquí se pide cerrarlo al terminar: es la señal. */
   var setup   = document.getElementById("setup");
   var spPasos = Array.prototype.slice.call(setup.querySelectorAll("[data-sp]"));
   var spDots  = Array.prototype.slice.call(setup.querySelectorAll(".ob-dots i"));
   var spAtras = document.getElementById("sp-atras");
   var spJugar = document.getElementById("sp-jugar");
-  var spTimer = null;   /* sondeo en curso: hay que pararlo al salir o se queda vivo */
+  var esperandoMSA = false;
+  var msaAntes = 0;
 
   function spIr(paso, punto){
     spPasos.forEach(function(e){ e.classList.toggle("on", e.dataset.sp === paso); });
@@ -2882,105 +3010,72 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     spAtras.hidden = (paso === "1" || paso === "3");
     spJugar.hidden = (paso !== "3");
   }
-  function spParar(){ if (spTimer) { clearTimeout(spTimer); spTimer = null; } }
+  function spParar(){ esperandoMSA = false; }
   function spCerrar(){ spParar(); setup.hidden = true; }
   function spAbrir(){ spParar(); setup.hidden = false; spIr("1", 1); }
 
-  function mmss(seg){
-    var m = Math.floor(seg / 60), s2 = seg % 60;
-    return m + ":" + (s2 < 10 ? "0" : "") + s2;
-  }
-  /* El código va carácter por carácter, como en la vista de invitación. */
-  function pintarCodigo(el, texto){
-    el.innerHTML = "";
-    String(texto).split("").forEach(function(ch){
-      var sp = document.createElement("span");
-      if (ch === "-" || ch === " ") { sp.className = "sep"; sp.textContent = "–"; }
-      else sp.textContent = ch;
-      el.appendChild(sp);
-    });
-  }
-
-  function spListo(yaJugando){
+  function spListo(){
     spParar();
-    renderAccount().then(function(){
-      var a = document.querySelector(".account-name");
-      var nombre = a ? a.textContent : "";
-      var quien = (nombre && nombre !== "Sin cuenta") ? "Tu cuenta " + nombre : "Tu cuenta";
-      document.getElementById("sp-listo").textContent = yaJugando
-        ? quien + " quedó conectada. Minecraft está abriendo."
-        : quien + " quedó conectada.";
+    call("accounts_list").then(function(accs){
+      CUENTAS = accs || [];
+      renderAccount();
+      var a = CUENTAS.filter(function(x){ return x.active; })[0];
+      $("sp-listo").textContent = (a ? "Tu cuenta " + a.name : "Tu cuenta") + " quedó conectada.";
     }).catch(function(){});
     spIr("3", 3);
-    /* Si el motor ya está lanzando el juego, ofrecer "Jugar" lanzaría una segunda vez. */
-    spJugar.hidden = !!yaJugando;
   }
 
-  /* ---- rama Microsoft ----
-     Con instancia instalada el motor va directo a su página de Cuentas y no enseña su
-     ventana principal (modo "direct"). Ahí, tras iniciar sesión, el propio motor sigue
-     y abre Minecraft: por eso en ese modo NO lo matamos, sería abortarle el lanzamiento.
+  var msaEstado = $("sp-msa-estado");
+  var msaTexto  = $("sp-msa-texto");
 
-     Si alguien cierra el login sin entrar, el motor pregunta «Play demo?» y se va si le
-     dicen que no. No se intenta adivinar ese momento contando ventanas —al cerrar un
-     diálogo abre el otro, así que el conteo no baja—: lo que se detecta es que el motor
-     terminó, para dejar de esperar. Para cortar antes está el botón de cancelar. */
-  document.getElementById("sp-msa").addEventListener("click", function(){
+  $("sp-msa").addEventListener("click", function(){
     spIr("2-msa", 2);
-    var estado = document.getElementById("sp-msa-estado");
-    var texto  = document.getElementById("sp-msa-texto");
-    estado.textContent = "abriendo el motor…";
-    texto.textContent  = "Abriendo…";
-
-    call("open_engine_login", { instance: PACK ? PACK.id : null }).then(function(modo){
-      var directo = (modo === "direct");
-      texto.innerHTML = directo
-        ? 'Se abrió la página de <span class="mono-i">Cuentas</span> del motor. ' +
-          'Añade ahí tu cuenta de Microsoft.'
-        : 'Se abrió la ventana del motor. Ve a <span class="mono-i">Cuentas</span> ' +
-          'y añade tu cuenta de Microsoft.';
-      estado.textContent = "esperando a que inicies sesión…";
-
-      var vistas = false;   /* ¿llegamos a ver alguna ventana suya? */
-      (function vigilar(){
-        spTimer = setTimeout(function(){
-          call("active_account").then(function(a){
-            if (a && a.name) {
-              if (directo) {
-                /* El motor sigue solo y abre el juego. Matarlo aquí lo abortaría. */
-                estado.textContent = "sesión iniciada; Minecraft está abriendo…";
-              } else {
-                estado.textContent = "cuenta detectada, cerrando el motor…";
-                call("close_engine").catch(function(){});
-              }
-              spListo(directo);
-              return;
-            }
-            /* Sin cuenta todavía: ¿el motor sigue ahí? */
-            return call("engine_windows").then(function(n){
-              if (n === null || n === undefined) return vigilar();  /* no se puede saber */
-              if (n > 0) { vistas = true; return vigilar(); }
-              if (!vistas) return vigilar();   /* aún no había abierto: no es cancelar */
-              estado.textContent = "se cerró el motor sin iniciar sesión. Puedes reintentarlo.";
-              spAtras.hidden = false;
-            });
-          }).catch(function(){ vigilar(); });
-        }, 2000);
-      })();
-    }).catch(function(e){ estado.textContent = "no se pudo abrir el motor: " + String(e); });
+    msaEstado.textContent = "preparando el motor…";
+    msaTexto.textContent = "Un momento: la primera vez se descarga el motor que hace de puente con Microsoft.";
+    msaAntes = CUENTAS.filter(function(x){ return x.kind === "microsoft_bridge"; }).length;
+    esperandoMSA = true;
+    call("account_microsoft_add").then(function(){
+      if (!esperandoMSA) return;
+      msaTexto.innerHTML = 'Se abrió la ventana del motor. Ve a <span class="mono-i">Cuentas</span>, ' +
+                           'añade tu cuenta de Microsoft y, cuando termine, <b>cierra esa ventana</b>.';
+      msaEstado.textContent = "esperando a que cierres el motor…";
+    }).catch(function(e){
+      esperandoMSA = false;
+      msaEstado.textContent = "no se pudo abrir el motor: " + mensajeError(e);
+      spAtras.hidden = false;
+    });
   });
 
-  /* ---- rama sin conexión: la cuenta se crea aquí, el motor ni se abre ----
+  /* Llega cuando cambian las cuentas: al crear una sin conexión, al cerrar el motor tras
+     el login de Microsoft, o al elegir otra. Solo en el segundo caso hay setup esperando. */
+  function onAccountsChanged(){
+    return call("accounts_list").then(function(accs){
+      CUENTAS = accs || [];
+      renderAccount();
+      if (!esperandoMSA) return;
+      esperandoMSA = false;
+      var ms = CUENTAS.filter(function(x){ return x.kind === "microsoft_bridge"; });
+      var activa = CUENTAS.filter(function(x){ return x.active; })[0];
+      if (ms.length > msaAntes || (activa && activa.kind === "microsoft_bridge")) {
+        spListo();
+      } else {
+        msaEstado.textContent = "se cerró el motor sin añadir ninguna cuenta. Puedes reintentarlo.";
+        spAtras.hidden = false;
+      }
+    }).catch(function(){});
+  }
+
+  /* ---- sin conexión ----
      No autentica contra nadie: el nombre y el UUID que se deriva de él son toda la
-     identidad. Se asume a sabiendas que cualquiera puede escribir el nombre de otro;
-     es un launcher entre amigos y esa cuenta se paga si algún día hace falta. */
-  var nick       = document.getElementById("sp-nick");
-  var nickEstado = document.getElementById("sp-nick-estado");
-  var nickBtn    = document.getElementById("sp-nick-crear");
+     identidad. Se asume a sabiendas que cualquiera puede escribir el nombre de otro; es
+     un launcher entre amigos. */
+  var nick       = $("sp-nick");
+  var nickEstado = $("sp-nick-estado");
+  var nickBtn    = $("sp-nick-crear");
   var nickTimer  = null;
   var NICK_AYUDA = "de 3 a 16 caracteres: letras, números y guion bajo";
 
-  document.getElementById("sp-offline").addEventListener("click", function(){
+  $("sp-offline").addEventListener("click", function(){
     spIr("2-offline", 2);
     nick.value = "";
     nickBtn.disabled = true;
@@ -2988,15 +3083,14 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     setTimeout(function(){ nick.focus(); }, 50);
   });
 
-  /* La validación vive en Rust y se consulta según se escribe: así la regla existe
-     en un solo sitio y nadie llega a pulsar Crear con un nombre que el servidor
-     rechazaría después. */
+  /* La validación vive en Rust y se consulta según se escribe: así la regla existe en
+     un solo sitio y nadie llega a pulsar Crear con un nombre que se rechazaría después. */
   nick.addEventListener("input", function(){
     clearTimeout(nickTimer);
     nickTimer = setTimeout(function(){
       var valor = nick.value;
       if (!valor.trim()) { nickBtn.disabled = true; nickEstado.textContent = NICK_AYUDA; return; }
-      call("offline_check", { name: valor }).then(function(motivo){
+      call("account_offline_check", { name: valor }).then(function(motivo){
         nickBtn.disabled = !!motivo;
         nickEstado.textContent = motivo || "se ve bien";
       }).catch(function(){});
@@ -3009,21 +3103,21 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   nickBtn.addEventListener("click", function(){
     nickBtn.disabled = true;
     nickEstado.textContent = "creando la cuenta…";
-    call("offline_create", { name: nick.value }).then(function(){
-      spListo(false);
+    call("account_offline_create", { name: nick.value }).then(function(){
+      spListo();
     }).catch(function(e){
-      nickEstado.textContent = String(e);
+      nickEstado.textContent = mensajeError(e);
       nickBtn.disabled = false;
     });
   });
 
-  document.getElementById("sp-cerrar").addEventListener("click", spCerrar);
+  $("sp-cerrar").addEventListener("click", spCerrar);
   spAtras.addEventListener("click", function(){ spParar(); spIr("1", 1); });
 
-  var spAyuda = document.getElementById("sp-ayuda");
+  var spAyuda = $("sp-ayuda");
   if (spAyuda) {
     spAyuda.addEventListener("click", function(){
-      var t = document.getElementById("sp-ayuda-txt");
+      var t = $("sp-ayuda-txt");
       t.hidden = !t.hidden;
       spAyuda.textContent = t.hidden ? "¿Cuál me toca?" : "Entendido";
     });
@@ -3031,7 +3125,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
   /* Volver al setup desde la cuenta del rail: para cambiarla, o para releer qué es cada
      una. Con una partida abierta no, que acabaría cambiando la cuenta por debajo. */
-  var accountBtn = document.getElementById("accountBtn");
+  var accountBtn = $("accountBtn");
   if (accountBtn) {
     var abrirCuentas = function(){
       if (estadoPrevio === "jugando") return;
@@ -3043,36 +3137,26 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     });
   }
 
-  /* Cortar la espera del login: se deja de sondear, se cierra el motor y se vuelve a
-     elegir. Sin esto la única salida era cerrar a mano la ventana del motor, que es
-     justo lo que el setup existe para ahorrarle a nadie. */
-  document.getElementById("sp-msa-cancelar").addEventListener("click", function(){
-    spParar();
-    call("close_engine").catch(function(){});
-    spIr("1", 1);
-  });
+  /* Cancelar la espera del login: deja de esperar y vuelve a elegir. En 2.0 la interfaz
+     ya no cierra el motor por su cuenta; si sigue abierto, se cierra a mano. */
+  $("sp-msa-cancelar").addEventListener("click", function(){ spParar(); spIr("1", 1); });
   spJugar.addEventListener("click", function(){ spCerrar(); runPlay().catch(function(){}); });
   document.addEventListener("keydown", function(e){
     if (e.key === "Escape" && !setup.hidden) spCerrar();
   });
 
-  /* Primera vez: si no hay cuenta, el setup sale solo. Es justo el momento en que
-     antes te aparecía el launcher del motor sin que lo hubieras pedido. */
-  /* Salvo que se haya abierto con una invitación: entonces manda ella, y la cuenta se
-     pide al darle a Jugar, que es cuando hace falta. Si no, un amigo recién instalado
-     que abre el link se encontraría el setup tapando la invitación. */
-  call("invitacion_pendiente").then(function(codigo){
-    if (codigo) {
-      dlog("invitación al arrancar: " + codigo);
-      abrirInvitacion(codigo);
-      return;
-    }
-    return call("active_account").then(function(a){
-      var hay = !!(a && a.name);
-      dlog("setup: cuenta=" + (hay ? a.name : "ninguna"));
-      if (!hay) { spAbrir(); dlog("setup: visible=" + (!setup.hidden)); }
+  /* Primera vez: si no hay cuenta, el setup sale solo. Salvo que se haya abierto con una
+     invitación: entonces manda ella, y la cuenta se pide al darle a Jugar, que es cuando
+     hace falta. Si no, un amigo recién instalado que abre el link se encontraría el
+     setup tapando la invitación. */
+  call("invite_pending").then(function(codigo){
+    if (codigo) { dlog("invitación al arrancar: " + codigo); abrirInvitacion(codigo); return; }
+    return call("accounts_list").then(function(accs){
+      var hay = (accs || []).some(function(a){ return a.active; });
+      dlog("setup: cuenta " + (hay ? "activa" : "ninguna"));
+      if (!hay) spAbrir();
     });
-  }).catch(function(e){ dlog("setup: fallo al consultar cuenta: " + String(e)); });
+  }).catch(function(e){ dlog("setup: fallo al consultar la cuenta: " + detalleDe(e)); });
 
   /* ================= publicar modpacks (solo admin) =================
      La pestaña está escondida tras una clave (ver más abajo). Publicar se apoya además
@@ -3192,7 +3276,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       pubEstado("ficha");
     }).catch(function(e){
       $("pubDropHint").textContent = "solo archivos .mrpack";
-      $("pubError").textContent = String(e);
+      $("pubError").textContent = detalleDe(e) || mensajeError(e);
       pubEstado("error");
     });
   }
@@ -3258,7 +3342,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
         $("pubDoneLink").textContent = INVITE_URL + p.code;
         pubEstado("hecho");
       }).catch(function(e){
-        $("pubError").textContent = String(e);
+        $("pubError").textContent = detalleDe(e) || mensajeError(e);
         pubEstado("error");
       });
     });
@@ -3333,13 +3417,15 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   var libEmpty = $("libEmpty");
   var libAdd   = $("libAdd");
 
-  function tarjetaPack(p, elegido){
+  function tarjetaPack(p){
+    var elegido = !!p.selected;
+    var inst = instalado(p);
     var t = document.createElement("div");
     t.className = "packtile";
     t.dataset.id = p.id;
     /* Un solo estado visual. «Elegido» manda; «solo descargada» avisa de que está en
        la lista pero no en el disco, que es lo que explica la espera al darle a jugar. */
-    t.dataset.state = elegido ? "selected" : (p.installed ? "installed" : "downloaded");
+    t.dataset.state = elegido ? "selected" : (inst ? "installed" : "downloaded");
 
     var main = document.createElement("button");
     main.type = "button";
@@ -3370,14 +3456,16 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
        sería dejar que el catálogo inyecte marcado. */
     nom.textContent = p.name;
     var meta = document.createElement("div"); meta.className = "tile-meta";
-    meta.textContent = [p.code, p.version ? "v" + p.version : null]
+    var codigo = (p.source && p.source.kind === "catalog") ? p.source.code : null;
+    meta.textContent = [codigo, p.pack_version ? "v" + p.pack_version : null]
       .filter(Boolean).join(" · ");
     ident.appendChild(nom); ident.appendChild(meta);
     head.appendChild(ico); head.appendChild(ident);
 
     var foot  = document.createElement("div"); foot.className = "tile-foot";
     var chapa = document.createElement("span"); chapa.className = "tile-badge";
-    chapa.textContent = !p.installed ? "sin instalar" : (elegido ? "elegido" : "instalado");
+    chapa.textContent = !inst ? "sin instalar"
+                      : (p.action.kind === "update" ? "actualizar" : (elegido ? "elegido" : "instalado"));
     var vivo = document.createElement("span"); vivo.className = "tile-live";
     vivo.innerHTML = '<span class="dot-live"></span><span>jugando</span>';
     foot.appendChild(chapa); foot.appendChild(vivo);
@@ -3393,19 +3481,11 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   }
 
   function renderBiblioteca(){
-    if (!libGrid) return Promise.resolve();
-    return call("list_packs").then(function(r){
-      var packs = (r && r.packs) || [];
-      libGrid.querySelectorAll(".packtile").forEach(function(n){ n.remove(); });
-      packs.forEach(function(p){
-        libGrid.insertBefore(tarjetaPack(p, p.id === r.selected), libAdd);
-      });
-      libEmpty.hidden = packs.length > 0;
-      marcarSesionEnBiblioteca(estadoPrevio === "jugando");
-      /* Al log, como el resto del arranque: la app no se abre desde una terminal, así
-         que sin esto una biblioteca vacía y una que falló al leerse se ven igual. */
-      dlog("biblioteca: " + packs.length + " packs, elegido=" + (r.selected || "ninguno"));
-    }).catch(function(e){ dlog("biblioteca: no pude leerla: " + e); });
+    if (!libGrid) return;
+    libGrid.querySelectorAll(".packtile").forEach(function(n){ n.remove(); });
+    LIB.forEach(function(p){ libGrid.insertBefore(tarjetaPack(p), libAdd); });
+    libEmpty.hidden = LIB.length > 0;
+    marcarSesionEnBiblioteca(estadoPrevio === "jugando");
   }
 
   /* Con una partida abierta, el resto de tarjetas dejan de responder: solo hay una
@@ -3415,7 +3495,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     if (!libGrid) return;
     if (jugando) libGrid.dataset.session = ""; else delete libGrid.dataset.session;
     libGrid.querySelectorAll(".packtile").forEach(function(t){
-      if (jugando && PACK && t.dataset.id === PACK.id) t.dataset.playing = "";
+      if (jugando && t.dataset.id === JUGANDO_ID) t.dataset.playing = "";
       else delete t.dataset.playing;
     });
   }
@@ -3423,7 +3503,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   function elegirPack(id){
     /* Pulsar el que ya está elegido no es un cambio: es «quiero jugar a este». */
     if (PACK && PACK.id === id) { document.querySelector('[data-go="jugar"]').click(); return; }
-    call("select_pack", { id: id }).then(refreshAll).then(function(){
+    call("library_select", { id: id }).then(refreshAll).then(function(){
       document.querySelector('[data-go="jugar"]').click();
     }).catch(function(e){
       showError("No pude cambiar de modpack.", e);
@@ -3432,7 +3512,12 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
   /* ---- quitar un pack ----
      Dos botones, no una casilla y un aceptar: quitar de la lista se deshace y borrar
-     los archivos no. El de borrar se arma antes, como el de detener la partida. */
+     los archivos no. El de borrar se arma antes, como el de detener la partida.
+
+     Y solo se ofrece borrar si la instancia está instalada. No es por comodidad: una
+     actualización que falló a medias deja la instancia como «sin instalar» pero con su
+     carpeta —y sus mundos— intactos en el disco. Ofrecer el borrado ahí sería borrar
+     mundos sin poder decir cuántos. */
   var removeOverlay = $("removeOverlay");
   var quitando = null;
   var borrarTimer = null;
@@ -3450,12 +3535,15 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     $("removeDetail").hidden = true;
     $("removeDetail").textContent = "";
     desarmarBorrado();
+    var opcionBorrar = $("removeDelete").closest(".remove-choice");
+    if (opcionBorrar) opcionBorrar.hidden = !instalado(p);
     removeOverlay.hidden = false;
+    if (!instalado(p)) return;
     /* Qué se va exactamente, con números: «tus mundos» en abstracto no frena a nadie. */
-    call("instance_info", { id: p.id }).then(function(i){
-      if (!i || !i.installed) return;
-      $("removeDetail").textContent = humanBytes(i.bytes) + " en disco · " +
-        i.worlds + (i.worlds === 1 ? " mundo" : " mundos");
+    call("instance_details", { id: p.id }).then(function(d){
+      if (quitando !== p) return;
+      $("removeDetail").textContent = humanBytes(d.disk_bytes) + " en disco · " +
+        d.worlds + (d.worlds === 1 ? " mundo" : " mundos");
       $("removeDetail").hidden = false;
     }).catch(function(){});
   }
@@ -3471,7 +3559,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     if (!quitando) return;
     var id = quitando.id, nombre = quitando.name;
     cerrarQuitar();
-    call("remove_pack", { id: id, deleteFiles: borrar })
+    call("library_remove", { id: id, delete_files: borrar })
       .then(refreshAll)
       .catch(function(e){
         showError("No pude quitar " + nombre + ".", e);
@@ -3527,6 +3615,9 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     joinEstado("buscando");
 
     call("catalog_lookup", { code: texto }).then(function(p){
+      /* Lo que devuelve es el código ya normalizado: es el que se manda a añadir,
+         aunque se haya buscado pegando el link entero. */
+      if (p.code) ultimoCodigo = p.code;
       $("joinName").textContent = p.name;
       /* Sin icono publicado vuelve el dino: `setIcon` repone el canvas si la búsqueda
          anterior había dejado una imagen. */
@@ -3535,19 +3626,20 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
          prometer algo que luego no se cumple. */
       var partes = [];
       if (p.minecraft) partes.push("Minecraft " + p.minecraft);
-      if (p.loader)    partes.push(p.loader);
-      if (p.mods)      partes.push(p.mods + " mods");
+      if (p.loader && p.loader.kind !== "vanilla") partes.push(loaderNombre(p.loader));
+      if (p.mods) partes.push(p.mods + " mods");
       $("joinMeta").textContent = partes.join(" · ");
 
       var srv = $("joinServer");
       if (p.server) { $("joinServerName").textContent = p.server; srv.hidden = false; }
       else srv.hidden = true;
 
+      $("joinInstall").disabled = !p.supported;
       joinEstado("encontrado");
     }).catch(function(e){
       /* «No existe» y «no hay internet» piden cosas distintas de quien lee: uno
          revisa el código, el otro revisa su wifi. Por eso son dos avisos. */
-      var noExiste = /no encontr/i.test(String(e));
+      var noExiste = codigoDe(e) === "pack_not_found";
       joinMsg.setAttribute("data-kind", noExiste ? "notfound" : "offline");
       $("joinMsgTitle").textContent = noExiste ? "Ese código no existe" : "No pude conectar";
       $("joinMsgSub").textContent = noExiste
@@ -3557,8 +3649,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     });
   }
 
-  /* El `+` está siempre disponible, y es además la única forma de cambiar de modpack
-     teniendo uno puesto: antes el panel se escondía en cuanto había algo instalado. */
+  /* El `+` está siempre disponible, y es la forma de añadir un modpack a la biblioteca. */
   function abrirJoin(){
     if (!joinOverlay) return;
     joinCode.value = "";
@@ -3587,25 +3678,23 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     });
 
     $("joinInstall").addEventListener("click", function(){
+      if (estadoPrevio) return;
       var btn = $("joinInstall");
       btn.disabled = true;
-      /* La descarga del `.mrpack` emite eventos `install`, así que el panel de
-         lanzamiento ya la enseña; este pasa a un segundo plano. */
-      estadoPrevio = null;
-      setProgress("Descargando el modpack", -1);
-      mostrarEstado("preparando");
-
-      call("catalog_install", { code: ultimoCodigo }).then(function(){
-        cerrarJoin();
+      /* Se cierra ya y se va a Jugar: el progreso se ve en el panel de lanzamiento, que
+         el cuadro del código taparía. `catalog_add` baja el pack y lo deja elegido;
+         después `play` lo instala y abre el juego. */
+      cerrarJoin();
+      document.querySelector('[data-go="jugar"]').click();
+      tareaSinSesion("Descargando el modpack");
+      call("catalog_add", { code: ultimoCodigo }).then(function(){
         joinEstado("pedir");
-        /* `refreshAll` relee pack.json, que `catalog_install` acaba de escribir
-           apuntando a nuestra carpeta y no al disco de quien lo publicó. */
+        finTareaSinSesion();
         return refreshAll().then(function(){ return runPlay(); });
       }).catch(function(e){
-        showError("No se pudo instalar.", e);
-        estadoPrevio = null; mostrarEstado("reposo");
-        joinEstado("encontrado");
-      }).finally(function(){ btn.disabled = false; });
+        finTareaSinSesion();
+        showError("No se pudo añadir el modpack.", e);
+      }).then(function(){ btn.disabled = false; });
     });
 
     joinEstado("pedir");
@@ -3614,12 +3703,18 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   /* ================= actualizaciones del launcher =================
      Se comprueba al abrir y se ofrece con un botón, no se instala sola: reemplazar el
      ejecutable cierra la app, y hacer eso sin avisar en mitad de algo sería peor que
-     la molestia que esto evita.
-
-     Si el updater no está configurado —falta `pubkey` o `endpoints`— `update_check`
+     la molestia que esto evita. Si el updater no está configurado, `update_check`
      devuelve null igual que si no hubiera nada nuevo, y aquí no aparece nada. */
   var upbar = $("upbar"), upTxt = $("upbar-txt"), upBtn = $("upbar-btn");
 
+  function mostrarUpdate(u){
+    if (!u || !u.version) return;
+    upTxt.innerHTML = "Hay una versión nueva: <b>" + escapar(u.version) + "</b>" +
+                      (u.actual ? " — tienes la " + escapar(u.actual) + "." : ".");
+    upbar.hidden = false;
+  }
+
+  /* La descarga de la actualización sigue en su canal de 1.x, `update`, con `{paso, frac}`. */
   if (tauri && tauri.event && tauri.event.listen) {
     tauri.event.listen("update", function(e){
       var p = (e && e.payload) || {};
@@ -3631,12 +3726,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     });
   }
 
-  call("update_check").then(function(u){
-    if (!u || !u.version) return;
-    upTxt.innerHTML = "Hay una versión nueva: <b>" + u.version +
-                      "</b> — tienes la " + (u.actual || "actual") + ".";
-    upbar.hidden = false;
-  }).catch(function(){});
+  call("update_check").then(mostrarUpdate).catch(function(){});
 
   upBtn.addEventListener("click", function(){
     upBtn.disabled = true;
@@ -3644,22 +3734,36 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     /* En Windows el instalador cierra la app, así que esta promesa normalmente
        no se resuelve nunca: lo último que se ve es el progreso. */
     call("update_install").catch(function(e){
-      upTxt.textContent = "No se pudo actualizar: " + String(e);
+      upTxt.textContent = "No se pudo actualizar: " + mensajeError(e);
       upBtn.disabled = false;
     });
   });
 
-  refreshAll();
+  /* ================= eventos del núcleo =================
+     Un solo canal, `dino://event`, con `type` como etiqueta. Sustituye al sondeo de
+     1.x (`session_state` cada segundo) y a los avisos sueltos (`install`, `invitacion`). */
+  if (tauri && tauri.event && tauri.event.listen) {
+    tauri.event.listen("dino://event", function(e){
+      var ev = (e && e.payload) || {};
+      switch (ev.type) {
+        case "progress":         onProgress(ev); break;
+        case "session":          onSession(ev); break;
+        case "library_changed":  refreshAll(); break;
+        case "accounts_changed": onAccountsChanged(); break;
+        case "invite":           recogerInvitacion(); break;
+        case "update_available": mostrarUpdate({ version: ev.version }); break;
+      }
+    });
+  }
 
-  /* diagnóstico de cableado: dice exactamente qué pieza falta si algo no responde */
-  try {
-    window.__TAURI__ && window.__TAURI__.core.invoke("boot_ping", { msg:
-      "cableado: play=" + !!playBtn +
-      " tauri=" + !!tauri +
-      " invoke=" + !!(tauri && tauri.core && tauri.core.invoke) +
-      " event=" + !!(tauri && tauri.event && tauri.event.listen) +
-      " overlay=" + !!ob });
-  } catch (e) {}
+  call("app_info").then(function(a){
+    APP = a;
+    $("kvEngine").textContent = "Dino " + a.version + " · núcleo propio";
+  }).catch(function(){});
+
+  refreshAll();
+  dlog("cableado: play=" + !!playBtn + " tauri=" + !!tauri +
+       " event=" + !!(tauri && tauri.event && tauri.event.listen) + " overlay=" + !!ob);
 
   /* ================= specular highlight follows the cursor ================= */
   if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches){
