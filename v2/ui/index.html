@@ -1867,8 +1867,8 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
         <h2 class="ob-title">Inicia sesión con Microsoft</h2>
         <p class="ob-body" id="sp-msa-texto">Abriendo…</p>
         <div class="note">
-          <b>Cuando termines, cierra la ventana del motor.</b> En cuanto la cierres
-          detecto tu cuenta y sigo yo solo.
+          <b>No cierres esta ventana.</b> En cuanto detecte tu cuenta cierro el motor
+          y sigo yo solo.
         </div>
         <div class="hint" id="sp-msa-estado">esperando…</div>
         <button type="button" class="link-min" id="sp-msa-cancelar">Cancelar y volver</button>
@@ -2122,6 +2122,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     microsoft_rejected: "Microsoft rechazó la cuenta. ¿Tiene Minecraft comprado?",
     game_crashed: "Minecraft se cerró antes de llegar al menú.",
     busy: "Ya hay algo en marcha. Espera a que termine.",
+    cancelled: "Cancelado.",
     not_installed: "Ese modpack no está instalado.",
     update_failed: "No se pudo instalar la actualización del launcher.",
     internal: "Algo salió mal."
@@ -2131,6 +2132,8 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   var ACCIONES = { sign_in: "Iniciar sesión", renew_session: "Iniciar sesión", open_logs: "Abrir registros" };
 
   function codigoDe(e){ return (e && typeof e === "object" && e.code) ? e.code : null; }
+  /* Cancelar a propósito vuelve como error `cancelled`; no es un fallo que contar. */
+  function esCancelado(e){ return codigoDe(e) === "cancelled"; }
   function detalleDe(e){ return (e && typeof e === "object") ? (e.detail || "") : String(e || ""); }
   function mensajeError(e){
     var c = codigoDe(e);
@@ -2411,8 +2414,11 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
         meta.push(humanBytes(PACK.disk_bytes));
       } else if (PACK.action && PACK.action.bytes) {
         meta.push(humanBytes(PACK.action.bytes) + " por descargar");
+      } else {
+        /* Lo que se baja de verdad —mods, Minecraft, recursos— no se sabe hasta leer el
+           pack, y el núcleo no inventa una cifra. El último hueco dice el estado. */
+        meta.push("sin instalar");
       }
-      if (!meta.length) meta.push("no instalado todavía");
     } else {
       meta.push("añade uno con el +");
     }
@@ -2701,21 +2707,25 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   }
 
   /* Tareas que no pasan por `play` —importar, verificar, añadir del catálogo— no emiten
-     eventos de sesión, así que el panel de progreso se enseña a mano. Tampoco miran la
-     cancelación, y por eso esconden el botón: uno que no hace nada es peor que ninguno. */
+     eventos de sesión, así que el panel de progreso se enseña y se quita a mano. Se
+     cancelan igual que jugar: el descargador mira la misma señal. */
   function tareaSinSesion(texto){
     /* Un aviso de un intento anterior no puede quedarse encima de uno nuevo. */
     showAlert(null);
+    cancelando = false;
     estadoPrevio = "preparando";
     faseVista = null;
     setProgress(texto, -1);
-    if (launchCancel) launchCancel.hidden = true;
     mostrarEstado("preparando");
   }
   function finTareaSinSesion(){
     estadoPrevio = null;
-    if (launchCancel) launchCancel.hidden = false;
+    cancelando = false;
     mostrarEstado("reposo");
+    /* Se relee salga como salga: el núcleo avisa con `library_changed` solo cuando una
+       instalación termina bien, y una cancelada o fallida deja la instancia a medias.
+       Sin esto la ficha seguiría diciendo «Jugar» con la instancia ya sin instalar. */
+    refreshAll();
   }
 
   var btnInstall = $("btnInstall");
@@ -2741,7 +2751,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
           $("dropHint").textContent = "solo archivos .mrpack";
           return refreshAll();
         })
-        .catch(function(e){ showError("No se pudo importar.", e); })
+        .catch(function(e){ if (!esCancelado(e)) showError("No se pudo importar.", e); })
         .then(function(){
           finTareaSinSesion();
           btnInstall.disabled = false;
@@ -2818,8 +2828,10 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     done: "Listo"
   };
   /* Cuenta de archivos solo donde dice algo: «3 de 120 mods» orienta; «1532 de 3400
-     recursos» solo es ruido. */
-  var CON_CUENTA = { downloading_mods: 1, verifying_files: 1 };
+     recursos» solo es ruido. Al verificar tampoco: esa fase la emiten a la vez los mods y
+     los recursos, cada uno con su total, y la cuenta saltaba entre «111 de 402» y «3674
+     de 3890». Ahí el progreso lo dicen los megas, que son de la tarea entera. */
+  var CON_CUENTA = { downloading_mods: 1 };
   var faseVista = null, faseDesde = 0, tareaVista = null, cuentas = {};
 
   function onProgress(p){
@@ -2842,9 +2854,40 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     progresoInvitacion(texto, frac);
   }
 
+  /* ---- la sesión al cargar ----
+     Sin sondeo, la página se entera de una tarea por sus eventos. Pero si se recarga a
+     mitad —o el núcleo recrea la ventana— la tarea ya había empezado, y `app_info.session`
+     lo dice una vez al cargar. Las tareas que no pasan por `play` no avisan al terminar,
+     y si fallan nadie se entera; por eso, solo en ese caso, se vuelve a preguntar cada
+     3 s hasta que acabe. Es el único sondeo de la página, y solo existe mientras dura
+     esa tarea huérfana. */
+  var huerfana = null;
+  function sesionAlCargar(s){
+    if (!s || s.state === "idle") return;
+    if (s.state === "playing") { onSession(s); return; }
+    if (estadoPrevio) return;   /* ya hay una tarea conocida en marcha */
+    onSession(s);
+    setProgress("Preparando", -1);
+    vigilarHuerfana();
+  }
+  function vigilarHuerfana(){
+    clearTimeout(huerfana);
+    huerfana = setTimeout(function(){
+      call("app_info").then(function(a){
+        var ses = a && a.session;
+        if (ses && ses.state === "preparing" && estadoPrevio === "preparando") return vigilarHuerfana();
+        huerfana = null;
+        if (ses && ses.state === "playing") onSession(ses);
+        else if (estadoPrevio === "preparando") onSession({ state: "idle" });
+      }).catch(vigilarHuerfana);
+    }, 3000);
+  }
+
   /* ---- sesión ---- */
   function onSession(s){
     var st = s.state;
+    /* Un evento de verdad manda sobre la vigilancia de una tarea huérfana. */
+    if (st !== "preparing") { clearTimeout(huerfana); huerfana = null; }
     if (st === "preparing") {
       estadoPrevio = "preparando";
       mostrarEstado("preparando");
@@ -2866,14 +2909,13 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   }
 
   /* ---- cancelar la preparación ----
-     El núcleo comprueba la cancelación entre pasos, no a mitad de una descarga: la que
-     ya empezó termina antes de parar. Se dice en el rótulo, para que el botón no parezca
-     que no responde mientras tanto. */
+     Sustituye al Abort del motor de 1.x. El descargador mira la señal entre archivos y en
+     cada trozo, así que corta en seco, y lo ya bajado se reanuda la próxima vez. */
   if (launchCancel) {
     launchCancel.addEventListener("click", function(){
       cancelando = true;
       launchCancel.disabled = true;
-      launchPhase.textContent = "Cancelando: termina el paso en curso…";
+      launchPhase.textContent = "Cancelando…";
       call("play_cancel").catch(function(){});
     });
   }
@@ -2948,8 +2990,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       return r;
     }).catch(function(err){
       estadoPrevio = null; mostrarEstado("reposo");
-      /* Cancelar a propósito vuelve como `busy`; eso no es un error que contar. */
-      if (!(cancelando && codigoDe(err) === "busy")) {
+      if (!esCancelado(err)) {
         showError(opts.installOnly ? "No se pudo instalar." : "No se pudo.", err);
       }
       throw err;
@@ -2983,7 +3024,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       tareaSinSesion("Verificando archivos");
       call("instance_verify", { id: PACK.id })
         .then(refreshAll)
-        .catch(function(e){ showError("No se pudo verificar.", e); })
+        .catch(function(e){ if (!esCancelado(e)) showError("No se pudo verificar.", e); })
         .then(function(){
           finTareaSinSesion();
           btnVerify.disabled = false; btnVerify.textContent = antes;
@@ -2993,9 +3034,10 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
   /* ================= setup de cuenta =================
      Sin conexión: la cuenta se crea aquí y el motor ni se abre.
-     Microsoft: el login va por el motor, que hace de puente con su `client_id`. En 2.0
-     el núcleo abre el motor y sincroniza las cuentas cuando se cierra; ese momento llega
-     como `accounts_changed`. Por eso aquí se pide cerrarlo al terminar: es la señal. */
+     Microsoft: el login va por el motor, que hace de puente con su `client_id`. El núcleo
+     vigila las cuentas mientras está abierto: en cuanto aparece la nueva avisa con
+     `accounts_changed` y cierra el motor él solo. Si alguien lo cierra sin iniciar
+     sesión, el aviso llega igual y aquí se dice que no entró ninguna cuenta. */
   var setup   = document.getElementById("setup");
   var spPasos = Array.prototype.slice.call(setup.querySelectorAll("[data-sp]"));
   var spDots  = Array.prototype.slice.call(setup.querySelectorAll(".ob-dots i"));
@@ -3036,9 +3078,9 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     esperandoMSA = true;
     call("account_microsoft_add").then(function(){
       if (!esperandoMSA) return;
-      msaTexto.innerHTML = 'Se abrió la ventana del motor. Ve a <span class="mono-i">Cuentas</span>, ' +
-                           'añade tu cuenta de Microsoft y, cuando termine, <b>cierra esa ventana</b>.';
-      msaEstado.textContent = "esperando a que cierres el motor…";
+      msaTexto.innerHTML = 'Se abrió la ventana del motor. Ve a <span class="mono-i">Cuentas</span> ' +
+                           'y añade tu cuenta de Microsoft: en cuanto la detecte, la cierro yo.';
+      msaEstado.textContent = "esperando a que inicies sesión…";
     }).catch(function(e){
       esperandoMSA = false;
       msaEstado.textContent = "no se pudo abrir el motor: " + mensajeError(e);
@@ -3046,8 +3088,9 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     });
   });
 
-  /* Llega cuando cambian las cuentas: al crear una sin conexión, al cerrar el motor tras
-     el login de Microsoft, o al elegir otra. Solo en el segundo caso hay setup esperando. */
+  /* Llega cuando cambian las cuentas: al crear una sin conexión, cuando el motor ve la
+     cuenta de Microsoft (o se cierra sin ella), o al elegir otra. Solo en el segundo caso
+     hay setup esperando. */
   function onAccountsChanged(){
     return call("accounts_list").then(function(accs){
       CUENTAS = accs || [];
@@ -3514,10 +3557,10 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
      Dos botones, no una casilla y un aceptar: quitar de la lista se deshace y borrar
      los archivos no. El de borrar se arma antes, como el de detener la partida.
 
-     Y solo se ofrece borrar si la instancia está instalada. No es por comodidad: una
-     actualización que falló a medias deja la instancia como «sin instalar» pero con su
-     carpeta —y sus mundos— intactos en el disco. Ofrecer el borrado ahí sería borrar
-     mundos sin poder decir cuántos. */
+     Y borrar solo se ofrece cuando se puede decir qué se pierde. Una instancia a
+     medias —una actualización que falló— figura como «sin instalar» pero conserva sus
+     mundos, e `instance_details` los cuenta igual; una que nunca se instaló no tiene
+     carpeta que borrar y da error, así que ahí la opción ni aparece. */
   var removeOverlay = $("removeOverlay");
   var quitando = null;
   var borrarTimer = null;
@@ -3536,15 +3579,15 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     $("removeDetail").textContent = "";
     desarmarBorrado();
     var opcionBorrar = $("removeDelete").closest(".remove-choice");
-    if (opcionBorrar) opcionBorrar.hidden = !instalado(p);
+    if (opcionBorrar) opcionBorrar.hidden = true;
     removeOverlay.hidden = false;
-    if (!instalado(p)) return;
     /* Qué se va exactamente, con números: «tus mundos» en abstracto no frena a nadie. */
     call("instance_details", { id: p.id }).then(function(d){
       if (quitando !== p) return;
       $("removeDetail").textContent = humanBytes(d.disk_bytes) + " en disco · " +
         d.worlds + (d.worlds === 1 ? " mundo" : " mundos");
       $("removeDetail").hidden = false;
+      if (opcionBorrar) opcionBorrar.hidden = false;
     }).catch(function(){});
   }
 
@@ -3693,7 +3736,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
         return refreshAll().then(function(){ return runPlay(); });
       }).catch(function(e){
         finTareaSinSesion();
-        showError("No se pudo añadir el modpack.", e);
+        if (!esCancelado(e)) showError("No se pudo añadir el modpack.", e);
       }).then(function(){ btn.disabled = false; });
     });
 
@@ -3759,6 +3802,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   call("app_info").then(function(a){
     APP = a;
     $("kvEngine").textContent = "Dino " + a.version + " · núcleo propio";
+    sesionAlCargar(a.session);
   }).catch(function(){});
 
   refreshAll();
