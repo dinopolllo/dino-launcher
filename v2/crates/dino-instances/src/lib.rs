@@ -615,6 +615,9 @@ impl Core {
 
 // ------------------------------------------------------------ progreso de una tarea
 
+/// Por fase: (bytes hechos, bytes totales); cuándo se emitió el último evento; de qué fase.
+type TrackerState = (HashMap<Phase, (u64, u64)>, Instant, Option<Phase>);
+
 /// Junta el avance de las fases que corren a la vez en una sola barra que no retrocede:
 /// mientras alguna fase no ha dicho su total, el total de la tarea es 0 («no se sabe»).
 struct Tracker {
@@ -622,7 +625,7 @@ struct Tracker {
     instance: Option<String>,
     emit: Emit,
     expected: Vec<Phase>,
-    state: Mutex<(HashMap<Phase, (u64, u64)>, Instant, Option<Phase>)>,
+    state: Mutex<TrackerState>,
 }
 
 impl Tracker {
