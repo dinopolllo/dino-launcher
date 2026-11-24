@@ -116,6 +116,10 @@ pub async fn install(
         let f = std::fs::File::open(mrpack).map_err(io_err(mrpack))?;
         let mut z = zip::ZipArchive::new(f)?;
         for i in 0..z.len() {
+            // Copiar los overrides de un pack grande lleva segundos: también se corta al cancelar.
+            if dl.cancelled() {
+                return Err(Error::Download(dino_download::DownloadError::Cancelled));
+            }
             let mut e = z.by_index(i)?;
             if e.is_dir() {
                 continue;

@@ -168,7 +168,8 @@ impl Downloader {
         self
     }
 
-    fn cancelled(&self) -> bool {
+    /// ¿Se pidió cancelar? Para quien haga trabajo largo fuera del descargador.
+    pub fn cancelled(&self) -> bool {
         self.cancel.as_ref().is_some_and(|c| c.load(Ordering::SeqCst))
     }
 
