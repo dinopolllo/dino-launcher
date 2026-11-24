@@ -176,6 +176,7 @@ pub fn open(pid: u32, timeout: Duration) -> Result<isize, &'static str> {
         click(settings, x, y);
         if let Some(h) = wait_new(pid, &[main, menu, settings], Instant::now() + Duration::from_millis(250)) {
             if title(h).contains("Microsoft") {
+                dress(h, &[main, menu, settings]);
                 center(h);
                 let _ = unsafe { SetForegroundWindow(hwnd(h)) };
                 return Ok(h);
@@ -187,6 +188,77 @@ pub fn open(pid: u32, timeout: Duration) -> Result<isize, &'static str> {
         y += px(step);
     }
     Err("no apareció la ventana de Microsoft")
+}
+
+/// Que la ventana de Microsoft parezca de Dino por fuera (por dentro la viste el tema
+/// «Dino» del motor): título e icono de Dino, su propio botón en la barra de tareas, la
+/// barra de título oscura, y las ventanas del motor fuera también de la barra de tareas
+/// (llevaban el logo de PineconeMC).
+fn dress(msa: isize, engine: &[isize]) {
+    use windows::core::{HSTRING, PCWSTR};
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE};
+    use windows::Win32::UI::Shell::ExtractIconExW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SendMessageW, SetWindowLongPtrW, SetWindowTextW, ShowWindow, GWL_EXSTYLE, HICON, ICON_BIG,
+        ICON_SMALL, SW_HIDE, SW_SHOWNA, WM_SETICON, WS_EX_APPWINDOW,
+    };
+    unsafe {
+        for &w in engine {
+            let _ = ShowWindow(hwnd(w), SW_HIDE);
+        }
+        let _ = SetWindowTextW(hwnd(msa), &HSTRING::from("Iniciar sesión con Microsoft · Dino Launcher"));
+        if let Ok(exe) = std::env::current_exe() {
+            let path = HSTRING::from(exe.as_os_str());
+            let (mut big, mut small) = (HICON::default(), HICON::default());
+            if ExtractIconExW(PCWSTR(path.as_ptr()), 0, Some(&mut big), Some(&mut small), 1) > 0 {
+                let _ =
+                    SendMessageW(hwnd(msa), WM_SETICON, Some(WPARAM(ICON_BIG as usize)), Some(LPARAM(big.0 as isize)));
+                let _ = SendMessageW(
+                    hwnd(msa),
+                    WM_SETICON,
+                    Some(WPARAM(ICON_SMALL as usize)),
+                    Some(LPARAM(small.0 as isize)),
+                );
+            }
+        }
+        // Con dueño, una ventana no sale en la barra de tareas: WS_EX_APPWINDOW la obliga.
+        // Se aplica al volver a mostrarla.
+        let ex = GetWindowLongPtrW(hwnd(msa), GWL_EXSTYLE);
+        let _ = ShowWindow(hwnd(msa), SW_HIDE);
+        SetWindowLongPtrW(hwnd(msa), GWL_EXSTYLE, ex | WS_EX_APPWINDOW.0 as isize);
+        taskbar_identity(msa);
+        let _ = ShowWindow(hwnd(msa), SW_SHOWNA);
+        // Barra de título oscura y del color del fondo de Dino (#161B18, en COLORREF 0x00BBGGRR).
+        let dark = BOOL(1);
+        let _ = DwmSetWindowAttribute(
+            hwnd(msa),
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &dark as *const BOOL as *const _,
+            std::mem::size_of::<BOOL>() as u32,
+        );
+        let caption: u32 = 0x0018_1B16;
+        let _ = DwmSetWindowAttribute(hwnd(msa), DWMWA_CAPTION_COLOR, &caption as *const u32 as *const _, 4);
+    }
+}
+
+/// La barra de tareas agrupa por programa y pinta el icono del **ejecutable** (el cubo de
+/// PineconeMC), no el de la ventana. Con un AppUserModelID propio la ventana va aparte y
+/// usa el icono y el nombre de Dino.
+fn taskbar_identity(msa: isize) {
+    use windows::Win32::Storage::EnhancedStorage::{
+        PKEY_AppUserModel_ID, PKEY_AppUserModel_RelaunchDisplayNameResource, PKEY_AppUserModel_RelaunchIconResource,
+    };
+    use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+    use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
+    let Ok(exe) = std::env::current_exe() else { return };
+    unsafe {
+        let Ok(store) = SHGetPropertyStoreForWindow::<IPropertyStore>(hwnd(msa)) else { return };
+        let icon = format!("{},0", exe.display());
+        let _ = store.SetValue(&PKEY_AppUserModel_ID, &PROPVARIANT::from("gg.dinolab.launcher.login"));
+        let _ = store.SetValue(&PKEY_AppUserModel_RelaunchIconResource, &PROPVARIANT::from(icon.as_str()));
+        let _ = store.SetValue(&PKEY_AppUserModel_RelaunchDisplayNameResource, &PROPVARIANT::from("Dino Launcher"));
+        let _ = store.Commit();
+    }
 }
 
 fn center(h: isize) {

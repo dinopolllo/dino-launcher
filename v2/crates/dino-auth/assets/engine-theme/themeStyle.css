@@ -1,0 +1,46 @@
+/* Tema «Dino» para el motor. El jugador solo llega a ver su ventana de login de Microsoft:
+   aquí se viste con los colores, radios y tipografía de Dino Launcher. */
+
+QWidget {
+    font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+    font-size: 10pt;
+    color: #E6F1E8;
+}
+QDialog, QMainWindow { background: #161B18; }
+QToolTip { background: #1C221E; color: #E6F1E8; border: 1px solid #2C352F; padding: 4px 8px; }
+
+QPushButton {
+    background: #1F2622;
+    border: 1px solid #2C352F;
+    border-radius: 10px;
+    padding: 7px 16px;
+}
+QPushButton:hover { background: #26302A; border-color: #3A463E; }
+QPushButton:pressed { background: #1A201C; }
+QPushButton:disabled { color: #56685C; }
+
+/* --- la ventana de Microsoft --- */
+QDialog#MSALoginDialog { background: #161B18; }
+QPushButton#loginButton {
+    background: #73BF69;
+    color: #0E1510;
+    border: none;
+    border-radius: 12px;
+    padding: 11px 26px;
+    font-size: 11pt;
+    font-weight: 600;
+}
+QPushButton#loginButton:hover { background: #82CC78; }
+QPushButton#loginButton:pressed { background: #66AD5D; }
+QLabel#orLabel { color: #8B9C90; }
+QLabel#code {
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-size: 20pt;
+    letter-spacing: 3px;
+    color: #E6F1E8;
+}
+QLabel#qrMessage, QLabel#loadingLabel { color: #8B9C90; }
+QLabel#qr { background: #FFFFFF; border-radius: 10px; padding: 8px; }
+QPushButton#copyCode { border-radius: 8px; padding: 4px; }
+QFrame[frameShape="4"] { color: #2C352F; }
+QDialogButtonBox QPushButton { min-width: 84px; }

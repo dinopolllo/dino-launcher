@@ -47,7 +47,10 @@ const ASSETS: [(&str, &str, &str, &str); 5] = [
 ];
 
 /// Ajustes que lo vuelven mudo (ver `engine.rs` de 1.x para el porqué de cada uno).
-const SILENT: [(&str, &str); 7] = [
+const SILENT: [(&str, &str); 8] = [
+    // El tema «Dino» (ver `THEME`): lo único que el jugador ve del motor es su ventana de
+    // login de Microsoft, y así parece parte de Dino.
+    ("ApplicationTheme", "dino"),
     ("ShowConsole", "false"),
     ("ShowConsoleOnError", "false"),
     ("AutoCloseConsole", "true"),
@@ -62,8 +65,12 @@ const SILENT: [(&str, &str); 7] = [
 const UPDATER_FILE: &str = "prismlauncher_update.cfg";
 const UPDATER_OFF: [(&str, &str); 1] = [("auto_check", "false")];
 /// Solo si faltan: sin valor, el motor abre su asistente de primer arranque.
-const DEFAULTS: [(&str, &str); 3] =
-    [("Language", "es_ES"), ("ApplicationTheme", "system"), ("IconTheme", "pe_colored")];
+const DEFAULTS: [(&str, &str); 2] = [("Language", "es_ES"), ("IconTheme", "pe_colored")];
+/// Tema propio para el motor: `themes/dino/` en su carpeta de datos.
+const THEME: [(&str, &str); 2] = [
+    ("theme.json", include_str!("../assets/engine-theme/theme.json")),
+    ("themeStyle.css", include_str!("../assets/engine-theme/themeStyle.css")),
+];
 /// Launchers de los que ofrecería migrar con un diálogo modal: se le dice que no de antemano.
 const NO_MIGRATE: [&str; 3] = ["PolyMC", "MultiMC", "Prism Launcher"];
 
@@ -179,6 +186,14 @@ impl Engine {
         let next = merge_ini(&merge_ini_if_missing(&prev, &DEFAULTS), &SILENT);
         if next != prev {
             dino_core::schema::write_atomic(&cfg, next.as_bytes())?;
+        }
+        let theme = dir.join("themes").join("dino");
+        std::fs::create_dir_all(&theme)?;
+        for (name, body) in THEME {
+            let p = theme.join(name);
+            if std::fs::read_to_string(&p).ok().as_deref() != Some(body) {
+                dino_core::schema::write_atomic(&p, body.as_bytes())?;
+            }
         }
         let upd = dir.join(UPDATER_FILE);
         let prev = std::fs::read_to_string(&upd).unwrap_or_default();

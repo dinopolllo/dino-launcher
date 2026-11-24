@@ -1,0 +1,28 @@
+{
+    "name": "Dino",
+    "widgets": "Fusion",
+    "qssFilePath": "themeStyle.css",
+    "colors": {
+        "Window": "#161B18",
+        "WindowText": "#E6F1E8",
+        "Base": "#111512",
+        "AlternateBase": "#1C221E",
+        "ToolTipBase": "#1C221E",
+        "ToolTipText": "#E6F1E8",
+        "Text": "#E6F1E8",
+        "Button": "#222A25",
+        "ButtonText": "#E6F1E8",
+        "BrightText": "#FFFFFF",
+        "Link": "#73BF69",
+        "Highlight": "#73BF69",
+        "HighlightedText": "#0E1510",
+        "fadeAmount": 0.5,
+        "fadeColor": "#161B18"
+    },
+    "logColors": {
+        "Launcher": "#73BF69",
+        "Error": "#E8887A",
+        "Warning": "#E5C07B",
+        "Debug": "#8B9C90"
+    }
+}
