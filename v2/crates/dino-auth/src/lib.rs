@@ -13,6 +13,8 @@
 
 pub mod accounts;
 pub mod engine;
+#[cfg(windows)]
+mod msa_window;
 
 pub use accounts::{Accounts, AccountsError, LaunchIdentity};
 pub use engine::Engine;

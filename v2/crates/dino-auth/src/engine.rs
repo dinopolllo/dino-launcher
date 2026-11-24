@@ -81,6 +81,7 @@ pub enum EngineError {
     Zip(#[from] zip::result::ZipError),
 }
 
+#[derive(Debug, Clone)]
 pub struct Engine {
     root: PathBuf,
 }
@@ -211,6 +212,26 @@ impl Engine {
     pub fn open_for_login(&self) -> std::io::Result<std::process::Child> {
         self.silence()?;
         self.command().spawn()
+    }
+
+    /// Abre el motor para añadir una cuenta Microsoft enseñando **solo** su ventana «Add
+    /// Microsoft Account» (en Windows; ver `msa_window`). Si no se llega a ella, el motor
+    /// queda a la vista como con [`Engine::open_for_login`] y `fallback` dice por qué.
+    pub fn open_microsoft_login(&self) -> std::io::Result<MicrosoftLogin> {
+        self.silence()?;
+        let child = self.command().spawn()?;
+        #[cfg(windows)]
+        {
+            match crate::msa_window::open(child.id(), Duration::from_secs(20)) {
+                Ok(h) => return Ok(MicrosoftLogin { child, window: Some(h), fallback: None }),
+                Err(why) => {
+                    crate::msa_window::show_all(child.id());
+                    return Ok(MicrosoftLogin { child, window: None, fallback: Some(why) });
+                }
+            }
+        }
+        #[allow(unreachable_code)]
+        Ok(MicrosoftLogin { child, window: None, fallback: Some("solo en Windows") })
     }
 
     /// Arranca el motor con su ventana escondida para que renueve las sesiones de Microsoft.
@@ -361,6 +382,32 @@ fn merge_ini_if_missing(existing: &str, kv: &[(&str, &str)]) -> String {
 }
 
 /// Ventanas de un proceso (ver `dino_core::os`).
+/// El motor abierto para un login de Microsoft.
+pub struct MicrosoftLogin {
+    pub child: std::process::Child,
+    /// La ventana de Microsoft, si se llegó a enseñar solo ella.
+    window: Option<isize>,
+    /// Por qué se enseña el motor entero, si es el caso.
+    pub fallback: Option<&'static str>,
+}
+
+impl MicrosoftLogin {
+    /// Solo se ve la ventana de Microsoft (y no el motor entero).
+    pub fn only_microsoft(&self) -> bool {
+        self.window.is_some()
+    }
+
+    /// `false` cuando el jugador cerró la ventana de Microsoft (o la cerró el motor al
+    /// terminar). Con el motor entero a la vista no se sabe: siempre `true`.
+    pub fn window_open(&self) -> bool {
+        #[cfg(windows)]
+        if let Some(h) = self.window {
+            return crate::msa_window::is_open(h);
+        }
+        true
+    }
+}
+
 mod win {
     pub fn hide_all(pid: u32) -> u32 {
         dino_core::os::hide_windows(pid)

@@ -152,6 +152,14 @@ fn icon_url_for(webview2_style: bool, id: &str) -> String {
     }
 }
 
+/// Respuesta de `account_microsoft_add`: qué se le está enseñando al jugador.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MicrosoftLoginView {
+    /// Solo la ventana «Add Microsoft Account» del motor. `false`: el motor entero (otra
+    /// plataforma, o no se pudo llegar a esa ventana), y el jugador va a Cuentas a mano.
+    pub only_microsoft_window: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AccountView {
     pub kind: crate::schema::AccountKind,

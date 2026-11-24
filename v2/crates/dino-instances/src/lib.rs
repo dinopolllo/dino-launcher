@@ -11,8 +11,8 @@ pub mod status;
 use dino_auth::{Accounts, Engine};
 use dino_config::{LibraryExt, Store};
 use dino_core::api::{
-    icon_url, AccountView, InstanceDetails, InstanceSettings, InstanceView, JavaOption, JavaOrigin, PackPreview,
-    PlayOutcome, PlayRequest, PrimaryAction, ServerStatus,
+    icon_url, AccountView, InstanceDetails, InstanceSettings, InstanceView, JavaOption, JavaOrigin, MicrosoftLoginView,
+    PackPreview, PlayOutcome, PlayRequest, PrimaryAction, ServerStatus,
 };
 use dino_core::events::{Event, Phase, Progress, Session, SessionState};
 use dino_core::schema::{
@@ -697,35 +697,57 @@ impl Core {
     }
 
     /// Abre el motor para iniciar sesión con Microsoft; al cerrarlo se sincronizan las cuentas.
-    pub async fn account_microsoft_add(self: &Arc<Self>) -> R<()> {
+    pub async fn account_microsoft_add(self: &Arc<Self>) -> R<MicrosoftLoginView> {
         self.engine.ensure(&self.downloader()).await.map_err(|x| e(ErrorCode::DownloadFailed, x))?;
-        let mut child = self.engine.open_for_login().map_err(internal)?;
+        let engine = self.engine.clone();
+        let login = tokio::task::spawn_blocking(move || engine.open_microsoft_login())
+            .await
+            .map_err(internal)?
+            .map_err(internal)?;
+        let view = MicrosoftLoginView { only_microsoft_window: login.only_microsoft() };
+        if let Some(why) = login.fallback {
+            tracing::info!(why, "login de Microsoft con el motor entero a la vista");
+        }
         let core = self.clone();
         std::thread::spawn(move || {
             // Se mira `accounts.json` mientras el jugador inicia sesión: en cuanto aparece
             // la cuenta, se avisa y se cierra el motor (como en 1.x), sin pedirle que lo cierre.
-            let pid = child.id();
+            let mut login = login;
+            let pid = login.child.id();
+            let mut closed_at: Option<Instant> = None;
             loop {
-                if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
+                if matches!(login.child.try_wait(), Ok(Some(_)) | Err(_)) {
                     break;
+                }
+                // Cerró la ventana de Microsoft: si en unos segundos no llega la cuenta, es
+                // que canceló, y el motor (que nadie ve) se cierra también.
+                if !login.window_open() {
+                    let t = *closed_at.get_or_insert_with(Instant::now);
+                    if t.elapsed() > Duration::from_secs(5) {
+                        os::close_windows(pid, true);
+                        std::thread::sleep(Duration::from_secs(3));
+                        let _ = login.child.kill();
+                        let _ = login.child.wait();
+                        break;
+                    }
                 }
                 if core.accounts.sync_bridge(&core.engine.accounts()).is_ok_and(|r| !r.added.is_empty()) {
                     (core.emit)(Event::AccountsChanged);
                     os::close_windows(pid, true);
                     let deadline = Instant::now() + Duration::from_secs(10);
-                    while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
+                    while matches!(login.child.try_wait(), Ok(None)) && Instant::now() < deadline {
                         std::thread::sleep(Duration::from_millis(200));
                     }
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    let _ = login.child.kill();
+                    let _ = login.child.wait();
                     return;
                 }
-                std::thread::sleep(Duration::from_secs(1));
+                std::thread::sleep(Duration::from_millis(500));
             }
             let _ = core.accounts.sync_bridge(&core.engine.accounts());
             (core.emit)(Event::AccountsChanged);
         });
-        Ok(())
+        Ok(view)
     }
 
     pub async fn server_status(&self, addr: &str) -> ServerStatus {

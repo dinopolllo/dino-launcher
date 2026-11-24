@@ -204,7 +204,7 @@ fn account_offline_create(core: State<'_, Arc<Core>>, name: String) -> R<Account
 }
 
 #[tauri::command]
-async fn account_microsoft_add(core: State<'_, Arc<Core>>) -> R<()> {
+async fn account_microsoft_add(core: State<'_, Arc<Core>>) -> R<dino_core::api::MicrosoftLoginView> {
     core.inner().account_microsoft_add().await
 }
 
