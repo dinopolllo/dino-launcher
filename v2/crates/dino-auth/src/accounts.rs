@@ -94,6 +94,7 @@ impl Accounts {
                 name: x.name.clone(),
                 uuid: x.uuid.clone(),
                 active: a.active.as_deref() == Some(&x.uuid),
+                skin: dino_core::api::skin_url(&x.name),
                 session_minutes_left: match x.kind {
                     AccountKind::MicrosoftBridge => bridge
                         .iter()

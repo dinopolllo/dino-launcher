@@ -139,6 +139,11 @@ pub fn icon_url(instance_id: &str) -> String {
     icon_url_for(cfg!(any(windows, target_os = "android")), instance_id)
 }
 
+/// URL de la skin de un nombre, servida por el mismo protocolo que los iconos.
+pub fn skin_url(name: &str) -> String {
+    icon_url(&format!("skin/{name}"))
+}
+
 fn icon_url_for(webview2_style: bool, id: &str) -> String {
     if webview2_style {
         format!("http://{ICON_SCHEME}.localhost/{id}")
@@ -155,6 +160,9 @@ pub struct AccountView {
     pub active: bool,
     /// Solo Microsoft: minutos que le quedan a la sesión, si se sabe.
     pub session_minutes_left: Option<u64>,
+    /// URL del PNG de la skin de ese nombre (ver [`skin_url`]). Responde 404 si el nombre
+    /// no tiene skin propia: la interfaz pinta entonces su cabeza genérica.
+    pub skin: String,
 }
 
 /// Lo que se sabe de un pack antes de instalarlo. Lo devuelven `catalog_lookup` (por código

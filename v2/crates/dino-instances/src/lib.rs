@@ -5,6 +5,7 @@
 
 pub mod admin;
 pub mod catalog;
+pub mod skins;
 pub mod status;
 
 use dino_auth::{Accounts, Engine};
@@ -674,7 +675,13 @@ impl Core {
     pub fn account_offline_create(&self, name: &str) -> R<AccountView> {
         let a = self.accounts.add_offline(name).map_err(|x| e(ErrorCode::AccountRequired, x))?;
         (self.emit)(Event::AccountsChanged);
-        Ok(AccountView { kind: a.kind, name: a.name, uuid: a.uuid, active: true, session_minutes_left: None })
+        let skin = dino_core::api::skin_url(&a.name);
+        Ok(AccountView { kind: a.kind, name: a.name, uuid: a.uuid, active: true, session_minutes_left: None, skin })
+    }
+
+    /// El PNG de la skin de un nombre (con caché de un día en `cache/skins`).
+    pub async fn skin(&self, name: &str) -> Option<Vec<u8>> {
+        skins::skin(&self.paths.root.join("cache").join("skins"), name).await
     }
 
     pub fn account_select(&self, uuid: &str) -> R<()> {

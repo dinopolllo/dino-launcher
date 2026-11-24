@@ -112,6 +112,7 @@ a mover, sin avisos.
 | --- | --- | --- |
 | `loader` | texto (`"fabric 0.19.5"`) | objeto `{kind, version}`; el texto lo redacta la interfaz |
 | `icon` | data URL | URL lista para `<img src>` (protocolo propio `dino-icon`): `http://dino-icon.localhost/<id>` en Windows, `dino-icon://localhost/<id>` en macOS y Linux; la construye el núcleo (`icon_url`), sin `convertFileSrc` ni scope |
+| `AccountView.skin` | — | URL del PNG de la skin de ese nombre por el mismo protocolo (`…/skin/<nombre>`); 404 si el nombre no tiene skin propia. El núcleo la busca en Mojang y la guarda un día en `cache/skins/` |
 | Tamaño en la vista previa | `bytes`, ambiguo | `pack_bytes` (el archivo) y `download_bytes` (lo que se baja; `None` = no se sabe) |
 | «No se sabe» | `0` | `None` en todos los datos de comandos (también `PrimaryAction.bytes`); `0` solo en los totales de `progress` |
 | `ServerStatus` | `players`, `max_players` | igual (se mantienen los nombres de 1.x) |

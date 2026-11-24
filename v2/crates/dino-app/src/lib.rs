@@ -429,6 +429,25 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol(dino_core::api::ICON_SCHEME, |ctx, req, responder| {
             // `dino-icon://localhost/<id>` o `http://dino-icon.localhost/<id>`: el id es el último tramo.
             let id = req.uri().path().trim_matches('/').to_string();
+            // `…/skin/<nombre>`: la skin de una cuenta, que puede requerir ir a Mojang.
+            if let Some(name) = id.strip_prefix("skin/").map(str::to_string) {
+                let core = ctx.app_handle().try_state::<Arc<Core>>().map(|c| c.inner().clone());
+                tauri::async_runtime::spawn(async move {
+                    let png = match core {
+                        Some(c) => c.skin(&name).await,
+                        None => None,
+                    };
+                    let resp = match png {
+                        Some(b) => tauri::http::Response::builder()
+                            .header("Content-Type", "image/png")
+                            .header("Cache-Control", "max-age=3600")
+                            .body(b),
+                        None => tauri::http::Response::builder().status(404).body(Vec::new()),
+                    };
+                    responder.respond(resp.expect("respuesta"));
+                });
+                return;
+            }
             let file = ctx.app_handle().try_state::<Arc<Core>>().map(|c| c.paths.pack_icon(&id));
             let body = file.filter(|_| dino_core::schema::valid_id(&id)).and_then(|f| std::fs::read(f).ok());
             let resp = match body {
