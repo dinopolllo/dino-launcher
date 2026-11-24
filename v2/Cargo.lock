@@ -862,7 +862,7 @@ dependencies = [
 
 [[package]]
 name = "dino-app"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "dino-config",
  "dino-core",
@@ -881,7 +881,7 @@ dependencies = [
 
 [[package]]
 name = "dino-auth"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "dino-core",
  "dino-download",
@@ -896,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "dino-cli"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "dino-auth",
  "dino-config",
@@ -914,7 +914,7 @@ dependencies = [
 
 [[package]]
 name = "dino-config"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "dino-core",
  "serde",
@@ -923,7 +923,7 @@ dependencies = [
 
 [[package]]
 name = "dino-core"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "md-5",
  "serde",
@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "dino-download"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "futures-util",
  "reqwest 0.12.28",
@@ -946,7 +946,7 @@ dependencies = [
 
 [[package]]
 name = "dino-instances"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "base64 0.22.1",
  "dino-auth",
@@ -969,7 +969,7 @@ dependencies = [
 
 [[package]]
 name = "dino-log"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "dino-core",
  "tracing",
@@ -980,7 +980,7 @@ dependencies = [
 
 [[package]]
 name = "dino-minecraft"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "dino-core",
  "dino-download",
@@ -994,7 +994,7 @@ dependencies = [
 
 [[package]]
 name = "dino-session"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "dino-auth",
  "dino-core",
