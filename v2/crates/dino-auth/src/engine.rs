@@ -56,6 +56,11 @@ const SILENT: [(&str, &str); 7] = [
     ("AutomaticJavaDownload", "true"),
     ("IgnoreJavaWizard", "true"),
 ];
+/// Su actualizador propio lee otro archivo (`prismlauncher_update.cfg`, sección `General`).
+/// Encendido por defecto: al abrir el motor para el login pregunta si instalar la versión
+/// nueva, y si se acepta deja de ser el 11.1.0 cuyo SHA-256 fija Dino.
+const UPDATER_FILE: &str = "prismlauncher_update.cfg";
+const UPDATER_OFF: [(&str, &str); 1] = [("auto_check", "false")];
 /// Solo si faltan: sin valor, el motor abre su asistente de primer arranque.
 const DEFAULTS: [(&str, &str); 3] =
     [("Language", "es_ES"), ("ApplicationTheme", "system"), ("IconTheme", "pe_colored")];
@@ -173,6 +178,12 @@ impl Engine {
         let next = merge_ini(&merge_ini_if_missing(&prev, &DEFAULTS), &SILENT);
         if next != prev {
             dino_core::schema::write_atomic(&cfg, next.as_bytes())?;
+        }
+        let upd = dir.join(UPDATER_FILE);
+        let prev = std::fs::read_to_string(&upd).unwrap_or_default();
+        let next = updater_off(&prev);
+        if next != prev {
+            dino_core::schema::write_atomic(&upd, next.as_bytes())?;
         }
         for name in NO_MIGRATE {
             let mark = dir.join(format!("{name}_nomigrate.txt"));
@@ -304,6 +315,10 @@ fn unzip(zip_path: &Path, dest: &Path) -> Result<(), EngineError> {
 }
 
 /// Pone `kv` en la sección `[General]` del INI, conservando todo lo demás.
+fn updater_off(existing: &str) -> String {
+    merge_ini(existing, &UPDATER_OFF)
+}
+
 fn merge_ini(existing: &str, kv: &[(&str, &str)]) -> String {
     let mut lines: Vec<String> = Vec::new();
     let mut seen: Vec<&str> = Vec::new();
@@ -357,6 +372,26 @@ mod win {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn el_actualizador_del_motor_queda_apagado() {
+        // el archivo tal como lo deja el motor en una instalación de 1.x
+        let real = "[General]
+last_check=2026-11-23T13:39:40
+auto_check=true
+update_interval=86400
+";
+        let out = updater_off(real);
+        assert!(out.contains("auto_check=false") && !out.contains("auto_check=true"));
+        assert!(out.contains("last_check=2026-11-23T13:39:40") && out.contains("update_interval=86400"));
+        assert_eq!(
+            updater_off(""),
+            "[General]
+auto_check=false
+"
+        );
+        assert_eq!(updater_off(&out), out, "idempotente");
+    }
+
     use super::*;
 
     #[test]
