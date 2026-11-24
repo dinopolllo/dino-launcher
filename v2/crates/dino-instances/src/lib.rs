@@ -336,7 +336,36 @@ impl Core {
         Ok(self.view(&entry, Some(&r), None, Some(&id)))
     }
 
+    /// Avisa antes de empezar, en vez de fallar a mitad con el disco lleno.
+    fn check_space(&self, pack_bytes: u64) -> R<()> {
+        let need = os::space_needed(pack_bytes);
+        match os::free_space(&self.paths.root) {
+            Some(free) if free < need => Err(e(
+                ErrorCode::DiskFull,
+                format!("hacen falta {} MB libres y hay {} MB", need / 1_048_576, free / 1_048_576),
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// Primera vez que 2.0 abre una carpeta de 1.x: migra (mueve, no copia, con diario).
+    /// Devuelve los avisos (lo que se quedó en 1.x y por qué), o `None` si no había nada.
+    pub fn migrate_if_needed(&self) -> R<Option<Vec<String>>> {
+        if self.paths.library().exists() || !self.paths.root.join("packs.json").exists() {
+            return Ok(None);
+        }
+        let Some((packs, accounts, inst)) = dino_core::migrate::read_v1(&self.paths) else { return Ok(None) };
+        let plan = dino_core::migrate::plan(&self.paths, &packs, accounts.as_deref(), &inst).map_err(internal)?;
+        let mut notes = dino_core::migrate::apply(&self.paths, &plan).map_err(internal)?;
+        notes.extend(plan.warnings.clone());
+        tracing::info!(instances = plan.library.instances.len(), ?notes, "datos de 1.x migrados");
+        (self.emit)(Event::LibraryChanged);
+        (self.emit)(Event::AccountsChanged);
+        Ok(Some(notes))
+    }
+
     async fn download_pack(&self, r: &catalog::PackRemoto, id: &str) -> R<()> {
+        self.check_space(r.bytes)?;
         let task = format!("pack-{id}");
         let emit = self.emit.clone();
         let inst = id.to_string();
@@ -389,6 +418,7 @@ impl Core {
             return Err(e(ErrorCode::UnsupportedLoader, "Forge y Quilt están fuera del alcance de 2.0"));
         }
         let lib = self.store.library().map_err(internal)?;
+        self.check_space(std::fs::metadata(path).map(|m| m.len()).unwrap_or(0))?;
         let id = lib.free_id(&slug(&pre.name), None);
         let dest = self.paths.pack_file(&id);
         if let Some(d) = dest.parent() {

@@ -446,6 +446,12 @@ pub fn run() {
                 let _ = handle.emit(CHANNEL, ev);
             });
             let core = Core::new(paths, emit);
+            // Primera apertura sobre los datos de 1.x: se migran antes de enseñar nada.
+            match core.migrate_if_needed() {
+                Ok(Some(notes)) => tracing::info!(?notes, "migración desde 1.x hecha"),
+                Ok(None) => {}
+                Err(x) => tracing::error!(error = ?x, "la migración desde 1.x falló; los datos de 1.x siguen intactos"),
+            }
             if let Some(id) = core.reattach() {
                 tracing::info!(instance = %id, "partida ya en curso al abrir: la sigo");
             }

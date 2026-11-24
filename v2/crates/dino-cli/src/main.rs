@@ -27,7 +27,7 @@ const USAGE: &str = "uso:
   dino-cli account sync | login | renew [--force]
   dino-cli engine ensure
   dino-cli verify <cuenta-microsoft>
-  dino-cli migrate-plan <raiz-1.x> <salida.json>
+  dino-cli migrate-plan <raiz-1.x> <salida.json> | migrate-apply <raiz> | migrate-rollback <raiz>
   dino-cli diagnostics <salida.zip>
   dino-cli bench-download <pack.mrpack> <concurrencias, p. ej. 1,4,8,16,32>";
 
@@ -94,6 +94,9 @@ async fn main() {
         Some("engine") if args.get(1).map(String::as_str) == Some("ensure") => cmd_engine_ensure().await,
         Some("verify") if args.len() >= 2 => cmd_verify(&args[1]).await,
         Some("migrate-plan") if args.len() >= 3 => cmd_migrate_plan(&args[1], &args[2]),
+        Some("migrate-apply") if args.len() >= 2 => cmd_migrate_apply(&args[1]),
+        Some("migrate-rollback") if args.len() >= 2 => dino_core::migrate::rollback(&Paths::new(&args[1]))
+            .map(|n| println!("{}", serde_json::json!({"restored": n}))),
         Some("bench-download") if args.len() >= 3 => cmd_bench_download(&paths, &args[1], &args[2]).await,
         Some("diagnostics") if args.len() >= 2 => dino_log::export_report(&paths, std::path::Path::new(&args[1]))
             .map(|n| println!("{n} archivos en {}", args[1]))
@@ -240,6 +243,23 @@ async fn cmd_verify(name: &str) -> Result<(), String> {
 
 /// Plan de migración 1.x → 2.0 **en seco**: lee los datos de 1.x en `root` y escribe en
 /// `out` qué haría, sin mover ni escribir nada en `root`. Sin secretos.
+/// Migra de verdad la carpeta de 1.x en `root` (lo mismo que hace la app al abrirse).
+fn cmd_migrate_apply(root: &str) -> Result<(), String> {
+    use dino_core::migrate;
+    let paths = Paths::new(root);
+    let (packs, accounts, inst) = migrate::read_v1(&paths).ok_or("no encuentro packs.json de 1.x")?;
+    let plan = migrate::plan(&paths, &packs, accounts.as_deref(), &inst)?;
+    let t0 = Instant::now();
+    let notes = migrate::apply(&paths, &plan)?;
+    println!(
+        "{}",
+        serde_json::json!({"instances": plan.library.instances.len(), "accounts": plan.accounts.accounts.len(),
+            "moves": plan.moves.len(), "copies": plan.copies.len(), "notes": notes, "warnings": plan.warnings,
+            "ms": t0.elapsed().as_millis()})
+    );
+    Ok(())
+}
+
 fn cmd_migrate_plan(root: &str, out: &str) -> Result<(), String> {
     use dino_core::{migrate, schema::Paths};
     let paths = Paths::new(root);

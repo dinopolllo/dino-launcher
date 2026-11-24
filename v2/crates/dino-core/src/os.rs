@@ -25,6 +25,23 @@ pub fn recommended_memory(total_mb: u32) -> (u32, u32) {
     (1024.min(max), max)
 }
 
+/// Espacio libre en el disco de `dir` (o del primer padre que exista), en bytes.
+pub fn free_space(dir: &std::path::Path) -> Option<u64> {
+    let mut d = dir.to_path_buf();
+    while !d.exists() {
+        if !d.pop() {
+            return None;
+        }
+    }
+    imp::free_space(&d)
+}
+
+/// Lo que hay que tener libre para instalar un pack de `pack_bytes`: el `.mrpack`, lo que
+/// trae dentro y lo que se baja aparte, con margen. La misma regla que 1.x (×3,5).
+pub fn space_needed(pack_bytes: u64) -> u64 {
+    pack_bytes.saturating_mul(7) / 2
+}
+
 pub fn process_alive(pid: u32) -> bool {
     imp::process_alive(pid)
 }
@@ -137,6 +154,18 @@ mod imp {
         Some(out)
     }
 
+    pub fn free_space(dir: &std::path::Path) -> Option<u64> {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetDiskFreeSpaceExW(dir: *const u16, free: *mut u64, total: *mut u64, total_free: *mut u64) -> i32;
+        }
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let (mut free, mut total, mut tf) = (0u64, 0u64, 0u64);
+        // SAFETY: cadena terminada en cero y punteros a u64 válidos.
+        (unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, &mut total, &mut tf) } != 0).then_some(free)
+    }
+
     pub fn process_alive(pid: u32) -> bool {
         with_process(pid, PROCESS_QUERY_LIMITED_INFORMATION, |h| {
             let mut code = 0u32;
@@ -225,6 +254,13 @@ mod imp {
         }
     }
 
+    pub fn free_space(dir: &std::path::Path) -> Option<u64> {
+        let out = Command::new("df").arg("-Pk").arg(dir).output().ok()?;
+        let text = String::from_utf8(out.stdout).ok()?;
+        let kb: u64 = text.lines().nth(1)?.split_whitespace().nth(3)?.parse().ok()?;
+        Some(kb * 1024)
+    }
+
     pub fn process_alive(pid: u32) -> bool {
         Command::new("kill").args(["-0", &pid.to_string()]).status().is_ok_and(|s| s.success())
     }
@@ -265,6 +301,13 @@ mod tests {
         assert_eq!(recommended_memory(16384), (1024, 6144));
         assert_eq!(recommended_memory(4096), (1024, 1536));
         assert_eq!(recommended_memory(65536).1, 8192);
+    }
+
+    #[test]
+    fn el_disco_de_esta_maquina_se_puede_medir() {
+        let d = std::env::temp_dir().join("no-existe-aun").join("tampoco");
+        assert!(free_space(&d).is_some_and(|b| b > 0), "sube hasta el primer padre que existe");
+        assert_eq!(space_needed(100), 350);
     }
 
     #[test]
