@@ -63,11 +63,34 @@ async fn read_varint(s: &mut TcpStream) -> std::io::Result<i32> {
 /// Resuelve `_minecraft._tcp.<host>`. Los servidores grandes lo usan para mover el
 /// puerto y para que el dominio web viva en otra IP.
 async fn resolve_srv(host: &str) -> Option<(String, u16)> {
+    use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig};
     use hickory_resolver::TokioAsyncResolver;
-    let resolver = TokioAsyncResolver::tokio_from_system_conf().ok()?;
+    let (conf, mut opts) = hickory_resolver::system_conf::read_system_conf().ok()?;
+    // Windows anuncia `fec0:0:0:ffff::1..3` (DNS «site-local», obsoletos) en adaptadores sin
+    // DNS IPv6 propio, como ZeroTier o el loopback. Nadie contesta ahí y cada consulta se
+    // comía el plazo entero: 5 s de espera para un ping de 40 ms.
+    let servers: Vec<_> = conf.name_servers().iter().filter(|n| usable_dns(n.socket_addr.ip())).cloned().collect();
+    let conf = ResolverConfig::from_parts(
+        conf.domain().cloned(),
+        conf.search().to_vec(),
+        NameServerConfigGroup::from(servers),
+    );
+    opts.timeout = Duration::from_millis(1500);
+    opts.attempts = 1;
+    let resolver = TokioAsyncResolver::tokio(conf, opts);
     let lookup = resolver.srv_lookup(format!("_minecraft._tcp.{host}.")).await.ok()?;
     let rec = lookup.iter().next()?;
     Some((rec.target().to_utf8().trim_end_matches('.').to_string(), rec.port()))
+}
+
+fn usable_dns(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V6(v6) => {
+            let seg = v6.segments()[0];
+            seg & 0xffc0 != 0xfec0 && seg & 0xffc0 != 0xfe80 // site-local y link-local
+        }
+        std::net::IpAddr::V4(_) => true,
+    }
 }
 
 /// Limpia los códigos de color (`§a`) y aplana el MOTD, que puede venir como
@@ -182,6 +205,14 @@ async fn ping_inner(addr: &str) -> Option<ServerStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn los_dns_site_local_se_descartan() {
+        assert!(!usable_dns("fec0:0:0:ffff::1".parse().unwrap()));
+        assert!(!usable_dns("fe80::1".parse().unwrap()));
+        assert!(usable_dns("2806:1000:ffff:4::e".parse().unwrap()));
+        assert!(usable_dns("192.168.1.254".parse().unwrap()));
+    }
 
     #[test]
     fn varint_codifica_como_el_protocolo() {

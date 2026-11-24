@@ -17,6 +17,7 @@ dino-core = { path = "../dino-core" }
 dino-config = { path = "../dino-config" }
 dino-session = { path = "../dino-session" }
 dino-log = { path = "../dino-log" }
+dino-instances = { path = "../dino-instances" }
 tracing = "0.1.44"
 tokio.workspace = true
 serde.workspace = true

@@ -165,8 +165,11 @@ impl Core {
     ) -> InstanceView {
         let manifest: Option<InstanceManifest> = schema::load(&self.paths.instance_manifest(&entry.id)).ok().flatten();
         let installed = manifest.as_ref().is_some_and(|m| m.state == InstallState::Ready);
+        // A medias pero con partida en disco (recién migrada de 1.x, o una reparación que se
+        // cortó): para el jugador ya está instalada. «Jugar» verifica lo que falte y abre.
+        let on_disk = manifest.is_some() && self.paths.game_dir(&entry.id).join("mods").is_dir();
         let mods = match (&manifest, remote) {
-            (Some(m), _) if installed => mods_of(m, &self.paths.game_dir(&entry.id)),
+            (Some(m), _) if installed || on_disk => mods_of(m, &self.paths.game_dir(&entry.id)),
             (_, Some(r)) => r.mods,
             _ => 0,
         };
@@ -176,7 +179,7 @@ impl Core {
             // `r.bytes` del catálogo es el peso del `.mrpack`, no lo que se va a descargar
             // (mods, Minecraft, assets): eso no se sabe hasta leer el pack.
             PrimaryAction::Update { to_version: r.version.clone(), bytes: None }
-        } else if !installed {
+        } else if !installed && !on_disk {
             PrimaryAction::Install { bytes: None }
         } else {
             PrimaryAction::Play
@@ -197,7 +200,7 @@ impl Core {
             server: entry.server.clone(),
             icon: self.paths.pack_icon(&entry.id).exists().then(|| icon_url(&entry.id)),
             mods,
-            disk_bytes: installed.then(|| dir_size(&self.paths.instance_dir(&entry.id))),
+            disk_bytes: (installed || on_disk).then(|| dir_size(&self.paths.instance_dir(&entry.id))),
             selected: selected == Some(entry.id.as_str()),
             action,
         }
@@ -254,10 +257,16 @@ impl Core {
         })
     }
 
-    fn manifest_ready(&self, id: &str) -> R<InstanceManifest> {
-        let m: InstanceManifest = schema::load(&self.paths.instance_manifest(id))
+    /// El manifiesto, esté lista o a medias (los ajustes no dependen de eso: una instancia
+    /// recién migrada se puede configurar antes de su primera verificación).
+    fn manifest_any(&self, id: &str) -> R<InstanceManifest> {
+        schema::load(&self.paths.instance_manifest(id))
             .map_err(internal)?
-            .ok_or_else(|| e(ErrorCode::NotInstalled, format!("«{id}» no está instalada")))?;
+            .ok_or_else(|| e(ErrorCode::NotInstalled, format!("«{id}» no está instalada")))
+    }
+
+    fn manifest_ready(&self, id: &str) -> R<InstanceManifest> {
+        let m = self.manifest_any(id)?;
         if m.state != InstallState::Ready {
             return Err(e(ErrorCode::NotInstalled, format!("«{id}» quedó a medias")));
         }
@@ -265,7 +274,7 @@ impl Core {
     }
 
     pub fn instance_settings_get(&self, id: &str) -> R<InstanceSettings> {
-        let m = self.manifest_ready(id)?;
+        let m = self.manifest_any(id)?;
         let ram = os::total_memory_mb().unwrap_or(8192);
         Ok(InstanceSettings {
             memory: m.memory,
@@ -295,7 +304,7 @@ impl Core {
     }
 
     pub fn instance_settings_set(&self, id: &str, memory: Memory, jvm_args: Vec<String>, java: JavaChoice) -> R<()> {
-        let mut m = self.manifest_ready(id)?;
+        let mut m = self.manifest_any(id)?;
         m.memory = memory;
         m.jvm_args = jvm_args;
         m.java = java;

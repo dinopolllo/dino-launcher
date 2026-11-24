@@ -28,6 +28,7 @@ const USAGE: &str = "uso:
   dino-cli engine ensure
   dino-cli verify <cuenta-microsoft>
   dino-cli migrate-plan <raiz-1.x> <salida.json> | migrate-apply <raiz> | migrate-rollback <raiz>
+  dino-cli ping <servidor[:puerto]>
   dino-cli diagnostics <salida.zip>
   dino-cli bench-download <pack.mrpack> <concurrencias, p. ej. 1,4,8,16,32>";
 
@@ -95,6 +96,12 @@ async fn main() {
         Some("verify") if args.len() >= 2 => cmd_verify(&args[1]).await,
         Some("migrate-plan") if args.len() >= 3 => cmd_migrate_plan(&args[1], &args[2]),
         Some("migrate-apply") if args.len() >= 2 => cmd_migrate_apply(&args[1]),
+        Some("ping") if args.len() >= 2 => {
+            let t0 = Instant::now();
+            let s = dino_instances::status::ping(&args[1]).await;
+            println!("{}", serde_json::json!({"status": s, "ms": t0.elapsed().as_millis()}));
+            Ok(())
+        }
         Some("migrate-rollback") if args.len() >= 2 => dino_core::migrate::rollback(&Paths::new(&args[1]))
             .map(|n| println!("{}", serde_json::json!({"restored": n}))),
         Some("bench-download") if args.len() >= 3 => cmd_bench_download(&paths, &args[1], &args[2]).await,

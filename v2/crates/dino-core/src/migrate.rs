@@ -183,6 +183,13 @@ pub fn plan(
     // Lo descargado por el motor es contenido por hash/coordenada: se reaprovecha.
     moves.push(Move { from: engine.join("assets"), to: paths.root.join("cache").join("assets") });
     moves.push(Move { from: engine.join("libraries"), to: paths.root.join("cache").join("libraries") });
+    // Los Java de Mojang tienen la misma forma en los dos (`<componente>/bin/javaw.exe`) y 2.0
+    // los verifica por hash antes de usarlos: moverlos ahorra ~100 MB de descarga por cada uno.
+    if let Ok(rd) = std::fs::read_dir(engine.join("java")) {
+        for x in rd.flatten().filter(|x| x.path().join("release").exists()) {
+            moves.push(Move { from: x.path(), to: paths.java().join(x.file_name()) });
+        }
+    }
 
     let mut accounts = AccountsFile::default();
     if let Some(s) = engine_accounts {
@@ -399,16 +406,20 @@ mod tests {
         std::fs::create_dir_all(&game).unwrap();
         std::fs::write(game.join("level.dat"), b"mi mundo").unwrap();
         std::fs::create_dir_all(root.join("engine/assets/objects")).unwrap();
+        std::fs::create_dir_all(root.join("engine/java/java-runtime-delta/bin")).unwrap();
+        std::fs::write(root.join("engine/java/java-runtime-delta/release"), "JAVA_VERSION=\"21.0.7\"").unwrap();
 
         let plan = plan(&paths, PACKS, Some(ACCOUNTS), &inst).unwrap();
         apply(&paths, &plan).unwrap();
         assert_eq!(std::fs::read(paths.game_dir("voidsafio").join("saves/mundo/level.dat")).unwrap(), b"mi mundo");
         assert!(root.join("cache/assets/objects").exists());
+        assert!(paths.java().join("java-runtime-delta/release").exists());
         assert!(paths.library().exists() && paths.instance_manifest("voidsafio").exists());
         // aplicar dos veces no rompe nada
         apply(&paths, &plan).unwrap();
 
-        assert_eq!(rollback(&paths).unwrap(), 2);
+        assert_eq!(rollback(&paths).unwrap(), 3);
+        assert!(root.join("engine/java/java-runtime-delta/release").exists());
         assert_eq!(std::fs::read(game.join("level.dat")).unwrap(), b"mi mundo");
         assert!(root.join("engine/assets/objects").exists());
         let _ = std::fs::remove_dir_all(&root);

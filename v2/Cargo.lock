@@ -901,6 +901,7 @@ dependencies = [
  "dino-config",
  "dino-core",
  "dino-download",
+ "dino-instances",
  "dino-log",
  "dino-minecraft",
  "dino-session",
