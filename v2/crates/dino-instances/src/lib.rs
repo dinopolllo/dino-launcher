@@ -710,6 +710,8 @@ impl Core {
         }
         let _ = self.accounts.sync_bridge(&self.engine.accounts());
         let before = self.msa_uuids();
+        let shown =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let core = self.clone();
         std::thread::spawn(move || {
             // Se mira `accounts.json` mientras el jugador inicia sesión: en cuanto aparece
@@ -736,10 +738,15 @@ impl Core {
                 // Nueva = no estaba al empezar. No vale fiarse de lo que añada *esta*
                 // sincronización: `accounts_list` también sincroniza y puede adelantarse.
                 let _ = core.accounts.sync_bridge(&core.engine.accounts());
-                let new = core.msa_uuids().into_iter().rfind(|u| !before.contains(u));
-                if let Some(uuid) = new.as_ref() {
+                let mut pick = core.msa_uuids().into_iter().rfind(|u| !before.contains(u));
+                if pick.is_none() {
+                    pick = relogin(&core.engine.accounts(), shown, &login);
+                }
+                if let Some(uuid) = pick.as_ref() {
                     // Quien acaba de iniciar sesión con Microsoft quiere jugar con esa cuenta,
                     // no con la que tuviera activa (p. ej. una sin conexión).
+                    let _ = core.accounts.unhide(uuid);
+                    let _ = core.accounts.sync_bridge(&core.engine.accounts());
                     if let Err(x) = core.accounts.select(uuid) {
                         tracing::warn!(error = %x, "no pude activar la cuenta Microsoft nueva");
                     }
@@ -986,6 +993,29 @@ fn extract_icon(mrpack: &Path, dest: &Path) {
 
 /// Mods de una instancia: los que anotó el pack o, si es de antes de anotarlos, los `.jar`
 /// que haya en `mods/`. La ficha y el detalle usan esta misma cuenta.
+/// Iniciar sesión con una cuenta que el motor **ya tenía** no añade nada: el motor la
+/// reemplaza con una sesión nueva. Se reconoce por la hora de esa sesión (`iat`): posterior a
+/// cuando se enseñó la ventana. Pero el motor también renueva todas las cuentas al arrancar,
+/// así que solo cuenta una vez cerrada la ventana de Microsoft (el login correcto la cierra) y
+/// con margen; con el motor entero a la vista, con más margen, porque llegar a mano a Cuentas
+/// e iniciar sesión lleva bastante más que esa renovación.
+fn relogin(engine_accounts: &Path, shown: u64, login: &dino_auth::engine::MicrosoftLogin) -> Option<String> {
+    let (ready, margin) = if login.only_microsoft() { (!login.window_open(), 2) } else { (true, 15) };
+    if !ready {
+        return None;
+    }
+    issued_since(dino_auth::list(engine_accounts).unwrap_or_default(), shown + margin)
+}
+
+/// La cuenta Microsoft cuya sesión se emitió más tarde, si fue a partir de `since`.
+fn issued_since(engine: Vec<dino_auth::AccountInfo>, since: u64) -> Option<String> {
+    engine
+        .into_iter()
+        .filter(|a| a.kind == "MSA" && !a.uuid.is_empty() && a.issued.is_some_and(|i| i >= since))
+        .max_by_key(|a| a.issued)
+        .map(|a| a.uuid)
+}
+
 /// Sin dato del disco no se bloquea: mejor intentar que impedir jugar por una medida fallida.
 fn space_ok(free: Option<u64>, pack_bytes: u64) -> R<()> {
     let need = os::space_needed(pack_bytes);
@@ -1042,6 +1072,23 @@ fn dir_size(p: &Path) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn volver_a_entrar_con_una_cuenta_que_ya_estaba() {
+        let acc = |uuid: &str, kind: &str, iat: Option<u64>| dino_auth::AccountInfo {
+            kind: kind.into(),
+            name: uuid.into(),
+            uuid: uuid.into(),
+            active: false,
+            expires: None,
+            issued: iat,
+        };
+        // renovada al arrancar (antes) y la del login (después): gana la del login
+        let l = vec![acc("vieja", "MSA", Some(100)), acc("login", "MSA", Some(140)), acc("x", "Offline", Some(200))];
+        assert_eq!(issued_since(l, 120).as_deref(), Some("login"));
+        // solo renovaciones: nada
+        assert_eq!(issued_since(vec![acc("vieja", "MSA", Some(100))], 120), None);
+    }
+
     use super::*;
 
     #[test]

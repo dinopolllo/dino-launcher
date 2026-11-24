@@ -270,11 +270,16 @@ pub struct AccountsFile {
     pub active: Option<String>,
     #[serde(default)]
     pub accounts: Vec<Account>,
+    /// Cuentas Microsoft que el jugador quitó en Dino pero siguen en el motor (Dino no
+    /// escribe el `accounts.json` del motor). Así la sincronización no las devuelve; vuelven
+    /// si el jugador inicia sesión otra vez con ellas.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_bridge: Vec<String>,
 }
 
 impl Default for AccountsFile {
     fn default() -> Self {
-        Self { schema: ACCOUNTS_SCHEMA, active: None, accounts: Vec::new() }
+        Self { schema: ACCOUNTS_SCHEMA, active: None, accounts: Vec::new(), hidden_bridge: Vec::new() }
     }
 }
 

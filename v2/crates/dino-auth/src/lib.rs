@@ -47,6 +47,9 @@ pub struct AccountInfo {
     pub active: bool,
     /// Segundos Unix en que caduca la sesión de Minecraft (solo cuentas Microsoft).
     pub expires: Option<u64>,
+    /// Segundos Unix en que se emitió esa sesión: cambia al iniciar sesión otra vez (y al
+    /// renovar).
+    pub issued: Option<u64>,
 }
 
 /// Sesión lista para lanzar. El token no se imprime nunca.
@@ -100,6 +103,7 @@ fn info(a: &Value) -> AccountInfo {
         uuid: s(&["profile", "id"]),
         active: a.get("active").and_then(Value::as_bool).unwrap_or(false),
         expires: a.pointer("/ygg/exp").and_then(Value::as_u64),
+        issued: a.pointer("/ygg/iat").and_then(Value::as_u64),
     }
 }
 

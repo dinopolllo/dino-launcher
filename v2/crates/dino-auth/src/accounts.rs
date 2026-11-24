@@ -137,7 +137,22 @@ impl Accounts {
         self.change(|a| {
             let i =
                 a.accounts.iter().position(|x| x.uuid == uuid).ok_or_else(|| AccountsError::NotFound(uuid.into()))?;
-            Ok(a.accounts.remove(i))
+            let gone = a.accounts.remove(i);
+            if gone.kind == AccountKind::MicrosoftBridge && !a.hidden_bridge.contains(&gone.uuid) {
+                a.hidden_bridge.push(gone.uuid.clone());
+            }
+            if a.active.as_deref() == Some(uuid) {
+                a.active = a.accounts.first().map(|x| x.uuid.clone());
+            }
+            Ok(gone)
+        })
+    }
+
+    /// Deja de esconder una cuenta Microsoft (el jugador volvió a iniciar sesión con ella).
+    pub fn unhide(&self, uuid: &str) -> Result<(), AccountsError> {
+        self.change(|a| {
+            a.hidden_bridge.retain(|h| h != uuid);
+            Ok(())
         })
     }
 
@@ -148,14 +163,18 @@ impl Accounts {
         let msa: Vec<&AccountInfo> = engine.iter().filter(|e| e.kind == "MSA" && !e.uuid.is_empty()).collect();
         self.change(|a| {
             let mut r = SyncReport::default();
+            // Lo que ya no está en el motor deja de estar escondido.
+            a.hidden_bridge.retain(|h| msa.iter().any(|m| &m.uuid == h));
+            let hidden = a.hidden_bridge.clone();
             a.accounts.retain(|x| {
-                let keep = x.kind != AccountKind::MicrosoftBridge || msa.iter().any(|m| m.uuid == x.uuid);
+                let keep = x.kind != AccountKind::MicrosoftBridge
+                    || (msa.iter().any(|m| m.uuid == x.uuid) && !hidden.contains(&x.uuid));
                 if !keep {
                     r.removed.push(x.name.clone());
                 }
                 keep
             });
-            for m in &msa {
+            for m in msa.iter().filter(|m| !hidden.contains(&m.uuid)) {
                 match a.accounts.iter_mut().find(|x| x.kind == AccountKind::MicrosoftBridge && x.uuid == m.uuid) {
                     Some(x) => x.name = m.name.clone(),
                     None => {
@@ -226,6 +245,31 @@ mod tests {
             })
             .collect();
         std::fs::write(p, format!(r#"{{"formatVersion":3,"accounts":[{}]}}"#, acc.join(","))).unwrap();
+    }
+
+    #[test]
+    fn quitar_una_microsoft_no_vuelve_con_la_sincronizacion() {
+        let (a, e) = setup("esconder");
+        engine_file(&e, &[("Mia", "u1", now() + 3600), ("Otra", "u2", now() + 3600)]);
+        a.sync_bridge(&e).unwrap();
+        a.select("u1").unwrap();
+        a.remove("u1").unwrap();
+        a.sync_bridge(&e).unwrap();
+        let l = a.list(&e).unwrap();
+        assert_eq!(
+            l.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(),
+            vec!["Otra"],
+            "sigue en el motor, no en Dino"
+        );
+        assert!(l[0].active, "la activa pasa a otra cuenta");
+        // vuelve a iniciar sesión con ella
+        a.unhide("u1").unwrap();
+        assert_eq!(a.sync_bridge(&e).unwrap().added, vec!["Mia"]);
+        // si desaparece del motor, deja de estar escondida (no se acumula)
+        a.remove("u1").unwrap();
+        engine_file(&e, &[("Otra", "u2", now() + 3600)]);
+        a.sync_bridge(&e).unwrap();
+        assert!(a.load().unwrap().hidden_bridge.is_empty());
     }
 
     #[test]
