@@ -874,6 +874,25 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 .choice button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 .choice button small{font-weight:400;font-size:11.5px;color:var(--text-dim);line-height:1.45}
 .choice button[disabled]{opacity:.5;cursor:not-allowed}
+
+/* --- selector de cuentas --- */
+.acc-list{display:flex;flex-direction:column;gap:8px;margin-top:6px;max-height:280px;overflow:auto}
+.acc-row{display:flex;align-items:center;gap:12px;padding:10px 12px;cursor:pointer;
+  border-radius:var(--r-card);border:1px solid var(--hairline);background:var(--glass-1);
+  transition:background .15s ease,border-color .15s ease}
+.acc-row:hover{background:var(--glass-2);border-color:var(--hairline-strong)}
+.acc-row:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.acc-row.on{border-color:var(--green);background:linear-gradient(90deg,rgba(115,191,105,.14),transparent 70%),var(--glass-1)}
+.acc-row canvas{width:34px;height:34px;border-radius:7px;image-rendering:pixelated;flex:none}
+.acc-row .acc-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.acc-row .acc-name{font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acc-row .acc-kind{font-family:var(--font-mono);font-size:10.5px;color:var(--text-dim)}
+.acc-row .acc-on{font-family:var(--font-mono);font-size:10px;color:var(--green)}
+.acc-row .acc-del{background:none;border:0;cursor:pointer;padding:4px 6px;border-radius:6px;
+  font-family:var(--font-mono);font-size:10.5px;color:var(--text-faint)}
+.acc-row .acc-del:hover{color:var(--text);background:rgba(255,255,255,.06)}
+.acc-row .acc-del.seguro{color:#e8887a}
+.acc-add{margin-top:6px}
 .link-min{
   background:none;border:0;padding:0;margin-top:14px;cursor:pointer;
   font-family:var(--font-mono);font-size:10.5px;letter-spacing:.02em;
@@ -1835,6 +1854,20 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   <div class="onboard" id="setup" hidden>
     <div class="ob-card">
       <div class="ob-dots"><i class="done" data-sd="1"></i><i data-sd="2"></i><i data-sd="3"></i></div>
+
+      <!-- Selector de cuentas: lo que abre la cuenta del rail cuando ya hay alguna. Un clic
+           en una fila la deja activa y cierra; añadir lleva a los mismos pasos del setup. -->
+      <div class="ob-step" data-sp="cuentas">
+        <h2 class="ob-title">Tus cuentas</h2>
+        <p class="ob-body">Elige con cuál jugar. Puedes tener varias de Microsoft y sin conexión.</p>
+        <div class="acc-list" id="acc-list" role="listbox" aria-label="Cuentas"></div>
+        <div class="choice acc-add">
+          <button type="button" id="acc-add-msa">Añadir cuenta de Microsoft
+            <small>La del Minecraft que compraste.</small></button>
+          <button type="button" id="acc-add-offline">Añadir cuenta sin conexión
+            <small>Un nombre para servidores que lo permiten.</small></button>
+        </div>
+      </div>
 
       <div class="ob-step on" data-sp="1">
         <span class="app-icon" style="--s:62px"><canvas data-dino width="22" height="21"></canvas></span>
@@ -3046,17 +3079,81 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   var spAtras = document.getElementById("sp-atras");
   var spJugar = document.getElementById("sp-jugar");
   var esperandoMSA = false;
-  var msaAntes = 0;
+  var spPasoActual = "1";
 
   function spIr(paso, punto){
+    spPasoActual = paso;
+    /* El selector no es un paso de nada: sin barra de progreso. */
+    setup.querySelector(".ob-dots").style.visibility = (paso === "cuentas") ? "hidden" : "";
     spPasos.forEach(function(e){ e.classList.toggle("on", e.dataset.sp === paso); });
     spDots.forEach(function(d, i){ d.classList.toggle("done", i < punto); });
-    spAtras.hidden = (paso === "1" || paso === "3");
+    spAtras.hidden = (paso === "1" || paso === "3" || paso === "cuentas");
     spJugar.hidden = (paso !== "3");
   }
   function spParar(){ esperandoMSA = false; }
   function spCerrar(){ spParar(); setup.hidden = true; }
   function spAbrir(){ spParar(); setup.hidden = false; spIr("1", 1); }
+
+  /* ---- selector de cuentas ---- */
+  var accList = $("acc-list");
+  function renderCuentas(){
+    accList.innerHTML = "";
+    CUENTAS.forEach(function(a){
+      var row = document.createElement("div");
+      row.className = "acc-row" + (a.active ? " on" : "");
+      row.tabIndex = 0;
+      row.setAttribute("role", "option");
+      row.setAttribute("aria-selected", String(!!a.active));
+      var cv = document.createElement("canvas");
+      cv.width = 8; cv.height = 8; cv.dataset.head = a.name;
+      var txt = document.createElement("div");
+      txt.className = "acc-txt";
+      var n = document.createElement("span"); n.className = "acc-name"; n.textContent = a.name;
+      var k = document.createElement("span"); k.className = "acc-kind"; k.textContent = TIPOS[a.kind] || a.kind;
+      txt.appendChild(n); txt.appendChild(k);
+      row.appendChild(cv); row.appendChild(txt);
+      if (a.active) {
+        var on = document.createElement("span"); on.className = "acc-on"; on.textContent = "en uso";
+        row.appendChild(on);
+      }
+      /* Quitar pide un segundo clic: es fácil darle sin querer y una de Microsoft obliga
+         a volver a iniciar sesión. */
+      var del = document.createElement("button");
+      del.type = "button"; del.className = "acc-del"; del.textContent = "quitar";
+      del.title = "Quitar esta cuenta de Dino";
+      del.addEventListener("click", function(e){
+        e.stopPropagation();
+        if (!del.classList.contains("seguro")) {
+          del.classList.add("seguro"); del.textContent = "¿seguro?";
+          setTimeout(function(){ del.classList.remove("seguro"); del.textContent = "quitar"; }, 3000);
+          return;
+        }
+        call("account_remove", { uuid: a.uuid }).then(onAccountsChanged).catch(function(){});
+      });
+      row.appendChild(del);
+      var elegir = function(){
+        if (a.active) { spCerrar(); return; }
+        call("account_select", { uuid: a.uuid }).then(function(){
+          return onAccountsChanged();
+        }).then(spCerrar).catch(function(){});
+      };
+      row.addEventListener("click", elegir);
+      row.addEventListener("keydown", function(e){
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); elegir(); }
+      });
+      accList.appendChild(row);
+      paintHead(cv);
+      paintSkin(cv, a);
+    });
+  }
+  function abrirSelector(){
+    spParar(); setup.hidden = false;
+    renderCuentas();
+    spIr("cuentas", 1);
+  }
+  $("acc-add-msa").addEventListener("click", function(){ $("sp-msa").click(); });
+  $("acc-add-offline").addEventListener("click", function(){ $("sp-offline").click(); });
+
 
   function spListo(){
     spParar();
@@ -3076,7 +3173,6 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     spIr("2-msa", 2);
     msaEstado.textContent = "preparando el motor…";
     msaTexto.textContent = "Un momento: la primera vez se descarga el motor que hace de puente con Microsoft.";
-    msaAntes = CUENTAS.filter(function(x){ return x.kind === "microsoft_bridge"; }).length;
     esperandoMSA = true;
     call("account_microsoft_add").then(function(r){
       if (!esperandoMSA) return;
@@ -3104,17 +3200,22 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     return call("accounts_list").then(function(accs){
       CUENTAS = accs || [];
       renderAccount();
-      if (!esperandoMSA) return;
-      esperandoMSA = false;
-      var ms = CUENTAS.filter(function(x){ return x.kind === "microsoft_bridge"; });
-      var activa = CUENTAS.filter(function(x){ return x.active; })[0];
-      if (ms.length > msaAntes || (activa && activa.kind === "microsoft_bridge")) {
-        spListo();
-      } else {
-        msaEstado.textContent = "se cerró el motor sin añadir ninguna cuenta. Puedes reintentarlo.";
-        spAtras.hidden = false;
-      }
+      if (!setup.hidden && spPasoActual === "cuentas") renderCuentas();
     }).catch(function(){});
+  }
+
+  /* El núcleo dice cómo acabó el login: con qué cuenta se entró (ya activa), o nada si se
+     cerró la ventana sin entrar. Antes se adivinaba mirando la cuenta activa, y si ya era
+     de Microsoft, cancelar parecía un éxito. */
+  function onMicrosoftLogin(ev){
+    if (!esperandoMSA) return;
+    esperandoMSA = false;
+    if (ev.account) {
+      spListo();
+    } else {
+      msaEstado.textContent = "se cerró la ventana sin iniciar sesión. Puedes reintentarlo.";
+      spAtras.hidden = false;
+    }
   }
 
   /* ---- sin conexión ----
@@ -3164,7 +3265,9 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   });
 
   $("sp-cerrar").addEventListener("click", spCerrar);
-  spAtras.addEventListener("click", function(){ spParar(); spIr("1", 1); });
+  /* Atrás vuelve a donde se empezó: al selector si ya hay cuentas, si no a la bienvenida. */
+  function spVolver(){ spParar(); if (CUENTAS.length) abrirSelector(); else spIr("1", 1); }
+  spAtras.addEventListener("click", spVolver);
 
   var spAyuda = $("sp-ayuda");
   if (spAyuda) {
@@ -3181,7 +3284,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   if (accountBtn) {
     var abrirCuentas = function(){
       if (estadoPrevio === "jugando") return;
-      spAbrir();
+      if (CUENTAS.length) abrirSelector(); else spAbrir();
     };
     accountBtn.addEventListener("click", abrirCuentas);
     accountBtn.addEventListener("keydown", function(e){
@@ -3191,7 +3294,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
   /* Cancelar la espera del login: deja de esperar y vuelve a elegir. En 2.0 la interfaz
      ya no cierra el motor por su cuenta; si sigue abierto, se cierra a mano. */
-  $("sp-msa-cancelar").addEventListener("click", function(){ spParar(); spIr("1", 1); });
+  $("sp-msa-cancelar").addEventListener("click", spVolver);
   spJugar.addEventListener("click", function(){ spCerrar(); runPlay().catch(function(){}); });
   document.addEventListener("keydown", function(e){
     if (e.key === "Escape" && !setup.hidden) spCerrar();
@@ -3802,6 +3905,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
         case "session":          onSession(ev); break;
         case "library_changed":  refreshAll(); break;
         case "accounts_changed": onAccountsChanged(); break;
+        case "microsoft_login":  onMicrosoftLogin(ev); break;
         case "invite":           recogerInvitacion(); break;
         case "update_available": mostrarUpdate({ version: ev.version }); break;
       }
