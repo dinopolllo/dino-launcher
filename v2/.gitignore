@@ -1,1 +1,3 @@
 target/
+# Los regenera tauri-build en cada compilación, distintos en cada sistema.
+crates/dino-app/gen/schemas/
