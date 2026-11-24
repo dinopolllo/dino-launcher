@@ -2450,7 +2450,26 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     if (nameEl) nameEl.textContent = a.name || "—";
     if (kindEl) kindEl.textContent = TIPOS[a.kind] || a.kind || "";
     var head = document.querySelector(".account canvas[data-head]");
-    if (head && a.name) { head.dataset.head = a.name; paintHead(head); }
+    if (head && a.name) { head.dataset.head = a.name; paintHead(head); paintSkin(head, a); }
+  }
+
+  /* La cabeza de la skin de verdad, si ese nombre la tiene: la cara (8×8 en 8,8) y encima
+     la capa del sombrero (en 40,8). Mientras llega, o si el nombre no tiene skin propia
+     (el núcleo responde 404), se queda la cabeza dibujada de arriba. Se comprueba que la
+     cuenta siga siendo la misma al cargar: cambiar rápido de cuenta no debe dejar la cara
+     de la anterior. */
+  function paintSkin(cv, acc){
+    if (!acc.skin) return;
+    var img = new Image();
+    img.onload = function(){
+      if (cv.dataset.head !== acc.name || img.naturalWidth < 64) return;
+      var ctx = cv.getContext("2d");
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(img, 8, 8, 8, 8, 0, 0, cv.width, cv.height);
+      ctx.drawImage(img, 40, 8, 8, 8, 0, 0, cv.width, cv.height);
+    };
+    img.src = acc.skin;
   }
 
   function renderServer(){
