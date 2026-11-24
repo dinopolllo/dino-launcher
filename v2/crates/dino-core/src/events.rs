@@ -20,6 +20,9 @@ pub enum Event {
     LibraryChanged,
     /// Cambiaron las cuentas o la activa.
     AccountsChanged,
+    /// Terminó un login de Microsoft: `account` es el nombre de la cuenta con la que se
+    /// entró (ya activa), o `None` si se cerró sin entrar.
+    MicrosoftLogin { account: Option<String> },
     /// Llegó un link de invitación (`dinolauncher://join/CODIGO`).
     Invite { code: String },
     /// Hay una versión nueva del launcher.

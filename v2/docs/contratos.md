@@ -42,7 +42,7 @@ Este documento los resume y dice qué pasa con cada comando de 1.x.
 | `account_select` | `uuid` | — | (no existía) |
 | `account_offline_check` | `name` | `Option<String>` (aviso) | `offline_check` |
 | `account_offline_create` | `name` | `AccountView` | `offline_create` |
-| `account_microsoft_add` | — | `MicrosoftLoginView { only_microsoft_window }` (luego llega `AccountsChanged`) | `open_engine_login` |
+| `account_microsoft_add` | — | `MicrosoftLoginView { only_microsoft_window }`; al terminar llegan `AccountsChanged` y `MicrosoftLogin { account }` (`null` = se cerró sin entrar) | `open_engine_login` |
 | `account_remove` | `uuid` | — | (no existía) |
 | `update_check`, `update_install` | — | igual que 1.x | igual |
 | `invite_pending` | — | `Option<String>` | `invitacion_pendiente` |
@@ -63,6 +63,7 @@ Este documento los resume y dice qué pasa con cada comando de 1.x.
 | `session` | `state`: `idle` \| `preparing` \| `playing` \| `stopping`, `instance` | sondeo de `session_state` |
 | `library_changed` | — | recargar a mano tras cada cambio |
 | `accounts_changed` | — | — |
+| `microsoft_login` | `account`: nombre de la cuenta con la que se entró (ya activa), o `null` si se cerró sin entrar | adivinarlo mirando la cuenta activa |
 | `invite` | `code` | evento `invitacion` |
 | `update_available` | `version`, `notes` | evento `update` |
 

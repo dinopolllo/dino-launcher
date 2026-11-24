@@ -750,7 +750,13 @@ impl Core {
                     if let Err(x) = core.accounts.select(uuid) {
                         tracing::warn!(error = %x, "no pude activar la cuenta Microsoft nueva");
                     }
+                    let name = core
+                        .accounts
+                        .list(&core.engine.accounts())
+                        .ok()
+                        .and_then(|l| l.into_iter().find(|a| &a.uuid == uuid).map(|a| a.name));
                     (core.emit)(Event::AccountsChanged);
+                    (core.emit)(Event::MicrosoftLogin { account: name });
                     os::close_windows(pid, true);
                     let deadline = Instant::now() + Duration::from_secs(10);
                     while matches!(login.child.try_wait(), Ok(None)) && Instant::now() < deadline {
@@ -764,6 +770,7 @@ impl Core {
             }
             let _ = core.accounts.sync_bridge(&core.engine.accounts());
             (core.emit)(Event::AccountsChanged);
+            (core.emit)(Event::MicrosoftLogin { account: None });
         });
         Ok(view)
     }
