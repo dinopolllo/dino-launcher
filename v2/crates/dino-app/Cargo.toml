@@ -1,0 +1,31 @@
+[package]
+name = "dino-app"
+description = "Dino Launcher 2.0: la app (Tauri). Solo envuelve dino-instances::Core."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lib]
+name = "dino_app_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+dino-core = { path = "../dino-core" }
+dino-config = { path = "../dino-config" }
+dino-log = { path = "../dino-log" }
+dino-instances = { path = "../dino-instances" }
+tauri = { version = "2", features = ["macos-private-api"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = "0.1.44"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"windows\"))".dependencies]
+window-vibrancy = "0.6"
+
+[target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
+tauri-plugin-updater = "2"
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }

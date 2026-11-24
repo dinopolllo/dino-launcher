@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Dino Launcher",
+  "version": "0.0.1",
+  "identifier": "gg.dinolab.launcher.v2dev",
+  "build": {
+    "frontendDist": "../../ui"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Dino Launcher",
+        "width": 1120,
+        "height": 742,
+        "minWidth": 900,
+        "minHeight": 620,
+        "decorations": false,
+        "transparent": true,
+        "theme": "Dark",
+        "resizable": true
+      }
+    ],
+    "security": { "csp": null },
+    "withGlobalTauri": true,
+    "macOSPrivateApi": true
+  },
+  "plugins": {
+    "deep-link": { "desktop": { "schemes": ["dinolauncher"] } }
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "../../../src-tauri/icons/32x32.png",
+      "../../../src-tauri/icons/128x128.png",
+      "../../../src-tauri/icons/256x256.png",
+      "../../../src-tauri/icons/icon.icns",
+      "../../../src-tauri/icons/icon.ico"
+    ]
+  }
+}

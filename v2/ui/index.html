@@ -1,0 +1,3678 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Dino Launcher</title>
+<script>
+(function(){
+  /* La barra de título la dibujamos nosotros, así que la convención de cada sistema
+     hay que aplicarla a mano: en macOS los controles van a la izquierda y redondos,
+     en Windows a la derecha y cuadrados. Se decide aquí, en el primer script y con
+     la página todavía en blanco, para que nadie llegue a ver los controles saltar
+     de lado. El userAgent basta y sobra: no fijamos uno propio en tauri.conf.json. */
+  var ua = navigator.userAgent;
+  document.documentElement.classList.add(
+    /Windows/.test(ua) ? "win" : /Mac OS X|Macintosh/.test(ua) ? "mac" : "linux"
+  );
+
+  /* El vidrio ya lo pidió Rust antes de que esto corra, pero preguntar por él es
+     asíncrono y la ventana se pinta antes de la respuesta. Se pinta opaca: es el
+     estado seguro, y pasar de opaco a translúcido es un fundido. Al revés sería
+     un frame de escritorio sin desenfocar, y eso sí se ve. */
+  try{
+    window.__TAURI__.core.invoke("window_glass").then(function(on){
+      if(on) document.documentElement.classList.add("glass");
+    });
+  }catch(e){}
+
+  function ping(m){ try{ window.__TAURI__.core.invoke("boot_ping",{msg:m}); }catch(e){} }
+  window.addEventListener("error", function(e){
+    ping("JS ERROR: "+e.message+" @ "+(e.filename||"?")+":"+e.lineno);
+  });
+  ping("html cargado");
+  document.addEventListener("DOMContentLoaded", function(){
+    ping("DOM listo, nodos="+document.querySelectorAll("*").length);
+  });
+})();
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+<style>
+:root{
+  /* ground — near-black with a green bias, darker than before */
+  --ink:#03060A;
+  --ink-2:#050A0C;
+  /* La tinción de la ventana cuando hay vidrio detrás. Es `--ink` con alfa: el
+     mismo color, para que encender el vidrio aclare la ventana sin virarla. Es baja
+     a propósito: el acrílico de Windows ya trae su propia capa de luminosidad, pensada
+     para que el texto se lea encima. Con más tinta se oscurecía dos veces y la ventana
+     parecía opaca, que es justo lo que no se quería. */
+  --window-tint:rgba(3,6,10,.30);
+
+  /* glass material */
+  --glass-0:rgba(255,255,255,.030);
+  --glass-1:rgba(255,255,255,.052);
+  --glass-2:rgba(255,255,255,.080);
+  --glass-3:rgba(255,255,255,.115);
+  --hairline:rgba(255,255,255,.070);
+  --hairline-strong:rgba(255,255,255,.115);
+  --specular:rgba(255,255,255,.18);
+
+  /* type — neutrals biased toward the accent */
+  --text:#E6F1E8;
+  --text-dim:#8B9C90;
+  --text-faint:#56685C;
+
+  /* accent — from the logo */
+  --green:#73BF69;
+  --green-hot:#4A9A44;
+  --green-deep:#0B4623;
+  --green-glow:rgba(115,191,105,.50);
+
+  /* dino sprite tones */
+  --dino-dark:#053C1E;
+  --dino-mid:#73BF69;
+  --dino-light:#99D984;
+
+  --rose:#FF6B7A;
+
+  --r-window:26px;
+  --r-panel:20px;
+  --r-card:14px;
+  --r-chip:9px;
+
+  /* Las tres vienen de Google Fonts. Los respaldos no son decorativos: la primera
+     vez sin internet son lo único que queda, y "Helvetica Neue" no existe en
+     Windows — sin Segoe delante, la interfaz entera cae a Arial. */
+  --font-display:"Bricolage Grotesque","Segoe UI Variable Display","Segoe UI","Helvetica Neue",system-ui,sans-serif;
+  --font-body:"Instrument Sans","Segoe UI Variable Text","Segoe UI","Helvetica Neue",Arial,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"Cascadia Mono",Consolas,"SF Mono",Menlo,monospace;
+}
+
+*{box-sizing:border-box}
+/* Sin esto, un display:flex propio le gana al display:none del navegador
+   y el atributo `hidden` deja de ocultar nada. */
+[hidden]{display:none!important}
+
+body{
+  background:transparent;   /* la ventana es transparente: las esquinas dejan ver el escritorio */
+  color:var(--text);
+  font-family:var(--font-body);
+  font-size:14px;
+  line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+  height:100vh;
+  overflow:hidden;
+  margin:0;
+}
+
+/* ---------- ambient mesh: what the glass refracts ---------- */
+.mesh{
+  position:absolute;inset:-20%;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(46% 40% at 22% 24%, rgba(115,191,105,.24), transparent 62%),
+    radial-gradient(42% 44% at 80% 20%, rgba(11,70,35,.34), transparent 64%),
+    radial-gradient(50% 46% at 70% 82%, rgba(115,191,105,.14), transparent 62%),
+    radial-gradient(58% 52% at 28% 80%, rgba(12,58,40,.55), transparent 66%);
+  filter:blur(34px);
+  animation:drift 42s ease-in-out infinite alternate;
+}
+.grain{
+  position:absolute;inset:0;z-index:1;pointer-events:none;opacity:.45;
+  background-image:radial-gradient(rgba(255,255,255,.030) 1px, transparent 1px);
+  background-size:3px 3px;
+}
+@keyframes drift{
+  0%{transform:translate3d(0,0,0) scale(1)}
+  50%{transform:translate3d(2.5%,-2%,0) scale(1.06)}
+  100%{transform:translate3d(-2%,2.5%,0) scale(1.02)}
+}
+@media (prefers-reduced-motion:reduce){
+  .mesh{animation:none}
+  *{animation-duration:.01ms!important;transition-duration:.01ms!important}
+}
+
+/* ---------- the app icon, glass-cased ---------- */
+.app-icon{
+  --s:56px;
+  position:relative;flex:none;
+  width:var(--s);height:var(--s);
+  border-radius:calc(var(--s) * .27);
+  display:flex;align-items:center;justify-content:center;
+  overflow:hidden;
+  background:
+    linear-gradient(155deg, rgba(255,255,255,.17), rgba(115,191,105,.07) 48%, rgba(115,191,105,.20));
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.55),
+    inset 0 0 0 1px rgba(153,217,132,.34),
+    inset 0 calc(var(--s) * -.16) calc(var(--s) * .30) calc(var(--s) * -.18) rgba(115,191,105,.65),
+    0 0 calc(var(--s) * .42) calc(var(--s) * -.10) var(--green-glow),
+    0 calc(var(--s) * .16) calc(var(--s) * .36) calc(var(--s) * -.20) rgba(0,0,0,.9);
+}
+.app-icon::before{
+  content:"";position:absolute;top:6%;left:8%;width:40%;height:27%;
+  border-radius:50%;
+  background:linear-gradient(160deg, rgba(255,255,255,.80), rgba(255,255,255,0));
+  filter:blur(calc(var(--s) * .045));
+}
+.app-icon canvas{
+  position:relative;z-index:1;
+  width:70%;height:auto;image-rendering:pixelated;
+  filter:drop-shadow(0 0 calc(var(--s) * .10) rgba(115,191,105,.8));
+}
+
+/* ---------- app window ---------- */
+.app{
+  position:relative;
+  width:100%;max-width:none;
+  height:100vh;
+  border-radius:var(--r-window);
+  overflow:hidden;
+  display:flex;flex-direction:column;
+  /* .app ES la ventana, y el fondo va en dos declaraciones a propósito: el color
+     es lo único que cambia al encender el vidrio, y separado se puede animar.
+     Opaco es el estado de partida y el respaldo, no el destino. */
+  background-color:var(--ink);
+  background-image:linear-gradient(180deg, rgba(255,255,255,.055), transparent 132px);
+  transition:background-color .28s ease;
+  box-shadow:
+    inset 0 1px 0 var(--specular),
+    inset 0 0 0 1px var(--hairline),
+    0 46px 92px -22px rgba(0,0,0,.85),
+    0 10px 30px -12px rgba(0,0,0,.6);
+}
+
+/* ---------- vidrio de ventana ----------
+   `html.glass` lo pone el arranque, y solo si el sistema aplicó vidrio nativo detrás
+   de la ventana. Es la condición entera: sin ese desenfoque, bajar la opacidad no
+   deja ver vidrio, deja ver el escritorio, y el texto claro se pierde encima de lo
+   que sea que haya abierto. Por eso la interfaz nace opaca y se aclara después. */
+html.glass .app{background-color:var(--window-tint)}
+
+/* Sobre vidrio el fondo deja de ser casi negro y pasa a ser lo que haya detrás
+   desenfocado, que puede ser azul claro. Medido sobre la ventana real, el texto tenue
+   quedaba a 1.5:1 en la barra lateral —ilegible— y el atenuado a 2.4:1. El HIG de
+   Apple pide colores «vibrantes» sobre materiales: los dos tonos secundarios suben de
+   luminancia solo con vidrio (a ~3.2:1 y ~4.8:1 en el mismo sitio). Sin vidrio el
+   fondo es el de siempre y la paleta original ya contrastaba. */
+html.glass{--text-dim:#B4C4B8;--text-faint:#8FA093}
+
+/* El mesh es lo que el vidrio tiñe. Translúcida la ventana, el mesh pinta sobre el
+   escritorio y no sobre negro: al mismo valor taparía justo lo que deja pasar. */
+html.glass .mesh{opacity:.42}
+
+/* La regla de Apple para Liquid Glass: la transparencia es una preferencia del
+   sistema, no del diseño. Reducida, el vidrio se va y vuelve el fondo opaco. */
+@media (prefers-reduced-transparency:reduce){
+  html.glass .app{background-color:var(--ink)}
+  html.glass{--text-dim:#8B9C90;--text-faint:#56685C}
+}
+
+.titlebar{
+  position:relative;z-index:2;
+  height:48px;flex:none;
+  display:flex;align-items:center;gap:12px;
+  padding:0 16px;
+}
+.lights{display:flex;gap:8px}
+.lights button{width:11px;height:11px;border-radius:50%;display:block;border:0;padding:0;
+  cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.35);
+  transition:filter .15s ease}
+.lights button:hover{filter:brightness(1.25)}
+.lights button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.lights button[data-win="close"]{background:#FF5F57}
+.lights button[data-win="minimize"]{background:#FEBC2E}
+.lights button[data-win="maximize"]{background:#28C840}
+/* la barra arrastra la ventana, pero no cuando el gesto empieza en un control */
+.titlebar button,.titlebar .sync{-webkit-app-region:no-drag}
+
+/* ---------------- Windows: los controles van a la derecha ----------------
+   El HTML conserva el orden de macOS (cerrar, minimizar, maximizar, a la izquierda)
+   y aquí no se mueve ni un nodo: se reordena con `order`. Así cada convención vive
+   en una sola capa y ninguna de las dos tiene que saber de la otra. */
+html.win .titlebar{padding-right:0}
+html.win .wordmark{order:1}
+html.win .tb-right{order:2}
+html.win .lights{order:3;gap:0;align-self:stretch}
+html.win .lights button[data-win="minimize"]{order:1}
+html.win .lights button[data-win="maximize"]{order:2}
+html.win .lights button[data-win="close"]{order:3}
+
+html.win .lights button{
+  width:46px;height:auto;border-radius:0;
+  background:transparent;box-shadow:none;color:var(--text-dim);
+  display:flex;align-items:center;justify-content:center;
+  transition:background .12s ease,color .12s ease;
+}
+/* Segoe Fluent Icons es de Windows 11 y MDL2 el mismo juego en Windows 10; los
+   códigos son los que usa la barra de título del sistema. Van por CSS y no en el
+   HTML porque en macOS estos botones son círculos de color y no llevan icono. */
+html.win .lights button::before{
+  font-family:"Segoe Fluent Icons","Segoe MDL2 Assets";
+  font-size:10px;line-height:1;
+}
+html.win .lights button[data-win="minimize"]::before{content:"\E921"}
+html.win .lights button[data-win="maximize"]::before{content:"\E922"}
+html.win .lights button[data-win="close"]::before{content:"\E8BB"}
+/* Maximizada, el icono pasa a ser el de restaurar: dos cuadros superpuestos. */
+html.win.maximized .lights button[data-win="maximize"]::before{content:"\E923"}
+
+html.win .lights button:hover{background:var(--glass-2);color:var(--text);filter:none}
+/* El rojo de cerrar es el del sistema; el hover ocupa el botón entero, no un punto. */
+html.win .lights button[data-win="close"]:hover{background:#C42B1C;color:#fff}
+
+/* Windows 11 redondea sus ventanas a 8px. Los 26 de macOS se leen aquí como un
+   elemento ajeno; 10 conserva la suavidad del diseño sin desentonar. */
+html.win{--r-window:10px}
+
+.wordmark{
+  display:flex;align-items:center;gap:9px;margin-left:6px;
+  font-family:var(--font-display);font-weight:800;
+  font-size:13px;letter-spacing:.13em;text-transform:uppercase;
+}
+.tb-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.sync{
+  font-family:var(--font-mono);font-size:10.5px;letter-spacing:.03em;
+  color:var(--text-faint);display:flex;align-items:center;gap:6px;
+}
+.sync .pulse{width:6px;height:6px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 9px var(--green-glow);animation:blink 2.8s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ---------- rail + stage ---------- */
+.shell{position:relative;z-index:2;flex:1;display:flex;min-height:0}
+
+/* La barra lateral es la capa de navegación, y es lo único que va en vidrio de
+   verdad: el HIG de Apple pone Liquid Glass en la navegación y lo saca del contenido.
+   Flota —separada de los bordes, con esquinas propias— en vez de ser una franja
+   pegada con una línea: la separación la da la forma, no un borde.
+   Radio 18 con relleno 8 para que los botones de dentro, a 10, sean concéntricos. */
+.rail{
+  width:198px;flex:none;
+  margin:2px 0 10px 10px;
+  padding:12px 8px;
+  border-radius:18px;
+  display:flex;flex-direction:column;gap:18px;
+  min-height:0;
+  background:linear-gradient(180deg,rgba(255,255,255,.075),rgba(255,255,255,.03) 45%,rgba(255,255,255,.04));
+  backdrop-filter:blur(24px) saturate(160%);
+  -webkit-backdrop-filter:blur(24px) saturate(160%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.16),
+    inset 0 0 0 1px rgba(255,255,255,.07),
+    0 14px 34px -18px rgba(0,0,0,.7);
+}
+.nav{display:flex;flex-direction:column;gap:2px}
+.nav-label{
+  font-family:var(--font-mono);font-size:9.5px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--text-faint);
+  padding:0 10px;margin-bottom:7px;
+}
+/* La cabecera de la biblioteca lleva el `+`, como en Modrinth: es donde se busca
+   «añadir algo» sin tener que leer nada. */
+.nav-label-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-right:8px}
+/* Lo que se ilumina es del tamaño del glifo; lo que responde al clic es mayor.
+   Van con `.nav` delante a propósito: el `+` es un `<button>` dentro de `.nav`, así que
+   `.nav button` —ancho 100%, relleno y hover de fila— le ganaba en especificidad, y su
+   hover iluminaba toda la fila de «Biblioteca» (164px) en vez del glifo. */
+.nav .nav-add{
+  position:relative;flex:none;width:16px;height:16px;padding:0;border:0;cursor:pointer;
+  border-radius:50%;display:flex;align-items:center;justify-content:center;
+  color:var(--text-faint);background:transparent;
+  transition:color .16s ease,background .16s ease;
+}
+.nav .nav-add::after{content:"";position:absolute;inset:-8px}
+.nav .nav-add svg{width:10px;height:10px;fill:none;stroke:currentColor;stroke-width:2.6;stroke-linecap:round}
+.nav .nav-add:hover{color:var(--text);background:rgba(255,255,255,.08)}
+.nav .nav-add:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.nav-group{display:flex;flex-direction:column;gap:2px}
+
+/* ---------- biblioteca ----------
+   La cuadrícula es «lo que tengo»; Jugar es «lo que estoy jugando». Dos vistas con
+   un trabajo cada una, en vez de una sola que hace de escaparate y de mando a la vez.
+   `auto-fill` y no `auto-fit`: con un solo pack, `auto-fit` estiraría la tarjeta a lo
+   ancho de la ventana y una tarjeta de 900px no se lee como una tarjeta. */
+.libgrid{
+  display:grid;gap:12px;margin-top:18px;
+  grid-template-columns:repeat(auto-fill,minmax(212px,1fr));
+}
+.packtile{
+  position:relative;
+  display:flex;flex-direction:column;gap:12px;
+  border-radius:var(--r-card);padding:14px;
+  background:var(--glass-0);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+  transition:background .16s ease,box-shadow .16s ease,transform .16s cubic-bezier(.32,.72,0,1);
+}
+.packtile:hover{background:var(--glass-1);transform:translateY(-1.5px)}
+/* La seleccionada se marca con el acento, no con un tamaño distinto: una tarjeta más
+   grande rompería la retícula y costaría más de leer que de encontrar. */
+.packtile[data-state="selected"]{
+  background:var(--glass-1);
+  box-shadow:
+    inset 0 1px 0 var(--specular),
+    inset 0 0 0 1px rgba(115,191,105,.45),
+    0 10px 26px -14px var(--green-glow);
+}
+/* Toda la tarjeta selecciona. Va como un botón estirado por encima y no como un
+   `<button>` envolviendo el contenido, porque dentro hay otro botón —quitar— y un
+   botón dentro de otro no es HTML válido. */
+.tile-main{
+  position:absolute;inset:0;z-index:1;
+  border:0;background:none;cursor:pointer;border-radius:inherit;
+}
+.tile-main:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.tile-head{display:flex;align-items:center;gap:11px;min-width:0}
+.tile-id{min-width:0}
+.tile-name{font-size:13.5px;font-weight:600;line-height:1.2;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile-meta{font-family:var(--font-mono);font-size:9.5px;color:var(--text-faint);margin-top:3px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile-foot{display:flex;align-items:center;gap:8px;min-width:0}
+.tile-badge{
+  flex:none;font-family:var(--font-mono);font-size:9px;letter-spacing:.10em;
+  text-transform:uppercase;border-radius:var(--r-chip);padding:4px 7px;
+  color:var(--text-dim);background:var(--glass-1);
+  box-shadow:inset 0 0 0 1px var(--hairline);
+}
+.packtile[data-state="selected"] .tile-badge{
+  color:#04170A;background:var(--green);box-shadow:none;font-weight:600;
+}
+/* Solo descargada: existe en la lista pero no en el disco. Se dice con palabras en
+   la chapa; bajarle la opacidad a la tarjeta entera la haría parecer desactivada. */
+.packtile[data-state="downloaded"] .tile-badge{color:var(--text-faint)}
+.tile-server{
+  font-family:var(--font-mono);font-size:9.5px;color:var(--text-faint);
+  min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-left:auto;
+}
+.tile-remove{
+  position:absolute;z-index:2;top:9px;right:9px;
+  width:22px;height:22px;padding:0;border:0;cursor:pointer;border-radius:7px;
+  display:flex;align-items:center;justify-content:center;
+  color:var(--text-faint);background:transparent;
+  transition:color .16s ease,background .16s ease;
+}
+.tile-remove svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round}
+.tile-remove:hover{color:#FFD8DD;background:rgba(255,107,122,.18)}
+.tile-remove:focus-visible{outline:2px solid var(--rose);outline-offset:2px}
+
+/* Con una partida abierta, el resto de packs dejan de invitar a jugar: solo hay una
+   sesión a la vez, y una tarjeta que responde al clic estaría prometiendo lo que no
+   puede cumplir. La que juega se queda entera y con el punto vivo. */
+.libgrid[data-session] .packtile:not([data-playing]){opacity:.45}
+.libgrid[data-session] .packtile:not([data-playing]) .tile-main,
+.libgrid[data-session] .packtile:not([data-playing]) .tile-remove{pointer-events:none}
+.libgrid[data-session] .packtile:not([data-playing]):hover{transform:none;background:var(--glass-0)}
+.tile-live{display:none;align-items:center;gap:6px;font-size:10.5px;color:var(--green);font-weight:600}
+.packtile[data-playing] .tile-live{display:flex}
+.packtile[data-playing] .tile-badge{display:none}
+.packtile[data-playing] .dot-live{animation:blink 2.8s ease-in-out infinite}
+
+/* El `+` es una tarjeta más, como en Modrinth: aparece donde ya estás mirando packs,
+   con el mismo tamaño y en el mismo sitio de la retícula. El del rail se queda como
+   atajo desde cualquier vista. */
+.packtile-add{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+  min-height:118px;border-radius:var(--r-card);cursor:pointer;
+  border:1px dashed rgba(255,255,255,.14);background:transparent;
+  color:var(--text-faint);
+  font-family:var(--font-body);font-size:12.5px;font-weight:500;
+  transition:color .16s ease,border-color .16s ease,background .16s ease;
+}
+.packtile-add svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round}
+.packtile-add:hover{color:var(--text);border-color:rgba(115,191,105,.5);background:rgba(115,191,105,.05)}
+.packtile-add:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+
+.lib-empty{
+  grid-column:1/-1;padding:6px 2px 0;
+  font-size:12.5px;color:var(--text-faint);
+}
+
+/* ---------- quitar un pack ----------
+   Dos acciones distintas y separadas, no una casilla y un aceptar: quitar de la lista
+   se deshace volviendo a añadirlo, y borrar los archivos se lleva los mundos del
+   jugador. Con una casilla, las dos caben en el mismo clic distraído; con dos botones
+   hay que elegir cuál se pulsa, y el que no se deshace además se arma. */
+.remove-choices{display:flex;flex-direction:column;gap:10px;margin-top:4px}
+.remove-choice{
+  border-radius:var(--r-card);padding:12px 13px;
+  background:var(--glass-1);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+}
+.remove-choice .rc-t{font-size:12.5px;font-weight:600}
+.remove-choice .rc-s{font-size:11.5px;color:var(--text-dim);margin-top:3px;line-height:1.45}
+.remove-choice .btn,.remove-choice .danger-btn{margin-top:10px;width:100%}
+.remove-choice .danger-btn{border-radius:10px;padding:9px 16px;font-size:13px}
+.remove-choice .rc-s b{color:var(--text);font-weight:600}
+.remove-detail{
+  font-family:var(--font-mono);font-size:10px;color:var(--text-faint);margin-top:5px;
+}
+
+/* Segmentado: importar y publicar son la misma pestaña porque son la misma tarea
+   —poner un modpack en circulación— por dos caminos, y las dos son solo de admin. */
+.seg{
+  display:inline-flex;gap:3px;padding:3px;margin:16px 0 0;
+  border-radius:11px;background:rgba(0,0,0,.26);
+  box-shadow:inset 0 0 0 1px var(--hairline);
+}
+.seg button{
+  border:0;cursor:pointer;border-radius:8px;padding:7px 14px;
+  font-family:var(--font-body);font-size:12.5px;font-weight:600;
+  color:var(--text-dim);background:transparent;
+  transition:color .16s ease,background .16s ease;
+}
+.seg button:hover{color:var(--text)}
+.seg button[aria-selected="true"]{
+  color:var(--text);background:var(--glass-2);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+}
+.seg button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.nav button{
+  display:flex;align-items:center;gap:11px;
+  width:100%;padding:9px 10px;
+  border:0;border-radius:10px;
+  background:transparent;color:var(--text-dim);
+  font-family:var(--font-body);font-size:13.5px;font-weight:500;
+  cursor:pointer;text-align:left;
+  transition:background .18s ease,color .18s ease;
+}
+.nav button svg{width:16px;height:16px;flex:none;stroke-width:1.7}
+.nav button:hover{background:var(--glass-1);color:var(--text)}
+.nav button[aria-selected="true"]{
+  background:var(--glass-2);color:var(--text);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+}
+.nav button[aria-selected="true"] svg{color:var(--green)}
+.nav button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+
+.rail-spacer{flex:1}
+
+/* Dentro de la barra de vidrio, una tarjeta con su propio borde sería vidrio sobre
+   vidrio. Es una fila separada por una línea, como el perfil al pie de una barra.
+
+   Y ahora se pulsa —abre el cambio de cuenta—, así que tiene que parecerlo: cursor,
+   realce al pasar por encima y anillo de foco. La línea de separación pasa a un
+   pseudoelemento porque el realce es redondeado, y un borde recto cruzando una esquina
+   redondeada se lee como un recorte. El relleno se iguala por abajo: de fila estática
+   llevaba 2px, y con realce el texto quedaba pegado al canto. */
+.account{
+  position:relative;
+  margin:13px 2px 0;padding:10px 8px;
+  display:flex;flex-direction:column;gap:9px;
+  border-radius:12px;cursor:pointer;
+  transition:background .16s ease;
+}
+.account::before{
+  content:"";position:absolute;left:6px;right:6px;top:-13px;height:1px;
+  background:rgba(255,255,255,.07);
+}
+.account:hover{background:rgba(255,255,255,.07)}
+.account:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.account-row{display:flex;align-items:center;gap:9px}
+.account canvas{width:30px;height:30px;border-radius:7px;image-rendering:pixelated;flex:none}
+.account-name{font-weight:600;font-size:13px;line-height:1.15}
+.account-kind{font-family:var(--font-mono);font-size:9.5px;color:var(--text-faint);letter-spacing:.04em}
+
+.switch{
+  width:34px;height:19px;border-radius:99px;border:0;cursor:pointer;padding:2px;
+  background:var(--glass-2);box-shadow:inset 0 0 0 1px var(--hairline);
+  display:flex;align-items:center;transition:background .2s ease;
+}
+.switch b{width:15px;height:15px;border-radius:50%;background:#C3CEC6;display:block;
+  transition:transform .2s cubic-bezier(.32,.72,0,1),background .2s ease}
+.switch[aria-checked="true"]{background:linear-gradient(160deg,var(--green),var(--green-deep))}
+.switch[aria-checked="true"] b{transform:translateX(15px);background:#04170A}
+.switch:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+
+/* ---------- stage ---------- */
+.stage{flex:1;min-width:0;overflow-y:auto;padding:24px 26px 28px;
+  /* Borde de scroll, como el de Apple: sin línea bajo la barra de título, lo que sube
+     se desvanece al llegar arriba en vez de cortarse en seco. */
+  -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 20px);
+  mask-image:linear-gradient(to bottom,transparent 0,#000 20px)}
+.stage::-webkit-scrollbar{width:9px}
+.stage::-webkit-scrollbar-thumb{background:rgba(255,255,255,.09);border-radius:99px;
+  border:2px solid transparent;background-clip:padding-box}
+
+.view{display:none;animation:rise .34s cubic-bezier(.22,.68,0,1) both}
+.view.on{display:block}
+@keyframes rise{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+
+.eyebrow{
+  font-family:var(--font-mono);font-size:10px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--text-faint);margin-bottom:9px;
+}
+h1{
+  font-family:var(--font-display);font-weight:700;
+  font-size:27px;line-height:1.1;letter-spacing:-.022em;
+  margin:0 0 4px;text-wrap:balance;
+}
+h2{font-family:var(--font-display);font-weight:700;font-size:16px;letter-spacing:-.012em;margin:0}
+.sub{color:var(--text-dim);font-size:13.5px;margin:0}
+
+/* ---------- hero ---------- */
+.hero{
+  border-radius:var(--r-panel);
+  padding:26px;
+  display:grid;grid-template-columns:1fr auto;gap:28px;align-items:center;
+  position:relative;overflow:hidden;
+  background:
+    linear-gradient(118deg, rgba(115,191,105,.13), rgba(11,70,35,.10) 54%, transparent 80%),
+    var(--glass-1);
+  backdrop-filter:blur(28px) saturate(175%);
+  -webkit-backdrop-filter:blur(28px) saturate(175%);
+  box-shadow:
+    inset 0 1px 0 var(--specular),
+    inset 0 0 0 1px var(--hairline),
+    0 18px 42px -24px rgba(0,0,0,.85);
+}
+.hero::after{
+  content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:linear-gradient(180deg,rgba(255,255,255,.09),transparent 22%);
+  mix-blend-mode:overlay;
+}
+.hero-left{min-width:0;position:relative;z-index:1;display:flex;gap:18px;align-items:center}
+.pack-title{
+  font-family:var(--font-display);font-weight:800;
+  /* Cede tamaño antes que partirse una línea más. El botón de Jugar ahora puede decir
+     «Instalar · 387 MB», que es ~85px más ancho que «Jugar», y ese ancho sale de esta
+     columna: con la ventana en su mínimo y un nombre largo, el título se iba a cuatro
+     líneas. Entre 900 y 1200 baja de 33 a 26 y vuelve a caber en tres. */
+  font-size:clamp(26px, 2.4vw + 10px, 33px);
+  line-height:1.02;letter-spacing:-.032em;margin:0 0 9px;
+}
+.metaline{
+  font-family:var(--font-mono);font-size:11.5px;color:var(--text-dim);
+  display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:15px;
+}
+/* El separador va DENTRO del dato que le sigue, no suelto entre los dos. Como la línea
+   envuelve (`flex-wrap`), un punto suelto es un elemento más y puede quedarse el último
+   de su renglón, colgando sin nada detrás: parece una errata. Metido en el mismo
+   elemento que el texto, los dos envuelven juntos y eso no puede pasar.
+   El `<i>` sigue en el HTML —lo escribe el JS— pero ya no se pinta: así el arreglo no
+   obliga a tocar quien genera la línea. */
+.metaline i{display:none}
+.metaline i + span{display:flex;align-items:center;gap:8px}
+.metaline i + span::before{
+  content:"";width:3px;height:3px;border-radius:50%;
+  background:var(--text-faint);flex:none;
+}
+
+.chips{display:flex;flex-wrap:wrap;gap:7px}
+.chip{
+  border-radius:var(--r-chip);padding:5px 9px;
+  font-family:var(--font-mono);font-size:10.5px;letter-spacing:.02em;color:var(--text-dim);
+  background:var(--glass-1);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+  white-space:nowrap;
+}
+.chip b{color:var(--text);font-weight:500}
+
+.hero-right{display:flex;flex-direction:column;gap:11px;position:relative;z-index:1}
+
+.play{
+  border:0;cursor:pointer;border-radius:16px;
+  /* 38 de lado era holgado cuando el botón decía una palabra; ahora puede llevar una
+     línea entera, y ese holgor se lo quitaba al título de al lado. */
+  padding:16px 30px;
+  font-family:var(--font-display);font-weight:700;font-size:16px;
+  white-space:nowrap;
+  color:#04170A;
+  background:linear-gradient(165deg,#99D984,var(--green) 48%,var(--green-hot) 78%,var(--green-deep));
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.5),
+    inset 0 -1px 0 rgba(0,0,0,.2),
+    0 12px 30px -10px var(--green-glow),
+    0 2px 6px rgba(0,0,0,.4);
+  transition:transform .16s cubic-bezier(.32,.72,0,1),box-shadow .16s ease;
+  display:flex;align-items:center;justify-content:center;gap:9px;
+}
+.play:hover{transform:translateY(-1.5px);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 18px 40px -10px rgba(115,191,105,.6),0 2px 6px rgba(0,0,0,.4)}
+.play:active{transform:translateY(0)}
+.play:focus-visible{outline:2px solid #fff;outline-offset:3px}
+.play svg{width:15px;height:15px;fill:currentColor}
+
+.server{
+  border-radius:var(--r-card);padding:12px 14px;
+  background:var(--glass-0);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+  display:flex;flex-direction:column;gap:7px;min-width:222px;
+}
+.server-top{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600}
+.dot-live{width:7px;height:7px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 10px var(--green-glow);flex:none}
+.server-stats{
+  font-family:var(--font-mono);font-size:10.5px;color:var(--text-faint);
+  display:flex;gap:10px;align-items:center;font-variant-numeric:tabular-nums;
+}
+
+/* ---------- panels / ajustes / admin ---------- */
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+/* `minmax(0,…)` y no `1fr` a secas: `1fr` no encoge por debajo de su contenido, y la
+   ruta de la instancia, en una sola línea, ensanchaba su columna hasta dejar Memoria
+   y Java en 185px. Ajustes reparte 5:7 porque a la izquierda van controles compactos
+   y a la derecha pares clave-valor con rutas largas. */
+.two-settings{grid-template-columns:minmax(0,5fr) minmax(0,7fr)}
+@media (max-width:880px){.two,.two-settings{grid-template-columns:minmax(0,1fr)}}
+
+.panel{
+  border-radius:var(--r-panel);padding:18px;
+  background:var(--glass-0);
+  backdrop-filter:blur(22px) saturate(165%);
+  -webkit-backdrop-filter:blur(22px) saturate(165%);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+}
+.panel h2{margin-bottom:3px}
+.panel .sub{font-size:12.5px;margin-bottom:15px}
+
+.ram-top{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:9px}
+.ram-val{font-family:var(--font-mono);font-size:19px;font-weight:700;color:var(--green);
+  font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.ram-val small{font-size:11px;color:var(--text-faint);font-weight:400;margin-left:3px}
+input[type=range]{
+  -webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:99px;
+  background:linear-gradient(90deg,var(--green-hot) var(--fill,45%),rgba(255,255,255,.09) var(--fill,45%));
+  box-shadow:inset 0 0 0 1px var(--hairline);cursor:pointer;
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:17px;height:17px;border-radius:50%;
+  background:#EEF6EF;border:0;cursor:grab;
+  box-shadow:0 2px 8px rgba(0,0,0,.6),inset 0 -1px 0 rgba(0,0,0,.2);
+}
+input[type=range]::-moz-range-thumb{
+  width:17px;height:17px;border-radius:50%;background:#EEF6EF;border:0;cursor:grab;
+  box-shadow:0 2px 8px rgba(0,0,0,.6);
+}
+input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4px}
+.ram-scale{display:flex;justify-content:space-between;margin-top:6px;
+  font-family:var(--font-mono);font-size:9.5px;color:var(--text-faint)}
+
+.field{display:flex;flex-direction:column;gap:5px;margin-top:14px}
+.field label{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--text-faint)}
+.field input,.field select{
+  width:100%;border:0;border-radius:10px;padding:9px 11px;
+  background:var(--glass-1);color:var(--text);
+  font-family:var(--font-body);font-size:13px;
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+}
+.field input:focus,.field select:focus{outline:2px solid var(--green);outline-offset:1px}
+
+.args{
+  border-radius:10px;padding:10px 12px;
+  background:rgba(0,0,0,.32);
+  box-shadow:inset 0 0 0 1px var(--hairline);
+  font-family:var(--font-mono);font-size:11px;line-height:1.7;
+  color:var(--text-dim);overflow-wrap:anywhere;
+}
+.args b{color:var(--green);font-weight:400}
+
+.kv{display:flex;flex-direction:column}
+.kv-row{display:flex;align-items:center;gap:12px;padding:10px 0;
+  border-bottom:1px solid rgba(255,255,255,.05)}
+.kv-row:last-child{border-bottom:0}
+.kv-row .k{font-size:12.5px;color:var(--text-dim);flex:none;width:112px}
+.kv-row .v{font-family:var(--font-mono);font-size:11.5px;color:var(--text);
+  flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* La ruta se parte en vez de cortarse: lo que importa de una ruta es el final, que
+   es justo lo que se come una elipsis. */
+.kv-row .v.v-wrap{white-space:normal;overflow-wrap:anywhere;line-height:1.45}
+
+.field-switch{
+  display:flex;align-items:center;gap:12px;margin-top:14px;
+  border-radius:var(--r-card);padding:11px 13px;
+  background:var(--glass-0);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+}
+.field-switch>div{flex:1;min-width:0}
+.field-switch .fs-t{font-size:12.5px;font-weight:600;line-height:1.25}
+.field-switch .fs-s{font-family:var(--font-mono);font-size:9.5px;color:var(--text-faint);margin-top:3px}
+
+.drop{
+  border-radius:var(--r-card);
+  border:1.5px dashed rgba(255,255,255,.15);
+  padding:28px 16px;text-align:center;
+  display:flex;flex-direction:column;align-items:center;gap:7px;
+  transition:border-color .2s ease,background .2s ease;cursor:pointer;
+}
+.drop:hover{border-color:rgba(115,191,105,.5);background:rgba(115,191,105,.045)}
+.drop svg{width:22px;height:22px;color:var(--green);stroke-width:1.6}
+.drop .t{font-size:13px;font-weight:600}
+.drop .h{font-family:var(--font-mono);font-size:10px;color:var(--text-faint)}
+
+
+.note{
+  margin-top:15px;border-radius:var(--r-card);padding:11px 13px;
+  background:rgba(115,191,105,.055);
+  box-shadow:inset 0 0 0 1px rgba(115,191,105,.18);
+  font-size:12.5px;color:#CDE6C2;line-height:1.5;
+}
+.note b{color:var(--green);font-weight:600}
+.mono-i{font-family:var(--font-mono);font-size:11.5px;color:var(--text)}
+
+
+/* Aviso de versión nueva del launcher. Verde, no rojo: no es un fallo, es una
+   invitación — y vive fuera del contenido porque no depende de que haya modpack. */
+.upbar{
+  position:relative;z-index:2;flex:none;
+  display:flex;align-items:center;gap:12px;
+  padding:9px 16px;
+  background:rgba(115,191,105,.10);
+  box-shadow:inset 0 -1px 0 rgba(115,191,105,.22);
+  font-size:12.5px;color:var(--text);
+}
+.upbar-txt{flex:1;line-height:1.4}
+.upbar-txt b{color:var(--green);font-weight:600}
+.upbar-btn{
+  flex:none;padding:6px 14px;border-radius:var(--r-chip);
+  border:1px solid rgba(115,191,105,.35);background:rgba(115,191,105,.16);
+  color:var(--text);font-family:var(--font-body);font-size:12px;font-weight:600;
+  cursor:pointer;transition:background .15s ease;
+}
+.upbar-btn:hover{background:rgba(115,191,105,.26)}
+.upbar-btn:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.upbar-btn[disabled]{opacity:.55;cursor:default}
+
+.alert-raw{
+  display:block;margin-top:7px;
+  font-family:var(--font-mono);font-size:10.5px;line-height:1.5;
+  /* El color sale del propio aviso y no del gris de siempre: un gris verdoso dentro de
+     un recuadro rosa se lee como un fallo de pintado. Es el tono del aviso, más
+     apagado, porque esto es el detalle técnico y no el mensaje. */
+  color:rgba(245,201,206,.62);
+  overflow-wrap:anywhere;
+}
+.alert{
+  margin-top:16px;border-radius:var(--r-card);padding:12px 14px;
+  background:rgba(255,107,122,.09);
+  box-shadow:inset 0 0 0 1px rgba(255,107,122,.28);
+  font-size:12.5px;color:#F5C9CE;line-height:1.5;
+}
+.alert b{color:var(--rose);font-weight:600}
+
+/* el botón Jugar lleva su propio progreso: no hace falta tapar la pantalla */
+.play{position:relative;overflow:hidden}
+.play::after{
+  content:"";position:absolute;left:0;top:0;bottom:0;
+  width:var(--p,0%);
+  background:rgba(255,255,255,.24);
+  transition:width .25s ease;pointer-events:none;
+}
+.play > *{position:relative;z-index:1}
+.play[disabled]{cursor:progress;filter:saturate(.75)}
+
+.drop.over{border-color:var(--green);background:rgba(115,191,105,.10)}
+
+/* ---------- primer arranque ---------- */
+/* `.overlay` y `.overlay-card` son los nombres genéricos; `.onboard` y `.ob-card`
+   se quedan porque el primer arranque ya los usa. Misma regla, no una copia. */
+.onboard,.overlay{
+  position:absolute;inset:0;z-index:20;
+  background:rgba(3,6,10,.74);
+  backdrop-filter:blur(34px) saturate(150%);
+  -webkit-backdrop-filter:blur(34px) saturate(150%);
+  display:flex;align-items:center;justify-content:center;
+  padding:32px 24px;animation:fade .3s ease both;
+}
+.onboard[hidden]{display:none}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+
+.ob-card,.overlay-card{
+  width:100%;max-width:450px;
+  border-radius:var(--r-panel);padding:28px;
+  background:linear-gradient(165deg,rgba(115,191,105,.10),transparent 58%),var(--glass-2);
+  backdrop-filter:blur(30px) saturate(180%);
+  -webkit-backdrop-filter:blur(30px) saturate(180%);
+  box-shadow:
+    inset 0 1px 0 var(--specular),
+    inset 0 0 0 1px var(--hairline-strong),
+    0 42px 82px -24px rgba(0,0,0,.9);
+  display:flex;flex-direction:column;
+}
+.ob-dots{display:flex;gap:5px;margin-bottom:22px}
+.ob-dots i{height:3px;flex:1;border-radius:99px;background:rgba(255,255,255,.10);
+  transition:background .3s ease}
+.ob-dots i.done{background:var(--green)}
+
+.ob-step{display:none;flex-direction:column;gap:15px;
+  animation:rise .3s cubic-bezier(.22,.68,0,1) both}
+.ob-step.on{display:flex}
+.ob-from{font-size:13px;color:var(--text-dim)}
+.ob-from b{color:var(--text);font-weight:600}
+.ob-title{font-family:var(--font-display);font-weight:800;
+  font-size:26px;line-height:1.06;letter-spacing:-.03em;margin:0}
+.ob-body{font-size:13.5px;color:var(--text-dim);line-height:1.55;margin:0}
+
+/* --- setup de primera vez: las dos puertas de entrada --- */
+.choice{display:flex;flex-direction:column;gap:10px;margin-top:18px}
+.choice button{
+  display:flex;flex-direction:column;align-items:flex-start;gap:3px;
+  padding:14px 16px;text-align:left;cursor:pointer;
+  border-radius:var(--r-card);border:1px solid var(--hairline);
+  background:var(--glass-1);color:var(--text);
+  font-family:var(--font-body);font-size:13.5px;font-weight:600;
+  transition:background .15s ease,border-color .15s ease;
+}
+.choice button:hover{background:var(--glass-2);border-color:var(--hairline-strong)}
+.choice button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.choice button small{font-weight:400;font-size:11.5px;color:var(--text-dim);line-height:1.45}
+.choice button[disabled]{opacity:.5;cursor:not-allowed}
+.link-min{
+  background:none;border:0;padding:0;margin-top:14px;cursor:pointer;
+  font-family:var(--font-mono);font-size:10.5px;letter-spacing:.02em;
+  color:var(--text-faint);text-decoration:underline;text-underline-offset:3px;
+}
+.link-min:hover{color:var(--text-dim)}
+
+.ob-foot{display:flex;gap:9px;align-items:center;margin-top:22px;
+  padding-top:17px;border-top:1px solid rgba(255,255,255,.065)}
+.ob-foot .btn{flex:none;padding:10px 18px}
+.ob-foot .grow{flex:1}
+.ob-skip{background:none;border:0;color:var(--text-faint);cursor:pointer;
+  font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+  padding:6px 8px;border-radius:6px}
+.ob-skip:hover{color:var(--text-dim)}
+.ob-skip:focus-visible{outline:2px solid var(--green);outline-offset:1px}
+
+/* ---------- la invitación ----------
+   Es la continuación de la página web del link: quien pulsa «Abrir en Dino Launcher»
+   tiene que encontrarse la misma tarjeta —centrada, el icono arriba, «te invitaron a
+   jugar», el nombre grande, el botón verde en cápsula— y no una pantalla nueva que
+   tenga que volver a leer. Va con `.invite` para no tocar el setup de primera vez,
+   que comparte `.ob-card`, `.ob-step` y `.ob-foot`. */
+.ob-card.invite{
+  max-width:420px;border-radius:30px;padding:26px 28px 20px;
+  text-align:center;
+  background:linear-gradient(180deg,rgba(255,255,255,.09),rgba(255,255,255,.035) 42%,rgba(255,255,255,.045));
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.20),
+    inset 0 0 0 1px rgba(255,255,255,.08),
+    0 44px 90px -34px rgba(0,0,0,.9),
+    0 12px 32px -16px rgba(0,0,0,.6);
+}
+/* El progreso son tres rayas cortas y centradas: dicen en qué paso vas sin ocupar el
+   ancho entero como si fueran una barra de carga. */
+.invite .ob-dots{width:84px;align-self:center;margin-bottom:26px}
+.invite .ob-step{align-items:center;gap:0}
+/* La tarjeta no cambia de tamaño entre pasos: «Preparando» tiene la mitad de
+   contenido que los otros dos, y encogerla y volverla a crecer era un tirón.
+   Cambia lo de dentro, no el marco. */
+.ob-card.invite{min-height:452px}
+.invite .ob-step.on{flex:1;justify-content:center}
+.invite .ob-step > .app-icon{margin-bottom:20px}
+.invite-eyebrow{
+  font-family:var(--font-mono);font-size:10.5px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--text-faint);
+}
+.invite .ob-title{
+  margin-top:7px;font-size:30px;line-height:1.08;letter-spacing:-.022em;
+  text-wrap:balance;overflow-wrap:anywhere;
+}
+.invite .chips{justify-content:center;margin-top:14px}
+.invite .ob-body{margin-top:14px;max-width:34ch;text-wrap:pretty}
+.invite .bar{width:100%;margin-top:22px}
+.invite .bar-meta{width:100%}
+.invite .server{align-self:stretch;min-width:0;margin-top:16px}
+.invite .server-top,.invite .server-stats{justify-content:center}
+/* El pie es el de una alerta de Apple: la acción principal ancha arriba, y debajo,
+   en pequeño, la de salir. Sin línea de separación: la separa el aire. */
+.invite .ob-foot{
+  flex-direction:column;align-items:stretch;gap:4px;
+  margin-top:26px;padding-top:0;border-top:0;
+}
+.invite .ob-foot .btn{
+  padding:14px 20px;border-radius:999px;
+  font-family:var(--font-display);font-weight:700;font-size:15.5px;
+}
+.invite .ob-skip{align-self:center;margin-top:6px}
+
+.code{display:flex;gap:7px;justify-content:center;padding:4px 0 0}
+.code span{
+  font-family:var(--font-mono);font-weight:700;font-size:23px;letter-spacing:.04em;
+  width:36px;height:46px;border-radius:10px;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--glass-1);color:var(--text);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+}
+.code span.sep{width:12px;background:none;box-shadow:none;color:var(--text-faint)}
+
+.bar{height:7px;border-radius:99px;background:rgba(255,255,255,.08);
+  box-shadow:inset 0 0 0 1px var(--hairline);overflow:hidden}
+/* El ancho entra por `--frac` y no por `style.width` a propósito: un estilo en
+   línea le gana a cualquier selector, y entonces el modo indeterminado de abajo
+   no podría imponer el ancho de su segmento. Se pone con
+   `bar.style.setProperty("--frac", pct + "%")`. */
+.bar b{display:block;height:100%;width:var(--frac,0%);border-radius:99px;
+  background:linear-gradient(90deg,var(--green-deep),var(--green));
+  box-shadow:0 0 14px var(--green-glow);
+  transition:width .3s cubic-bezier(.22,.68,0,1)}
+.bar-meta{display:flex;justify-content:space-between;margin-top:7px;
+  font-family:var(--font-mono);font-size:10.5px;color:var(--text-faint);
+  font-variant-numeric:tabular-nums}
+
+/* ---------- barra indeterminada ----------
+   El motor no publica porcentaje: el número vive dentro de su diálogo Qt y de ahí
+   no sale. Así que la barra no puede fingir que sabe cuánto queda. Un segmento que
+   barre el carril dice «sigo trabajando» y no dice nada más, que es exactamente lo
+   que sabemos. Los extremos del degradado van a transparente para que se lea como
+   luz pasando por detrás y no como un bloque que va y viene. */
+.bar[data-indeterminate] b{
+  width:38%;
+  background:linear-gradient(90deg,transparent,var(--green-hot) 20%,var(--green) 52%,var(--dino-light) 70%,transparent);
+  box-shadow:none;
+  transition:none;
+  animation:sweep 1.5s cubic-bezier(.6,.05,.4,.95) infinite;
+}
+/* 263% = 100/38: lo que tiene que recorrer el segmento, medido en anchos de sí
+   mismo, para entrar y salir del carril entero por el otro lado. */
+@keyframes sweep{
+  from{transform:translateX(-100%)}
+  to{transform:translateX(263%)}
+}
+/* La regla global de movimiento reducido deja toda animación en 0.01ms, pero
+   `sweep` es infinita: a esa duración no se para, se reinicia miles de veces por
+   segundo y el segmento salta de sitio en cada frame. Hay que apagarla por nombre
+   —`animation:none`, que el `!important` global no toca porque solo fija la
+   duración—; bajarla no vale. Sin movimiento, el carril se llena a media luz: dice
+   «en marcha» sin inventarse un porcentaje. */
+@media (prefers-reduced-motion:reduce){
+  .bar[data-indeterminate] b{
+    animation:none;
+    width:100%;transform:none;opacity:.55;
+    background:linear-gradient(90deg,var(--green-deep),var(--green-hot));
+  }
+}
+
+/* ---------- progreso de arranque ----------
+   Vive en el hueco del botón Jugar: el control se convierte en su propio progreso
+   en vez de abrir nada encima — que es justo lo que estamos quitando al ocultar la
+   ventana del motor. Sin `backdrop-filter` propio a propósito: `.hero` ya es vidrio,
+   y apilar vidrio sobre vidrio es lo que el HIG de Apple dice que no se haga. */
+.launch{min-width:252px;display:flex;flex-direction:column;gap:9px}
+.launch .bar{height:9px}
+.launch-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.launch-phase{
+  font-size:13px;font-weight:600;color:var(--text);
+  min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+/* Tabular para que el contador no baile de ancho al cambiar de cifra. */
+.launch-amt{
+  flex:none;font-family:var(--font-mono);font-size:10.5px;
+  color:var(--text-faint);font-variant-numeric:tabular-nums;
+}
+.launch-foot{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.launch-hint{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.04em;color:var(--text-faint)}
+.launch-cancel{
+  flex:none;border:0;cursor:pointer;border-radius:8px;padding:5px 11px;
+  font-family:var(--font-body);font-size:11.5px;font-weight:500;
+  color:var(--text-dim);background:var(--glass-1);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+  transition:color .16s ease,background .16s ease,box-shadow .16s ease;
+}
+/* Cancelar no es destructivo hasta que se pulsa, así que el rojo aparece al ir
+   hacia él y no antes: en reposo es un control tranquilo más. */
+.launch-cancel:hover{
+  color:#FFD8DD;background:rgba(255,107,122,.16);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 0 0 1px rgba(255,107,122,.34);
+}
+.launch-cancel:focus-visible{outline:2px solid var(--rose);outline-offset:2px}
+.launch-cancel[disabled]{opacity:.5;cursor:default}
+
+/* ---------- estado «jugando» ----------
+   El tercero de `.hero-right`: jugar → preparando → jugando → jugar. Reutiliza
+   `.dot-live` del panel de servidor, que en esta interfaz ya significa «esto está
+   vivo», con el latido de `.sync .pulse` — un punto quieto dice «configurado», uno
+   que late dice «ahora mismo». */
+.session{
+  min-width:252px;
+  display:flex;flex-direction:column;gap:11px;
+}
+.session-head{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600}
+.session .dot-live{animation:blink 2.8s ease-in-out infinite}
+.session-name{
+  margin-left:auto;min-width:0;
+  font-family:var(--font-mono);font-size:10.5px;color:var(--text-faint);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+
+/* Detener no es Cancelar, y la diferencia no es de grado. Cancelar tira una descarga
+   a medias y se vuelve a empezar; detener mata una partida en marcha y puede costar
+   lo que no se haya guardado. Encima cae justo donde estaba el botón de Jugar: quien
+   vuelve del juego y pulsa por costumbre mata su propia sesión. Por eso en reposo no
+   es un slab rojo esperando un clic distraído — es rojo, se ve que es destructivo,
+   pero pide un segundo clic para hacerlo. */
+/* `.danger-btn` es el nombre genérico del botón destructivo que se arma; `.stop`
+   se queda porque la sesión de juego ya lo usa. Misma regla, no una copia. */
+.stop,.danger-btn{
+  border:0;cursor:pointer;border-radius:14px;
+  padding:13px 20px;
+  display:flex;align-items:center;justify-content:center;gap:9px;
+  font-family:var(--font-display);font-weight:700;font-size:14.5px;
+  color:#FFD8DD;
+  background:rgba(255,107,122,.10);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.10),inset 0 0 0 1px rgba(255,107,122,.34);
+  transition:background .16s ease,color .16s ease,box-shadow .16s ease,
+             transform .16s cubic-bezier(.32,.72,0,1);
+}
+.stop svg,.danger-btn svg{width:13px;height:13px;fill:currentColor;flex:none}
+.stop:hover,.danger-btn:hover{background:rgba(255,107,122,.18);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 0 0 1px rgba(255,107,122,.50)}
+.stop:active,.danger-btn:active{transform:translateY(1px)}
+.stop:focus-visible,.danger-btn:focus-visible{outline:2px solid var(--rose);outline-offset:3px}
+
+/* Armado: el siguiente clic sí mata la partida, así que ahora sí es un slab lleno.
+   Es el negativo exacto del botón de Jugar —mismo peso, mismo texto oscuro sobre
+   color— para que se lea de un vistazo que esto es lo contrario de aquello. */
+.stop[data-armed],.danger-btn[data-armed]{
+  color:#2A0206;
+  background:linear-gradient(165deg,#FF9AA5,var(--rose) 52%,#E23D50);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.5),
+    inset 0 -1px 0 rgba(0,0,0,.2),
+    0 12px 30px -10px rgba(255,107,122,.5),
+    0 2px 6px rgba(0,0,0,.4);
+}
+/* Las dos etiquetas viven en el markup y las cambia el CSS: así el JS solo pone y
+   quita `data-armed` y no tiene que saber qué pone el botón en cada estado. */
+.stop .stop-confirm,.danger-btn .stop-confirm{display:none}
+.stop[data-armed] .stop-label,.danger-btn[data-armed] .stop-label{display:none}
+.stop[data-armed] .stop-confirm,.danger-btn[data-armed] .stop-confirm{display:inline}
+
+/* ---------- el paso entre los tres estados ----------
+   Los dos estados transitorios entran subiendo; el que se va, se va. Sin animación
+   de salida a propósito: `hidden` es `display:none` y encadenar salida con entrada
+   dejaría el hueco vacío un momento, que es justo el tirón que hay que evitar.
+   Es el mismo `rise` que ya usan las vistas, con el mismo `both`, así que está
+   probado en esta app.
+
+   `.play` no lleva ninguna: es el estado de reposo, la casa de la tarjeta, y volver
+   a casa al instante se lea como respuesta y no como salto. Además una animación con
+   `opacity` de por medio en el botón principal solo puede acabar de una forma mala
+   —invisible— si algún día no llega a correr, y el fundido no valía ese riesgo. */
+.launch:not([hidden]),.session:not([hidden]){
+  animation:rise .34s cubic-bezier(.22,.68,0,1) both;
+}
+
+/* ---------- botones ----------
+   `.btn` y `.btn.green` se usaban en ocho sitios —onboarding, setup de cuenta,
+   ajustes, importar— sin estar definidas en ninguno: salían como botones grises del
+   sistema en mitad de la interfaz oscura. Aquí quedan. `.green` es el primario: la
+   misma receta que `.play`, a menor escala. */
+.btn{
+  border:0;cursor:pointer;border-radius:10px;
+  padding:9px 16px;
+  font-family:var(--font-body);font-size:12.5px;font-weight:600;
+  color:var(--text-dim);
+  background:var(--glass-1);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline);
+  transition:color .16s ease,background .16s ease,transform .16s cubic-bezier(.32,.72,0,1);
+}
+.btn:hover{color:var(--text);background:var(--glass-2)}
+.btn:active{transform:translateY(1px)}
+.btn:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.btn[disabled]{opacity:.5;cursor:default;transform:none}
+.btn.green{
+  color:#04170A;
+  background:linear-gradient(165deg,#99D984,var(--green) 48%,var(--green-hot) 78%,var(--green-deep));
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.5),
+    inset 0 -1px 0 rgba(0,0,0,.2),
+    0 8px 22px -10px var(--green-glow),
+    0 1px 4px rgba(0,0,0,.35);
+}
+.btn.green:hover{
+  color:#04170A;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 12px 28px -10px rgba(115,191,105,.6),
+             0 1px 4px rgba(0,0,0,.35);
+}
+
+/* ---------- ficha de un pack ----------
+   La misma en «Qué contiene» de importar y en el resultado de un código: misma
+   información, misma forma, un solo sitio donde cambiarla. */
+.packcard{display:flex;align-items:center;gap:14px;min-width:0}
+.packcard-body{min-width:0}
+.packcard .pack-title{font-size:19px;margin:0}
+.packcard .metaline{margin:6px 0 0}
+
+/* ---------- unirse con un código ----------
+   Vive en la vista de Jugar y no en la de importar. No es lo mismo el amigo que
+   recibe un código —que no tiene archivo ninguno y solo quiere jugar— que quien
+   exporta un `.mrpack` y lo arrastra. Meter el código junto a la zona de arrastre
+   junta dos públicos que no se parecen; aquí cae en el sitio donde el amigo se
+   queda parado la primera vez. */
+/* El flujo de código vive en un overlay que abre el `+`, no en un panel dentro de
+   Jugar. Añade un pack a la biblioteca; no sustituye a ninguno. */
+.join-close{align-self:center;margin-top:16px}
+.join-ask{display:flex;flex-direction:column;gap:8px}
+.join-field{display:flex;gap:9px;align-items:stretch}
+/* Mono y tracking porque es un código, no una frase: así se lee carácter a carácter
+   y se compara de un vistazo con el que te pasaron. Las mayúsculas son cosmética
+   —Rust normaliza igual— pero enseñan la forma canónica mientras se escribe. */
+.join-input{
+  flex:1;min-width:0;
+  border:0;border-radius:10px;padding:11px 13px;
+  font-family:var(--font-mono);font-size:15px;font-weight:500;
+  letter-spacing:.12em;text-transform:uppercase;
+  color:var(--text);background:rgba(0,0,0,.28);
+  box-shadow:inset 0 0 0 1px var(--hairline);
+}
+.join-input::placeholder{color:var(--text-faint);letter-spacing:.12em}
+.join-input:focus{outline:2px solid var(--green);outline-offset:1px}
+.join-hint{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.04em;color:var(--text-faint)}
+
+/* `.busyline` es el nombre bueno; `.join-busy` se queda por el markup que ya
+   estaba conectado. Misma regla, no una copia. */
+.join-busy,.busyline{
+  display:flex;align-items:center;gap:10px;
+  font-size:13px;color:var(--text-dim);padding:6px 0;
+}
+.busyline b{font-family:var(--font-mono);color:var(--text);font-weight:500;letter-spacing:.06em}
+.join-busy b{font-family:var(--font-mono);color:var(--text);font-weight:500;letter-spacing:.06em}
+
+.join-found{display:flex;flex-direction:column;gap:13px}
+.join-server{
+  display:flex;align-items:center;gap:8px;
+  font-size:12px;color:var(--text-dim);
+}
+.join-server b{color:var(--text);font-weight:600;font-family:var(--font-mono);font-size:11.5px}
+.join-actions{display:flex;align-items:center;gap:14px}
+.join-actions .btn{flex:1}
+/* `.link-min` trae `margin-top:14px` de su uso en el onboarding; aquí descuadra. */
+.join-actions .link-min{margin-top:0;flex:none}
+
+/* ---------- los dos errores ----------
+   Se leen distinto porque son cosas distintas. «No existe» es culpa del código y no
+   tiene reintento: lo que arregla eso es corregir lo escrito, así que el aviso es
+   rosa y el foco vuelve al campo. «Sin conexión» no es culpa de nadie y sí se
+   reintenta: por eso va en gris —no es un error del usuario— y trae su botón. */
+.join-msg{
+  display:flex;align-items:center;gap:11px;
+  border-radius:var(--r-card);padding:11px 13px;
+  font-size:12.5px;line-height:1.45;
+}
+.join-msg-ico{flex:none;display:flex;align-items:center;justify-content:center;width:18px;height:18px}
+.join-msg-ico svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.9;
+  stroke-linecap:round;stroke-linejoin:round}
+.join-msg-body{min-width:0;flex:1}
+.join-msg-t{font-weight:600}
+.join-msg-s{color:var(--text-dim);font-size:11.5px;margin-top:2px}
+
+.join-msg[data-kind="notfound"]{
+  background:rgba(255,107,122,.09);
+  box-shadow:inset 0 0 0 1px rgba(255,107,122,.28);
+  color:#F5C9CE;
+}
+.join-msg[data-kind="notfound"] .join-msg-ico{color:var(--rose)}
+.join-msg[data-kind="offline"]{
+  background:var(--glass-1);
+  box-shadow:inset 0 0 0 1px var(--hairline);
+  color:var(--text);
+}
+.join-msg[data-kind="offline"] .join-msg-ico{color:var(--text-dim)}
+/* Cada aviso enseña su icono y su botón; el otro se queda fuera. Lo decide el CSS
+   para que el JS solo tenga que poner `data-kind`. */
+.join-msg .ico-offline,.join-msg[data-kind="offline"] .ico-notfound{display:none}
+.join-msg[data-kind="offline"] .ico-offline{display:block}
+.join-msg[data-kind="notfound"] .join-retry{display:none}
+
+/* ---------- publicar modpacks ----------
+   El panel abre en la lista de lo ya publicado y no en un formulario vacío. Publicar
+   por primera vez y actualizar son la misma operación sobre distinto destino, y lo
+   que se tiene delante casi siempre es un catálogo con cosas dentro, no un papel en
+   blanco: la lista es la casa, y crear es una acción desde ella. */
+.pub-empty{
+  padding:20px 4px;text-align:center;
+  font-size:12.5px;color:var(--text-faint);
+}
+.pub-list{display:flex;flex-direction:column;margin:2px 0 16px}
+.pub-row{
+  display:flex;align-items:center;gap:12px;
+  padding:11px 0;border-bottom:1px solid rgba(255,255,255,.055);
+}
+.pub-row:last-child{border-bottom:0}
+.pub-row-body{min-width:0;flex:1}
+.pub-row-name{font-size:13.5px;font-weight:600;line-height:1.2;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pub-row-meta{font-family:var(--font-mono);font-size:10px;color:var(--text-faint);margin-top:3px}
+/* El código va en mono y con tracking: es lo que alguien teclea desde otro sitio,
+   así que tiene que poder leerse carácter a carácter. */
+.pub-code{
+  flex:none;font-family:var(--font-mono);font-size:11.5px;letter-spacing:.10em;
+  color:var(--text);border-radius:var(--r-chip);padding:5px 9px;
+  background:rgba(0,0,0,.30);box-shadow:inset 0 0 0 1px var(--hairline);
+}
+
+/* Actualizar no puede cambiar el código: los amigos ya lo tienen escrito en algún
+   chat. Bloquearlo no basta —hay que decir por qué, o parece que está roto. */
+.field input[readonly]{
+  color:var(--text-dim);background:rgba(0,0,0,.24);cursor:default;
+  box-shadow:inset 0 0 0 1px var(--hairline);
+}
+.field input[readonly]:focus{outline:none}
+.field-note{font-family:var(--font-mono);font-size:9.5px;color:var(--text-faint);margin-top:1px}
+
+.pub-icon{display:flex;align-items:center;gap:13px}
+.pub-icon-body{display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.pub-icon-body .link-min{margin-top:0}
+
+/* ---------- publicado ----------
+   El estado que importa: aquí es donde Yahir copia lo que va a pegar en el chat.
+   Los dos valores son para copiar, no para leer, así que cada uno trae su botón. */
+.pub-done{display:flex;flex-direction:column;gap:9px}
+.copyfield{
+  display:flex;align-items:center;gap:10px;
+  border-radius:10px;padding:8px 9px 8px 12px;
+  background:rgba(0,0,0,.26);box-shadow:inset 0 0 0 1px var(--hairline);
+}
+.copyfield-k{
+  flex:none;font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--text-faint);
+}
+.copyfield code{
+  flex:1;min-width:0;font-family:var(--font-mono);font-size:12px;color:var(--text);
+  letter-spacing:.06em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.copyfield .btn{flex:none;padding:6px 12px;font-size:11.5px}
+/* Las dos etiquetas viven en el markup y las cambia el CSS, igual que en Detener.
+   Vale tanto la clase `.copied` como el atributo `data-copied`: yo documenté el
+   atributo y el JS acabó poniendo la clase, así que el CSS acepta las dos en vez de
+   obligar a cambiar código que ya funciona. */
+.copy-btn .copy-done{display:none}
+.copy-btn.copied .copy-idle,.copy-btn[data-copied] .copy-idle{display:none}
+.copy-btn.copied .copy-done,.copy-btn[data-copied] .copy-done{display:inline}
+.copy-btn.copied,.copy-btn[data-copied]{color:var(--green)}
+/* «Copiar link» de cada pack publicado: el enlace de invitación sin tener que volver
+   a publicar para verlo. */
+.pub-row .btn.copied{color:var(--green)}
+
+.spin{width:13px;height:13px;border-radius:50%;border:2px solid rgba(115,191,105,.22);
+  border-top-color:var(--green);animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+@media (max-width:760px){
+  body{padding:0}
+  .app{height:100vh;border-radius:0;max-width:none}
+  .rail{width:62px;padding:14px 8px}
+  .nav button span,.nav-label,.account-name,.account-kind{display:none}
+  .nav button{justify-content:center;padding:11px}
+  .account{align-items:center}
+  .hero{grid-template-columns:1fr}
+  .hero-left{flex-direction:column;align-items:flex-start}
+}
+</style>
+
+<div class="app">
+  <div class="mesh"></div>
+  <div class="grain"></div>
+  <div class="titlebar" data-tauri-drag-region>
+    <div class="lights">
+      <button type="button" data-win="close" aria-label="Cerrar"></button>
+      <button type="button" data-win="minimize" aria-label="Minimizar"></button>
+      <button type="button" data-win="maximize" aria-label="Maximizar"></button>
+    </div>
+    <div class="wordmark">
+      <span class="app-icon" style="--s:24px"><canvas data-dino width="22" height="21"></canvas></span>
+      Dino Launcher
+    </div>
+    <div class="tb-right">
+      <div class="sync"><span class="pulse" id="syncDot"></span><span id="syncText">comprobando…</span></div>
+    </div>
+  </div>
+
+  <div class="upbar" id="upbar" hidden>
+    <span class="upbar-txt" id="upbar-txt"></span>
+    <button type="button" class="upbar-btn" id="upbar-btn">Actualizar</button>
+  </div>
+
+  <div class="shell">
+    <nav class="rail">
+      <div class="nav" role="tablist">
+        <!-- El `+` va en la cabecera de la biblioteca, como en Modrinth: es donde se
+             busca «añadir algo». Y como está siempre, es también la única forma de
+             cambiar de modpack teniendo uno puesto — antes no había ninguna. -->
+        <div class="nav-label nav-label-row">
+          <span>Biblioteca</span>
+          <button type="button" class="nav-add" id="navAdd"
+                  title="Añadir o cambiar de modpack" aria-label="Añadir o cambiar de modpack">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
+        <button role="tab" aria-selected="true" data-go="jugar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 3.5v17l14-8.5z" stroke-linejoin="round"/></svg>
+          <span>Jugar</span>
+        </button>
+        <button role="tab" aria-selected="false" data-go="biblioteca">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.8"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="1.8"/><rect x="3.5" y="13" width="7.5" height="7.5" rx="1.8"/><rect x="13" y="13" width="7.5" height="7.5" rx="1.8"/></svg>
+          <span>Mis modpacks</span>
+        </button>
+        <button role="tab" aria-selected="false" data-go="ajustes">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linejoin="round"><path d="M10.26 5.01 L10.71 2.18 L13.29 2.18 L13.74 5.01 L15.71 5.83 L18.03 4.15 L19.85 5.97 L18.17 8.29 L18.99 10.26 L21.82 10.71 L21.82 13.29 L18.99 13.74 L18.17 15.71 L19.85 18.03 L18.03 19.85 L15.71 18.17 L13.74 18.99 L13.29 21.82 L10.71 21.82 L10.26 18.99 L8.29 18.17 L5.97 19.85 L4.15 18.03 L5.83 15.71 L5.01 13.74 L2.18 13.29 L2.18 10.71 L5.01 10.26 L5.83 8.29 L4.15 5.97 L5.97 4.15 L8.29 5.83Z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span>Ajustes</span>
+        </button>
+        <!-- Todo el grupo es de admin, etiqueta incluida: un amigo no ve que exista.
+             El arranque lo destapa si hay `gh` autenticado, y el enrutado de
+             `data-go` tiene que rechazar «admin» si no lo hay. -->
+        <div class="nav-group" id="navAdmin" hidden>
+          <div class="nav-label" style="margin-top:16px">Administrar</div>
+          <button role="tab" aria-selected="false" data-go="admin">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01" stroke-linecap="round"/></svg>
+            <span>Importar y publicar</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="rail-spacer"></div>
+
+      <!-- Se puede pulsar: es la única forma de volver al setup para cambiar de cuenta
+           o releer la diferencia entre las dos. Antes, quien elegía una se quedaba con
+           ella para siempre sin ninguna vía de vuelta. -->
+      <div class="account" id="accountBtn" role="button" tabindex="0"
+           title="Cambiar de cuenta o ver cómo funcionan">
+        <div class="account-row">
+          <canvas data-head="?" width="8" height="8"></canvas>
+          <div>
+            <div class="account-name">…</div>
+            <div class="account-kind"></div>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <div class="stage">
+
+      <!-- ============ JUGAR ============ -->
+      <section class="view on" data-view="jugar">
+        <div class="eyebrow">Instancia activa</div>
+
+        <div class="hero">
+          <div class="hero-left">
+            <span class="app-icon" style="--s:76px" id="packIcon"><canvas data-dino width="22" height="21"></canvas></span>
+            <div style="min-width:0">
+              <div class="pack-title" id="packName">Sin modpack</div>
+              <div class="metaline" id="packMeta"><span>nada instalado todavía</span></div>
+              <div class="chips" id="packChips"></div>
+            </div>
+          </div>
+
+          <div class="hero-right">
+            <div class="server" id="server" hidden>
+              <div class="server-top"><span class="dot-live" id="srvDot"></span><span id="srvName"></span></div>
+              <div class="server-stats" id="srvStats"><span>consultando…</span></div>
+            </div>
+            <button class="play">
+              <svg viewBox="0 0 24 24"><path d="M6 4v16l13-8z"/></svg>
+              <span id="playLabel">Jugar</span>
+            </button>
+            <!-- Ocupa el sitio del botón mientras se instala: se oculta `.play` y se
+                 enseña esto. `data-indeterminate` es el estado de partida porque el
+                 motor no da porcentaje; se quita cuando llega un `frac` de verdad. -->
+            <div class="launch" id="launch" hidden>
+              <div class="launch-head">
+                <span class="launch-phase" id="launchPhase">Preparando</span>
+                <span class="launch-amt" id="launchAmt"></span>
+              </div>
+              <div class="bar" id="launchBar" data-indeterminate><b></b></div>
+              <div class="launch-foot">
+                <span class="launch-hint" id="launchHint">no cierres la ventana</span>
+                <button type="button" class="launch-cancel" id="launchCancel">Cancelar</button>
+              </div>
+            </div>
+            <!-- Tercer estado: Minecraft está corriendo. `data-armed` en el botón lo
+                 pone y lo quita el JS; las dos etiquetas ya están puestas. -->
+            <div class="session" id="session" hidden>
+              <div class="session-head">
+                <span class="dot-live"></span>
+                <span>Jugando</span>
+                <span class="session-name" id="sessionName"></span>
+              </div>
+              <button type="button" class="stop" id="sessionStop">
+                <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
+                <span class="stop-label">Detener</span>
+                <span class="stop-confirm">Confirmar</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="alert" id="alert" hidden></div>
+
+      </section>
+
+      <!-- ============ BIBLIOTECA ============ -->
+      <section class="view" data-view="biblioteca">
+        <div class="eyebrow">Biblioteca</div>
+        <h1>Mis modpacks</h1>
+        <p class="sub">Elige con cuál juegas: el seleccionado es el que abre el botón de Jugar.</p>
+
+        <!-- Las tarjetas las genera el JS e van ANTES de `#libAdd`, no sustituyendo el
+             `innerHTML` de la cuadrícula: el `+` es parte de la retícula y tiene que
+             quedarse el último. Con una partida abierta, `data-session` en `#libGrid`. -->
+        <div class="libgrid" id="libGrid">
+          <div class="lib-empty" id="libEmpty" hidden>Todavía no tienes ninguno. Pega un código y te lo instalo.</div>
+          <button type="button" class="packtile-add" id="libAdd">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            <span>Añadir un modpack</span>
+          </button>
+        </div>
+      </section>
+
+
+
+      <!-- ============ AJUSTES ============ -->
+      <section class="view" data-view="ajustes">
+        <div class="eyebrow" id="setEyebrow">Instancia</div>
+        <h1>Ajustes</h1>
+        <p class="sub">Vienen configurados desde el pack. Puedes cambiarlos y se conservan entre actualizaciones.</p>
+
+        <div class="two two-settings" style="margin-top:18px">
+          <div class="panel">
+            <h2>Memoria y Java</h2>
+            <p class="sub" id="ramHint">Se reparte según la RAM de esta máquina.</p>
+
+            <div class="ram-top">
+              <label for="ram" style="font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-faint)">RAM asignada</label>
+              <div class="ram-val" id="ramv">6<small>GB</small></div>
+            </div>
+            <input type="range" id="ram" min="2" max="16" step="1" value="6" style="--fill:28.6%">
+            <div class="ram-scale"><span>2 GB</span><span>16 GB disponibles</span></div>
+
+            <div class="field">
+              <label>Runtime</label>
+              <select id="javaSelect"><option>lo administra el motor</option></select>
+            </div>
+
+            <div class="field">
+              <label>Argumentos de la JVM</label>
+              <div class="args">Los define <b>Minecraft 26.2</b>: Shenandoah generacional. El pack no los sobrescribe.</div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>Instalación</h2>
+            <p class="sub">Dino administra Prism por debajo. No necesitas abrirlo nunca.</p>
+
+            <div class="kv">
+              <div class="kv-row"><div class="k">Instancia</div><div class="v v-wrap" id="kvPath">—</div></div>
+              <div class="kv-row"><div class="k">Motor</div><div class="v" id="kvEngine">—</div></div>
+              <div class="kv-row"><div class="k">Loader</div><div class="v" id="kvLoader">—</div></div>
+              <div class="kv-row"><div class="k">En disco</div><div class="v" id="kvSize">—</div></div>
+              <div class="kv-row"><div class="k">Mundos</div><div class="v" id="kvWorlds">—</div></div>
+            </div>
+
+            <div class="skin-actions" style="margin-top:15px">
+              <button class="btn" id="btnFolder">Abrir carpeta</button>
+              <button class="btn" id="btnVerify">Verificar archivos</button>
+            </div>
+
+            <div class="note">
+              <b>Tus controles están a salvo.</b> Los keybinds y las opciones de video se copian
+              una sola vez al instalar. Después son tuyos — ninguna actualización los toca.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ PUBLICAR ============ -->
+      <section class="view" data-view="admin">
+        <div class="eyebrow">Administrar</div>
+        <h1>Modpacks</h1>
+        <p class="sub">Instala un <span class="mono-i">.mrpack</span> en este equipo, o publícalo para que otros lo instalen con un código.</p>
+
+        <!-- Dos caminos para la misma tarea —poner un modpack en circulación— y los
+             dos solo de admin: por eso una pestaña con un segmentado, y no dos
+             entradas separadas en el rail. -->
+        <div class="seg" role="tablist" id="adminSeg">
+          <button type="button" role="tab" aria-selected="true" data-seg="importar">Importar archivo</button>
+          <button type="button" role="tab" aria-selected="false" data-seg="publicar">Publicar al catálogo</button>
+        </div>
+
+        <div id="adminImport">
+        <div class="two" style="margin-top:18px">
+          <div class="panel">
+            <h2>Archivo</h2>
+            <p class="sub">Expórtalo desde Modrinth o Prism.</p>
+
+            <div class="drop" id="dropZone">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.5 15v3.5a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2V15" stroke-linecap="round"/></svg>
+              <div class="t">Arrastra tu .mrpack aquí</div>
+              <div class="h" id="dropHint">solo archivos .mrpack</div>
+            </div>
+
+            <div class="field">
+              <label>Servidor del pack</label>
+              <input type="text" id="srvInput" value="mcpvp.club" placeholder="ejemplo.servidor.com" spellcheck="false">
+            </div>
+
+            <div class="field-switch">
+              <div>
+                <div class="fs-t">Entrar directo al servidor</div>
+                <div class="fs-s">va en la instancia, no en la lista de servidores</div>
+              </div>
+              <button class="switch" data-toggle role="switch" aria-checked="true" aria-label="Entrar directo al servidor"><b></b></button>
+            </div>
+          </div>
+
+          <div class="panel" id="previewPanel">
+            <h2>Qué contiene</h2>
+            <p class="sub" id="previewSub">Suelta un archivo para verlo antes de instalar.</p>
+            <div id="previewBody" hidden>
+              <!-- Misma ficha que el resultado de un código: clases `.packcard`. Los
+                   ids no cambian, así que `showPreview` sigue funcionando igual. -->
+              <div class="packcard" style="margin-bottom:14px">
+                <span class="app-icon" style="--s:52px" id="previewIcon"><canvas data-dino width="22" height="21"></canvas></span>
+                <div class="packcard-body">
+                  <div class="pack-title" id="previewName"></div>
+                  <div class="metaline" id="previewMeta"></div>
+                </div>
+              </div>
+              <button class="btn green" id="btnInstall" style="width:100%">Instalar este modpack</button>
+            </div>
+            <div class="note">
+              <b>Se sobrescribe:</b> los mods y las configs del pack.<br>
+              <b>Se respeta:</b> tus controles, tus opciones de video y tus mundos.
+            </div>
+          </div>
+        </div>
+        </div><!-- /adminImport -->
+
+        <div id="adminPublish" hidden>
+
+        <!-- ---- la casa: lo que ya está publicado ---- -->
+        <div id="pubHome" style="margin-top:18px">
+          <div class="panel">
+            <h2>Publicados</h2>
+            <p class="sub">Sube una versión nueva de cualquiera, o publica uno que no esté.</p>
+            <div class="pub-list" id="pubList"></div>
+            <div class="pub-empty" id="pubEmpty">Todavía no has publicado ninguno.</div>
+            <button type="button" class="btn green" id="pubNew" style="width:100%">Publicar uno nuevo</button>
+          </div>
+        </div>
+
+        <!-- ---- el editor: mismo formulario para crear y para actualizar ---- -->
+        <div id="pubEditor" hidden style="margin-top:18px">
+          <button type="button" class="link-min" id="pubBack" style="margin:0 0 12px">volver al catálogo</button>
+          <div class="two">
+            <div class="panel">
+              <h2 id="pubEditorTitle">Publicar un modpack</h2>
+              <p class="sub" id="pubEditorSub">Elige el .mrpack que quieres compartir.</p>
+
+              <div class="drop" id="pubDrop">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.5 15v3.5a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2V15" stroke-linecap="round"/></svg>
+                <div class="t">Arrastra tu .mrpack aquí</div>
+                <div class="h" id="pubDropHint">solo archivos .mrpack</div>
+              </div>
+
+              <div id="pubFields" hidden>
+                <div class="field">
+                  <label>Código</label>
+                  <input type="text" class="join-input" id="pubCode" placeholder="DINOSMP"
+                         maxlength="14" spellcheck="false" autocomplete="off">
+                  <div class="field-note" id="pubCodeNote" hidden>no se puede cambiar: tus amigos ya lo tienen</div>
+                </div>
+                <div class="field">
+                  <label>Nombre</label>
+                  <input type="text" id="pubName" spellcheck="false">
+                </div>
+                <div class="field">
+                  <label>Servidor del pack</label>
+                  <input type="text" id="pubServer" placeholder="ejemplo.servidor.com" spellcheck="false">
+                </div>
+                <div class="field-switch">
+                  <div>
+                    <div class="fs-t">Entrar directo al servidor</div>
+                    <div class="fs-s">va en la instancia, no en la lista de servidores</div>
+                  </div>
+                  <button class="switch" data-toggle role="switch" aria-checked="true"
+                          aria-label="Entrar directo al servidor" id="pubDirect"><b></b></button>
+                </div>
+                <div class="field">
+                  <label>Icono</label>
+                  <div class="pub-icon">
+                    <span class="app-icon" style="--s:44px" id="pubIcon"><canvas data-dino width="22" height="21"></canvas></span>
+                    <div class="pub-icon-body">
+                      <button type="button" class="btn" id="pubIconPick">Elegir imagen</button>
+                      <button type="button" class="link-min" id="pubIconClear">usar el del pack</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <h2>Cómo se verá</h2>
+              <p class="sub" id="pubPreviewSub">Aparece aquí en cuanto leas un archivo.</p>
+
+              <div id="pubPreview" hidden>
+                <div class="packcard" style="margin-bottom:14px">
+                  <span class="app-icon" style="--s:52px" id="pubPreviewIcon"><canvas data-dino width="22" height="21"></canvas></span>
+                  <div class="packcard-body">
+                    <div class="pack-title" id="pubPreviewName"></div>
+                    <div class="metaline" id="pubPreviewMeta"></div>
+                  </div>
+                </div>
+                <button type="button" class="btn green" id="pubGo" style="width:100%">Publicar</button>
+              </div>
+
+              <div class="busyline" id="pubBusy" hidden>
+                <span class="spin"></span>
+                <span>Publicando <b id="pubBusyCode"></b>…</span>
+              </div>
+
+              <div class="pub-done" id="pubDone" hidden>
+                <div class="copyfield">
+                  <span class="copyfield-k">Código</span>
+                  <code id="pubDoneCode"></code>
+                  <button type="button" class="btn copy-btn" data-copy="pubDoneCode"><span class="copy-idle">Copiar</span><span class="copy-done">Copiado</span></button>
+                </div>
+                <div class="copyfield">
+                  <span class="copyfield-k">Link</span>
+                  <code id="pubDoneLink"></code>
+                  <button type="button" class="btn copy-btn" data-copy="pubDoneLink"><span class="copy-idle">Copiar</span><span class="copy-done">Copiado</span></button>
+                </div>
+                <button type="button" class="btn green" id="pubDoneBack" style="margin-top:5px">Volver al catálogo</button>
+              </div>
+
+              <div class="alert" id="pubError" hidden></div>
+            </div>
+          </div>
+        </div>
+        </div><!-- /adminPublish -->
+      </section>
+
+    </div>
+  </div>
+
+  <!-- ============ PRIMER ARRANQUE ============ -->
+  <!-- ===== unirse con un código =====
+       Overlay, no panel dentro de Jugar: lo abre el `+` del rail, que está siempre.
+       Como panel solo salía sin pack instalado y no había forma de cambiar de
+       modpack teniendo uno. Los cuatro estados y todos los ids son los mismos. -->
+  <div class="overlay" id="joinOverlay" hidden>
+    <div class="overlay-card join" id="join">
+      <h2>¿Te pasaron un código?</h2>
+      <p class="sub">Escríbelo y te instalo el pack de tus amigos.</p>
+
+      <div class="join-ask" id="joinAsk">
+        <div class="join-field">
+          <input type="text" class="join-input" id="joinCode" placeholder="DINO-SMP"
+                 maxlength="14" spellcheck="false" autocomplete="off"
+                 autocapitalize="characters" aria-label="Código del modpack">
+          <button type="button" class="btn green" id="joinGo">Buscar</button>
+        </div>
+        <div class="join-hint">las mayúsculas y los guiones dan igual</div>
+      </div>
+
+      <div class="join-busy" id="joinBusy" hidden>
+        <span class="spin"></span>
+        <span>Buscando <b id="joinBusyCode"></b>…</span>
+      </div>
+
+      <div class="join-found" id="joinFound" hidden>
+        <div class="packcard">
+          <span class="app-icon" style="--s:52px" id="joinIcon"><canvas data-dino width="22" height="21"></canvas></span>
+          <div class="packcard-body">
+            <div class="pack-title" id="joinName"></div>
+            <div class="metaline" id="joinMeta"></div>
+          </div>
+        </div>
+        <div class="join-server" id="joinServer" hidden>
+          <span class="dot-live"></span><span>Entra a <b id="joinServerName"></b></span>
+        </div>
+        <div class="join-actions">
+          <button type="button" class="btn green" id="joinInstall">Instalar y jugar</button>
+          <button type="button" class="link-min" id="joinBack">no es este</button>
+        </div>
+      </div>
+
+      <div class="join-msg" id="joinMsg" hidden data-kind="notfound">
+        <span class="join-msg-ico">
+          <svg class="ico-notfound" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.4a2.7 2.7 0 0 1 5.2.9c0 1.8-2.6 2.1-2.6 3.9"/><path d="M12 17.4h.01"/></svg>
+          <svg class="ico-offline" viewBox="0 0 24 24"><path d="M3 8.5a15 15 0 0 1 18 0"/><path d="M6.5 12.2a10 10 0 0 1 11 0"/><path d="M10 15.9a4.6 4.6 0 0 1 4 0"/><path d="M12 19.5h.01"/><path d="m3.5 3.5 17 17"/></svg>
+        </span>
+        <div class="join-msg-body">
+          <div class="join-msg-t" id="joinMsgTitle"></div>
+          <div class="join-msg-s" id="joinMsgSub"></div>
+        </div>
+        <button type="button" class="btn join-retry" id="joinRetry">Reintentar</button>
+      </div>
+      <button type="button" class="link-min join-close" id="joinClose">cerrar</button>
+    </div>
+  </div>
+
+  <!-- ===== quitar un pack =====
+       Dos acciones separadas, no una casilla y un aceptar. Quitar de la lista se
+       deshace; borrar los archivos se lleva los mundos del jugador y no. Con una
+       casilla las dos caben en el mismo clic distraído. -->
+  <div class="overlay" id="removeOverlay" hidden>
+    <div class="overlay-card">
+      <h2 id="removeTitle">Quitar el modpack</h2>
+      <p class="sub">Son dos cosas distintas. Elige cuál.</p>
+      <div class="remove-choices">
+        <div class="remove-choice">
+          <div class="rc-t">Quitar de la lista</div>
+          <div class="rc-s">Deja de aparecer en tu biblioteca. Los archivos se quedan en el disco y puedes volver a añadirlo con su código.</div>
+          <button type="button" class="btn" id="removeKeep">Quitar de la lista</button>
+        </div>
+        <div class="remove-choice">
+          <div class="rc-t">Borrar también los archivos</div>
+          <div class="rc-s">Se va el modpack y <b>todo lo que hay dentro, tus mundos incluidos</b>. Esto no se deshace.</div>
+          <div class="remove-detail" id="removeDetail" hidden></div>
+          <button type="button" class="danger-btn" id="removeDelete">
+            <span class="stop-label">Borrar los archivos</span>
+            <span class="stop-confirm">Confirmar borrado</span>
+          </button>
+        </div>
+      </div>
+      <button type="button" class="link-min join-close" id="removeClose">cancelar</button>
+    </div>
+  </div>
+
+  <!-- ===== invitación =====
+       La abre un link `dinolauncher://join/CODIGO`; el que se comparte es la página de
+       invitación, que es la que abre el launcher. Todo lo de dentro sale del catálogo y
+       de la instalación real, y los ids son el contrato con el JS. La cuenta no se pide
+       aquí: al darle a Jugar, el camino de siempre ya abre el setup si falta. -->
+  <div class="onboard" id="onboard" hidden>
+    <div class="ob-card invite">
+      <div class="ob-dots"><i class="done"></i><i></i><i></i></div>
+
+      <div class="ob-step on" data-ob="1">
+        <span class="app-icon" style="--s:76px" id="obIcon"><canvas data-dino width="22" height="21"></canvas></span>
+        <div class="invite-eyebrow">Te invitaron a jugar</div>
+        <h2 class="ob-title" id="obName"></h2>
+        <div class="chips" id="obChips"></div>
+        <p class="ob-body" id="obBody"></p>
+      </div>
+
+      <div class="ob-step" data-ob="2">
+        <div class="invite-eyebrow">Un momento</div>
+        <h2 class="ob-title">Preparando todo</h2>
+        <!-- Indeterminada mientras no haya dato: para pasarla a determinada, `--frac` y
+             fuera `data-indeterminate`. Ningún número fijo: se quedaría clavado. -->
+        <div class="bar" id="obBar" data-indeterminate><b></b></div>
+        <div class="bar-meta"><span id="obPct"></span><span id="obAmt"></span></div>
+      </div>
+
+      <div class="ob-step" data-ob="3">
+        <span class="app-icon" style="--s:76px" id="obReadyIcon"><canvas data-dino width="22" height="21"></canvas></span>
+        <div class="invite-eyebrow">Todo instalado</div>
+        <h2 class="ob-title">Listo para jugar</h2>
+        <p class="ob-body" id="obReadyBody"></p>
+        <div class="server" id="obServer" hidden>
+          <div class="server-top"><span class="dot-live"></span><span id="obServerName"></span></div>
+          <div class="server-stats" id="obServerStats"></div>
+        </div>
+      </div>
+
+      <!-- Sin «Atrás»: instalar no se deshace volviendo un paso, y el botón vivía
+           escondido pero ocupando su hueco. -->
+      <div class="ob-foot">
+        <button class="btn green" id="ob-next">Instalar</button>
+        <button class="ob-skip" id="ob-exit">Ahora no</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Setup real de primera vez. Comparte los estilos del de invitación, pero este
+       sí habla con el backend: es lo que sustituye a abrir el motor a secas. -->
+  <div class="onboard" id="setup" hidden>
+    <div class="ob-card">
+      <div class="ob-dots"><i class="done" data-sd="1"></i><i data-sd="2"></i><i data-sd="3"></i></div>
+
+      <div class="ob-step on" data-sp="1">
+        <span class="app-icon" style="--s:62px"><canvas data-dino width="22" height="21"></canvas></span>
+        <h2 class="ob-title">Conecta tu cuenta</h2>
+        <p class="ob-body">Solo se hace una vez. Después entras directo.</p>
+        <div class="choice">
+          <button type="button" id="sp-msa">
+            Tengo Minecraft comprado
+            <small>Inicias sesión con tu cuenta de Microsoft, la misma del juego.</small>
+          </button>
+          <button type="button" id="sp-offline">
+            No tengo Minecraft
+            <small>Juegas con el nombre que elijas. Sin cuenta y sin instalar nada más.</small>
+          </button>
+        </div>
+        <!-- La diferencia entre las dos, en dos frases y solo si se pide: quien ya sabe
+             cuál le toca no tiene por qué leerla, y quien no, no debería tener que
+             buscarla fuera. -->
+        <button type="button" class="link-min" id="sp-ayuda" style="margin-top:14px">¿Cuál me toca?</button>
+        <div class="note" id="sp-ayuda-txt" hidden style="margin-top:10px;text-align:left">
+          <b>Con cuenta de Microsoft</b> entras con el Minecraft que compraste: tu nombre y
+          tu skin son los de siempre, y te sirve en cualquier servidor.<br><br>
+          <b>Sin cuenta</b> juegas con el nombre que escribas aquí. No es una cuenta oficial
+          de Minecraft: vale en los servidores que lo permitan —el nuestro sí—, pero no en
+          los que piden sesión oficial, y la skin no se sincroniza.
+        </div>
+      </div>
+
+      <div class="ob-step" data-sp="2-msa">
+        <h2 class="ob-title">Inicia sesión con Microsoft</h2>
+        <p class="ob-body" id="sp-msa-texto">Abriendo…</p>
+        <div class="note">
+          <b>No cierres esta ventana.</b> En cuanto detecte tu cuenta sigo yo solo.
+          No tienes que volver aquí a mano.
+        </div>
+        <div class="hint" id="sp-msa-estado">esperando…</div>
+        <button type="button" class="link-min" id="sp-msa-cancelar">Cancelar y volver</button>
+      </div>
+
+      <div class="ob-step" data-sp="2-offline">
+        <h2 class="ob-title">Elige tu nombre</h2>
+        <p class="ob-body">Es como te verán en el servidor.</p>
+        <div class="field">
+          <label for="sp-nick">Nombre</label>
+          <input id="sp-nick" type="text" maxlength="16" autocomplete="off"
+                 spellcheck="false" placeholder="Kevs">
+        </div>
+        <div class="hint" id="sp-nick-estado">de 3 a 16 caracteres: letras, números y guion bajo</div>
+        <div class="note">
+          <b>Tu mundo va atado a este nombre.</b> Si lo cambias más adelante, el
+          servidor te tratará como a alguien nuevo: sin tu inventario ni tu posición.
+        </div>
+        <button type="button" class="btn green" id="sp-nick-crear"
+                style="margin-top:16px" disabled>Crear cuenta</button>
+      </div>
+
+      <div class="ob-step" data-sp="3">
+        <span class="app-icon" style="--s:62px"><canvas data-dino width="22" height="21"></canvas></span>
+        <h2 class="ob-title">Listo</h2>
+        <p class="ob-body" id="sp-listo">Tu cuenta quedó conectada.</p>
+      </div>
+
+      <div class="ob-foot">
+        <button class="ob-skip" id="sp-cerrar">Ahora no</button>
+        <span class="grow"></span>
+        <button class="btn" id="sp-atras" hidden>Atrás</button>
+        <button class="btn green" id="sp-jugar" hidden>Jugar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ================= the logo, as a sprite ================= */
+  /* traced off the source PNG: 22x21 lattice, colours sampled from the file itself */
+  var DINO = [
+    ".................DDDD.",
+    "................DMLLDD",
+    "...............DMLDLLD",
+    "...............DMLLDDD",
+    "...............DMLDDD.",
+    "...............DMLD...",
+    "...............DMLD...",
+    "...............DMLD...",
+    "...............DMMD...",
+    "...............DMMD...",
+    "..........DDDD.DMMD...",
+    "........DDLLLLDDMMD...",
+    ".......DLLMMMMLLMMD...",
+    "......DLMMMMMMMMMMD...",
+    ".....DLMMMMMMMMMMDD...",
+    "....DLMDMMMMMMMMMD....",
+    "DDDDLMMDMMMMMMMMDD....",
+    ".DLLMMDDMMDMMDMMD.....",
+    "..DDDDDDMMDDDDMLD.....",
+    ".......DMLD..DMLLD....",
+    ".......DDDD..DDDDD...."
+  ];
+  var DINO_COLORS = { D:"#053C1E", M:"#73BF69", L:"#99D984" };
+
+  function paintDino(cv){
+    var ctx = cv.getContext("2d");
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    for (var y = 0; y < DINO.length; y++){
+      for (var x = 0; x < DINO[y].length; x++){
+        var c = DINO[y][x];
+        if (c === ".") continue;
+        ctx.fillStyle = DINO_COLORS[c];
+        ctx.fillRect(x, y, 1, 1);
+      }
+    }
+  }
+  document.querySelectorAll("canvas[data-dino]").forEach(paintDino);
+
+  /* ================= deterministic pixel skins ================= */
+  function hash(s){
+    var h = 2166136261;
+    for (var i = 0; i < s.length; i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return h >>> 0;
+  }
+  var SKINTONES = ["#F0C08A","#E0A870","#C68642","#8D5524","#5C3A1E","#F5D9B8"];
+  var HAIRS     = ["#2B1B12","#4A2C17","#7A4A21","#1A1A1F","#134E4A","#7F1D1D","#3F2A55"];
+  var SHIRTS    = ["#2F6FEA","#16A34A","#DC2626","#0891B2","#D97706","#DB2777","#334155"];
+
+  function palette(name){
+    var h = hash(name);
+    return {
+      skin:  SKINTONES[h % SKINTONES.length],
+      hair:  HAIRS[(h >>> 5) % HAIRS.length],
+      shirt: SHIRTS[(h >>> 11) % SHIRTS.length],
+      pants: "#2B3550"
+    };
+  }
+  function shade(hex, amt){
+    var n = parseInt(hex.slice(1), 16);
+    var r = Math.max(0, Math.min(255, (n >> 16) + amt));
+    var g = Math.max(0, Math.min(255, ((n >> 8) & 255) + amt));
+    var b = Math.max(0, Math.min(255, (n & 255) + amt));
+    return "rgb(" + r + "," + g + "," + b + ")";
+  }
+
+  var FACE = [
+    "hhhhhhhh","hhhhhhhh","hssssssh","ssssssss",
+    "seessees","ssssssss","ssmmmmss","ssssssss"
+  ];
+  function drawHead(ctx, p, ox, oy, px){
+    for (var y = 0; y < 8; y++){
+      for (var x = 0; x < 8; x++){
+        var c = FACE[y][x], fill;
+        if (c === "h") fill = p.hair;
+        else if (c === "e") fill = "#1B2430";
+        else if (c === "m") fill = shade(p.skin, -46);
+        else fill = p.skin;
+        ctx.fillStyle = fill;
+        ctx.fillRect(ox + x * px, oy + y * px, px, px);
+      }
+    }
+  }
+
+  function paintHead(cv){
+    var ctx = cv.getContext("2d");
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    drawHead(ctx, palette(cv.dataset.head || "?"), 0, 0, 1);
+  }
+  document.querySelectorAll("canvas[data-head]").forEach(paintHead);
+
+  /* ================= view switching ================= */
+  var tabs  = Array.prototype.slice.call(document.querySelectorAll("[data-go]"));
+  var views = Array.prototype.slice.call(document.querySelectorAll(".view"));
+  var stage = document.querySelector(".stage");
+
+  tabs.forEach(function(tab){
+    tab.addEventListener("click", function(){
+      /* «Administrar» no se rechaza solo por estar oculto: el import y el drop llegan
+         a ella con un `.click()` programático, que no mira si el grupo está escondido. */
+      var admin = $("navAdmin");
+      if (tab.dataset.go === "admin" && admin && admin.hidden) return;
+      tabs.forEach(function(t){ t.setAttribute("aria-selected", String(t === tab)); });
+      views.forEach(function(v){ v.classList.toggle("on", v.dataset.view === tab.dataset.go); });
+      stage.scrollTop = 0;
+    });
+  });
+
+  /* ================= controles de ventana (Tauri) ================= */
+  var tauri = window.__TAURI__;
+
+  /* En Windows el botón central cambia de icono según el estado. La ventana puede
+     maximizarse sin pasar por él —arrastrándola contra el borde superior, o con un
+     doble clic en la barra— así que no basta con recordar lo que hizo el botón: hay
+     que preguntar tras cada cambio de tamaño. Con freno, que `resize` se dispara en
+     ráfaga mientras se arrastra un borde. */
+  var maxTimer = null;
+  function marcarMaximizada(v){
+    document.documentElement.classList.toggle("maximized", !!v);
+  }
+  function sincronizarMaximizada(){
+    if(!tauri) return;
+    tauri.core.invoke("window_is_maximized").then(marcarMaximizada).catch(function(){});
+  }
+  window.addEventListener("resize", function(){
+    clearTimeout(maxTimer);
+    maxTimer = setTimeout(sincronizarMaximizada, 120);
+  });
+  sincronizarMaximizada();
+
+  document.querySelectorAll("[data-win]").forEach(function(b){
+    b.addEventListener("click", function(){
+      if(!tauri) return;                      // abierto en el navegador: no hay ventana que mover
+      var cmd = { close:"window_close", minimize:"window_minimize",
+                  maximize:"window_toggle_maximize" }[b.dataset.win];
+      tauri.core.invoke(cmd).then(function(estado){
+        if(cmd === "window_toggle_maximize") marcarMaximizada(estado);
+      }).catch(function(e){ console.error(cmd, e); });
+    });
+  });
+
+  /* ================= offline toggle ================= */
+  document.querySelectorAll(".switch[data-toggle]").forEach(function(sw){
+    sw.addEventListener("click", function(){
+      sw.setAttribute("aria-checked", sw.getAttribute("aria-checked") === "true" ? "false" : "true");
+    });
+  });
+
+  /* ================= RAM slider ================= */
+  var ram  = document.getElementById("ram");
+  var ramv = document.getElementById("ramv");
+  function ramUpdate(){
+    var v = Number(ram.value), min = Number(ram.min), max = Number(ram.max);
+    ramv.innerHTML = v + "<small>GB</small>";
+    /* Con los límites reales: el máximo es la RAM de la máquina, y un 16 fijo pintaba
+       el relleno pasado del final en cuanto el equipo tenía más. */
+    ram.style.setProperty("--fill", ((v - min) / Math.max(1, max - min) * 100).toFixed(1) + "%");
+  }
+  ram.addEventListener("input", ramUpdate);
+  ramUpdate();
+
+  /* ================= invitación por link =================
+     La vista que antes solo se enseñaba de muestra con «Ver lo que verá un amigo»,
+     ahora de verdad. La abre un link `dinolauncher://join/CODIGO`, que llega a Rust
+     tanto con el launcher cerrado como abierto; la interfaz lo recoge siempre con
+     `invitacion_pendiente`. Tres pasos: qué es, instalarlo con su progreso real, y
+     listo. La cuenta no se pide aquí: al darle a Jugar, el camino de siempre ya abre el
+     setup si falta, y así el login no queda repetido en dos sitios. */
+  var INVITE_URL = "https://dinopolllo.github.io/dino-launcher-releases/invitar/#";
+
+  /* Copiar al portapapeles sin fallar en silencio. La API moderna puede no estar o
+     negarse; entonces se copia por el camino viejo, un textarea seleccionado. Devuelve
+     si se copió, para que el botón no diga «Copiado» cuando no es verdad. */
+  function copiarTexto(texto){
+    function viejo(){
+      var t = document.createElement("textarea");
+      t.value = texto; t.setAttribute("readonly", "");
+      t.style.position = "fixed"; t.style.top = "-1000px"; t.style.opacity = "0";
+      document.body.appendChild(t);
+      t.select();
+      var hecho = false;
+      try { hecho = document.execCommand("copy"); } catch (e) {}
+      document.body.removeChild(t);
+      return hecho;
+    }
+    if (navigator.clipboard) {
+      return navigator.clipboard.writeText(texto).then(function(){ return true; }, viejo);
+    }
+    return Promise.resolve(viejo());
+  }
+  var ob      = document.getElementById("onboard");
+  var obSteps = Array.prototype.slice.call(ob.querySelectorAll("[data-ob]"));
+  var obDots  = Array.prototype.slice.call(ob.querySelectorAll(".ob-dots i"));
+  var obNext  = document.getElementById("ob-next");
+  var LABELS  = { 1: "Instalar", 2: "Preparando…", 3: "Jugar" };
+  var cur = 1;
+  var INVITACION = null;     /* la ficha del catálogo del pack al que se invitó */
+  var obInstalando = false;
+
+  function renderOb(){
+    obSteps.forEach(function(s){ s.classList.toggle("on", Number(s.dataset.ob) === cur); });
+    obDots.forEach(function(d, i){ d.classList.toggle("done", i < cur); });
+    obNext.textContent = LABELS[cur];
+    obNext.disabled = (cur === 2);
+    obNext.removeAttribute("data-cerrar");
+  }
+  function closeOb(){ ob.hidden = true; }
+
+  function chip(etiqueta, valor){
+    var c = document.createElement("span");
+    c.className = "chip";
+    c.appendChild(document.createTextNode(etiqueta + " "));
+    var b = document.createElement("b");
+    b.textContent = valor;
+    c.appendChild(b);
+    return c;
+  }
+
+  /* Lo que viene del catálogo es texto remoto: siempre `textContent`, nunca HTML. */
+  function pintarInvitacion(p){
+    document.getElementById("obName").textContent = p.name;
+    setIcon(document.getElementById("obIcon"), p.icon || null);
+    setIcon(document.getElementById("obReadyIcon"), p.icon || null);
+    document.getElementById("obBody").textContent = p.server
+      ? "Todo viene listo: los mods, la configuración y el servidor. No tienes que instalar nada por tu cuenta."
+      : "Todo viene listo: los mods y la configuración. No tienes que instalar nada por tu cuenta.";
+    var chips = document.getElementById("obChips");
+    chips.innerHTML = "";
+    if (p.minecraft) chips.appendChild(chip("Minecraft", p.minecraft));
+    if (p.loader) {
+      var partes = p.loader.split(" ");
+      chips.appendChild(chip(partes[0], p.mods ? p.mods + " mods" : (partes[1] || "")));
+    } else if (p.mods) {
+      chips.appendChild(chip("Mods", String(p.mods)));
+    }
+    /* Sin chip de tamaño: el catálogo solo sabe lo que pesa el .mrpack, no lo que
+       descargan sus mods, y un número que no es el real es peor que ninguno. */
+  }
+
+  function abrirInvitacion(codigo){
+    call("catalog_lookup", { code: codigo }).then(function(p){
+      /* Al log: es lo único que queda para saber qué pasó con una invitación en la
+         máquina de un amigo. */
+      dlog("invitación: " + p.code + " (" + p.name + ")");
+      INVITACION = p;
+      pintarInvitacion(p);
+      var foot = ob.querySelector(".ob-foot");
+      if (foot) foot.hidden = false;
+      /* Si ya lo tiene, invitarle a instalarlo otra vez no tiene sentido: se elige y se
+         salta directo a «listo». */
+      return call("list_packs").then(function(r){
+        var suyo = ((r && r.packs) || []).filter(function(x){ return x.code === p.code; })[0];
+        ob.hidden = false;
+        if (suyo) return call("select_pack", { id: suyo.id }).then(refreshAll).then(mostrarListo);
+        cur = 1; renderOb(); obNext.focus();
+      });
+    }, function(e){
+      dlog("invitación: no pude resolver " + codigo + ": " + String(e));
+      /* El cuadro del código ya distingue «no existe» de «sin conexión»: mejor que
+         repetirlo aquí, se le pasa el código y que lo cuente él. */
+      closeOb();
+      abrirJoin();
+      joinCode.value = codigo;
+      joinBuscar();
+    });
+  }
+
+  function prepararInvitacion(){
+    if (!INVITACION || obInstalando) return;
+    /* Con una partida abierta no se instala otro pack: instalar marca la sesión como
+       «preparando» y al acabar la devolvería a «inactiva» con el juego corriendo. */
+    if (estadoPrevio === "jugando" || estadoPrevio === "preparando") {
+      document.getElementById("obBody").textContent =
+        "Hay una partida abierta: ciérrala y vuelve a darle a Instalar.";
+      return;
+    }
+    obInstalando = true;
+    cur = 2; renderOb();
+    progresoInvitacion("Descargando el modpack", -1);
+    call("catalog_install", { code: INVITACION.code })
+      .then(refreshAll)
+      .then(function(){ return runPlay({ installOnly: true }); })
+      .then(function(){ obInstalando = false; mostrarListo(); })
+      .catch(function(e){
+        obInstalando = false;
+        document.getElementById("obPct").textContent = "";
+        document.getElementById("obAmt").textContent = "No se pudo instalar: " + String(e);
+        obNext.disabled = false;
+        obNext.textContent = "Cerrar";
+        obNext.setAttribute("data-cerrar", "");
+      });
+  }
+
+  /* Lo llama el mismo aviso `install` que mueve la barra de la vista de Jugar. */
+  function progresoInvitacion(paso, frac){
+    if (!obInstalando) return;
+    var bar = document.getElementById("obBar");
+    var pct = document.getElementById("obPct");
+    if (typeof frac === "number" && frac >= 0) {
+      bar.removeAttribute("data-indeterminate");
+      bar.style.setProperty("--frac", Math.round(frac * 100) + "%");
+      pct.textContent = Math.round(frac * 100) + " %";
+    } else {
+      bar.setAttribute("data-indeterminate", "");
+      pct.textContent = "";
+    }
+    if (paso) document.getElementById("obAmt").textContent = paso;
+  }
+
+  function mostrarListo(){
+    var p = INVITACION;
+    cur = 3; renderOb();
+    var srv = document.getElementById("obServer");
+    if (!p || !p.server) {
+      srv.hidden = true;
+      document.getElementById("obReadyBody").textContent = "Todo instalado. Dale a Jugar cuando quieras.";
+      return;
+    }
+    srv.hidden = false;
+    document.getElementById("obServerName").textContent = p.server;
+    document.getElementById("obServerStats").innerHTML = "";
+    document.getElementById("obReadyBody").textContent =
+      "Dale a Jugar y entras directo al servidor, sin buscar la IP ni configurar nada.";
+    call("server_status", { addr: p.server }).then(function(st){
+      var stats = document.getElementById("obServerStats");
+      stats.innerHTML = "";
+      var partes = (!st || !st.online) ? ["no responde"] : [
+        st.ping_ms != null ? st.ping_ms + " ms" : "",
+        st.players != null
+          ? st.players.toLocaleString("es-MX") + " / " + (st.max_players || 0).toLocaleString("es-MX")
+          : ""
+      ];
+      partes.forEach(function(t){
+        var sp = document.createElement("span");
+        sp.textContent = t;
+        stats.appendChild(sp);
+      });
+    }).catch(function(){});
+  }
+
+  obNext.addEventListener("click", function(){
+    if (obNext.hasAttribute("data-cerrar")) { closeOb(); return; }
+    if (cur === 1) prepararInvitacion();
+    else if (cur === 3) { closeOb(); runPlay().catch(function(){}); }
+  });
+  document.getElementById("ob-exit").addEventListener("click", closeOb);
+  document.addEventListener("keydown", function(e){
+    if (e.key === "Escape" && !ob.hidden) closeOb();
+  });
+  renderOb();
+
+  /* Con el launcher ya abierto, Rust avisa de que llegó un link. La invitación en sí se
+     recoge siempre del mismo sitio, así que no puede abrirse dos veces. */
+  if (window.__TAURI__) {
+    window.__TAURI__.event.listen("invitacion", function(){
+      window.__TAURI__.core.invoke("invitacion_pendiente").then(function(c){
+        if (c) abrirInvitacion(c);
+      });
+    });
+  }
+
+
+  /* ================= estado real: pack, cuenta, servidor, instancia ================= */
+  var call = function(cmd, args){
+    return tauri ? tauri.core.invoke(cmd, args || {}) : Promise.reject("sin backend");
+  };
+  var $ = function(id){ return document.getElementById(id); };
+
+  function humanBytes(n){
+    if (!n) return "0 MB";
+    var mb = n / 1048576;
+    return mb >= 1024 ? (mb/1024).toFixed(2) + " GB" : Math.round(mb) + " MB";
+  }
+  function slug(name){
+    return name.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+               .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "modpack";
+  }
+  function escapar(t){
+    return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  /* Traduce lo que devuelve el backend a algo que diga **qué hacer**. El texto técnico
+     se queda debajo en pequeño: sirve para diagnosticar sin asustar a quien solo quería
+     jugar, y es lo que se puede copiar y mandar si hay que mirarlo. */
+  var ERRORES = [
+    [/sin conexión|error de red|dns|connect|tiempo de espera|timed out/i,
+     "Parece que no hay internet. Revisa tu conexión y vuelve a intentarlo."],
+    [/hash|dañad|corrupt|incomplet/i,
+     "La descarga llegó incompleta. Vuelve a darle: sigue desde donde se quedó."],
+    [/no encontré ningún modpack/i,
+     "Ese código no existe. Pídeselo otra vez a quien te lo pasó."],
+    [/espacio|os error 112/i,
+     "No queda espacio en el disco para instalarlo."],
+    [/permiso|denied|os error 5/i,
+     "Windows no dejó escribir en la carpeta. Cierra el juego, y si sigue, reinicia el launcher."],
+    [/404|not found|no such file/i,
+     "El archivo ya no está donde decía el catálogo. Avisa a quien lo publicó."]
+  ];
+
+  function showError(titulo, err){
+    var crudo = String(err || "");
+    for (var i = 0; i < ERRORES.length; i++) {
+      if (ERRORES[i][0].test(crudo)) {
+        showAlert("<b>" + escapar(titulo) + "</b> " + ERRORES[i][1] +
+                  '<small class="alert-raw">' + escapar(crudo) + "</small>");
+        return;
+      }
+    }
+    showAlert("<b>" + escapar(titulo) + "</b> " + escapar(crudo));
+  }
+
+  function showAlert(html){
+    var el = $("alert");
+    if (!el) return;
+    if (!html) { el.hidden = true; return; }
+    el.innerHTML = html; el.hidden = false;
+  }
+  /* Pinta un icono: el del pack si lo trajo, si no el dino de siempre. */
+  function setIcon(host, dataUrl){
+    if (!host) return;
+    if (dataUrl) {
+      host.innerHTML = '<img src="' + dataUrl + '" alt="" style="width:70%;height:auto;border-radius:14%;image-rendering:auto">';
+    } else if (!host.querySelector("canvas")) {
+      var c = document.createElement("canvas");
+      c.width = 22; c.height = 21; c.dataset.dino = "";
+      host.innerHTML = ""; host.appendChild(c);
+      paintDino(c);
+    }
+  }
+
+  var PACK = null;   /* lo que hay instalado, leído del disco */
+
+  function renderPack(info){
+    var name = PACK ? PACK.name : "Sin modpack";
+    $("packName").textContent = name;
+    setIcon($("packIcon"), info && info.icon);
+
+    var meta = [], chips = [];
+    if (info && info.installed) {
+      if (info.loader) meta.push(info.loader);
+      if (info.minecraft) meta.push("MC " + info.minecraft);
+      meta.push(info.mods + " mods");
+      meta.push(humanBytes(info.bytes));
+    } else if (PACK && CATALOGO && (CATALOGO.loader || CATALOGO.mods || CATALOGO.bytes)) {
+      /* Sin instalar, lo que sabe qué es el pack es el catálogo. Antes aquí solo ponía
+         «no instalado todavía», que es no decir nada justo cuando alguien está
+         decidiendo si instalarlo.
+         Y el tamaño vive en esta línea, no dentro del botón: el ancho de un botón debe
+         depender de su propio vocabulario —Jugar, Instalar, Actualizar, tres palabras
+         fijas— y no del catálogo, porque con `1fr auto` lo que crece el botón lo paga
+         el título. */
+      if (CATALOGO.loader) meta.push(CATALOGO.loader);
+      if (CATALOGO.minecraft) meta.push("MC " + CATALOGO.minecraft);
+      if (CATALOGO.mods) meta.push(CATALOGO.mods + " mods");
+      if (CATALOGO.bytes) meta.push(humanBytes(CATALOGO.bytes) + " por descargar");
+    } else {
+      meta.push(PACK ? "no instalado todavía" : "importa un .mrpack para empezar");
+    }
+    $("packMeta").innerHTML = meta.map(function(t, i){
+      return (i ? "<i></i>" : "") + "<span>" + t + "</span>";
+    }).join("");
+    $("packChips").innerHTML = chips.join("");
+
+    var play = document.querySelector(".play");
+    if (play) play.disabled = !PACK;
+  }
+
+  /* El botón principal dice lo que va a pasar al pulsarlo, con el peso de lo que haya
+     que bajar cuando se sepa. Antes siempre ponía «Jugar»: el primer clic de un amigo
+     se iba media hora a descargar sin haberle avisado de nada, y eso se parece
+     demasiado a que el launcher se colgó. */
+  function renderBoton(){
+    var play = document.querySelector(".play");
+    if (!play || !playLabel) return Promise.resolve();
+    if (!PACK) { playLabel.textContent = "Jugar"; return Promise.resolve(); }
+    return call("pack_state", { id: PACK.id }).then(function(e){
+      CATALOGO = e || null;
+      var txt = ({ instalar: "Instalar", actualizar: "Actualizar" })[e && e.estado] || "Jugar";
+      playLabel.textContent = txt;
+      /* La ficha depende de esto cuando no hay nada instalado, y las dos consultas van
+         en paralelo: se repinta con lo que ya hubiera del disco. */
+      renderPack(INSTANCIA);
+      dlog("botón: " + txt + " (" + ((e && e.estado) || "?") +
+           (e && e.bytes ? ", " + humanBytes(e.bytes) : "") + ")");
+    }).catch(function(){ playLabel.textContent = "Jugar"; });
+  }
+
+  var RAM_REC = null;     /* la recomendación para esta máquina, en GB */
+  var INSTANCIA = null;   /* lo último que dijo el disco sobre la instancia */
+  var CATALOGO = null;    /* lo último que dijo el catálogo sobre el pack */
+
+  function renderMemory(){
+    return call("memory_info").then(function(m){
+      if (!m || !m.total) return;
+      var gb = Math.round(m.total / 1024), rec = Math.round(m.max / 1024);
+      RAM_REC = rec;
+      /* Lo elegido a mano para este pack manda; sin nada guardado, la recomendación. */
+      var elegida = (PACK && PACK.max_mem) ? Math.round(PACK.max_mem / 1024) : null;
+      var usar = elegida || rec;
+      var slider = $("ram");
+      if (slider) {
+        slider.max = String(gb);
+        slider.value = String(usar);
+        slider.dispatchEvent(new Event("input"));
+      }
+      var scale = document.querySelector(".ram-scale");
+      if (scale) scale.lastElementChild.textContent = gb + " GB en esta máquina";
+      var hint = $("ramHint");
+      if (hint) hint.textContent = elegida
+        ? "Elegiste " + usar + " GB para este pack. Aquí se recomiendan " + rec +
+          ": déjalo en " + rec + " para volver a automático."
+        : "De " + gb + " GB, le tocan " + rec + " al juego; el resto es para el sistema.";
+      var chips = $("packChips");
+      if (chips && PACK) chips.innerHTML = '<span class="chip">RAM <b>' + usar + ' GB</b></span>';
+    });
+  }
+
+  /* `change` y no `input`: se guarda al soltar el control, no en cada paso del arrastre.
+     Por `getElementById` y no `$`, porque esto corre al cargar el script. */
+  document.getElementById("ram").addEventListener("change", function(){
+    if (!PACK) return;
+    var gb = Number(this.value);
+    /* Dejarlo en la recomendación es volver a automático: así el pack sigue a la
+       máquina si cambia de RAM, en vez de quedarse clavado en un número que
+       coincidía por casualidad. */
+    var mb = (gb === RAM_REC) ? null : gb * 1024;
+    var id = PACK.id;
+    call("set_pack_memory", { id: id, mb: mb }).then(function(){
+      if (PACK && PACK.id === id) PACK.max_mem = mb;
+      return renderMemory();
+    }).catch(function(e){
+      showError("No pude guardar la RAM.", e);
+    });
+  });
+
+  function renderInstance(){
+    if (!PACK) { INSTANCIA = null; CATALOGO = null; renderPack(null); return Promise.resolve(); }
+    return call("instance_info", { id: PACK.id }).then(function(info){
+      INSTANCIA = info;
+      renderPack(info);
+      if (!info || !info.installed) return;
+      $("kvPath").textContent = String(info.path).replace(/^\/Users\/[^/]+/, "~");
+      $("kvPath").title = info.path;
+      $("kvLoader").textContent = info.loader || "—";
+      $("kvSize").textContent = humanBytes(info.bytes) + " · " + info.mods + " mods";
+      $("kvWorlds").textContent = info.worlds + (info.worlds === 1 ? " mundo · intocable" : " mundos · intocables");
+      $("setEyebrow").textContent = PACK.name + (info.minecraft ? " · " + info.minecraft : "");
+    });
+  }
+
+  function renderAccount(){
+    return call("active_account").then(function(a){
+      var nameEl = document.querySelector(".account-name");
+      var kindEl = document.querySelector(".account-kind");
+      if (!a) {
+        if (nameEl) nameEl.textContent = "Sin cuenta";
+        if (kindEl) kindEl.textContent = "inicia sesión al jugar";
+        return;
+      }
+      if (nameEl) nameEl.textContent = a.name || "—";
+      if (kindEl) {
+        var kinds = { MSA: "Microsoft", Ely: "Ely.by", Offline: "sin conexión" };
+        kindEl.textContent = kinds[a.kind] || a.kind || "";
+      }
+      var head = document.querySelector(".account canvas[data-head]");
+      if (head && a.name) { head.dataset.head = a.name; paintHead(head); }
+    });
+  }
+
+  function renderServer(){
+    var box = $("server");
+    var addr = PACK && PACK.server;
+    if (!addr) { if (box) box.hidden = true; return Promise.resolve(); }
+    box.hidden = false;
+    $("srvName").textContent = addr;
+    return call("server_status", { addr: addr }).then(function(st){
+      var dot = $("srvDot");
+      if (!st || !st.online) {
+        dot.style.background = "var(--text-faint)";
+        dot.style.boxShadow = "none";
+        $("srvStats").innerHTML = "<span>no responde</span>";
+        return;
+      }
+      dot.style.background = "var(--green)";
+      dot.style.boxShadow = "0 0 10px var(--green-glow)";
+      var players = st.players != null
+        ? st.players.toLocaleString("es-MX") + " / " + (st.max_players || 0).toLocaleString("es-MX")
+        : "";
+      $("srvStats").innerHTML = "<span>" + (st.ping_ms != null ? st.ping_ms + " ms" : "") + "</span><span>" + players + "</span>";
+      if (st.motd) $("srvName").title = st.motd;
+    });
+  }
+
+  function renderJava(){
+    return call("java_runtimes").then(function(list){
+      var sel = $("javaSelect");
+      if (!sel) return;
+      sel.innerHTML = (list && list.length)
+        ? list.map(function(r){ return "<option>" + r + "</option>"; }).join("")
+        : "<option>lo descarga el motor al jugar</option>";
+    });
+  }
+
+  function setSync(text, ok){
+    var t = $("syncText"), d = $("syncDot");
+    if (t) t.textContent = text;
+    if (d) {
+      d.style.background = ok ? "var(--green)" : "var(--text-faint)";
+      d.style.boxShadow = ok ? "0 0 9px var(--green-glow)" : "none";
+    }
+  }
+
+  function refreshAll(){
+    return call("get_pack").then(function(p){
+      PACK = p && p.id ? p : null;
+      $("kvEngine").textContent = "ElyPrism 11.1.0 · administrado";
+      setSync(PACK ? "listo para jugar" : "sin modpack", !!PACK);
+      return Promise.all([renderInstance(), renderAccount(), renderServer(), renderMemory(),
+                          renderJava(), renderBiblioteca(), renderBoton()]);
+    }).catch(function(){});
+  }
+
+  /* ================= importar un .mrpack ================= */
+  var pending = null;   /* archivo inspeccionado, a la espera de confirmación */
+
+  function showPreview(path, info){
+    pending = { path: path, info: info };
+    $("previewSub").textContent = "Revisa y confirma.";
+    $("previewBody").hidden = false;
+    $("previewName").textContent = info.name;
+    setIcon($("previewIcon"), info.icon);
+    var meta = [];
+    if (info.loader) meta.push(info.loader);
+    if (info.minecraft) meta.push("MC " + info.minecraft);
+    meta.push(info.files + " archivos");
+    meta.push(humanBytes(info.bytes));
+    $("previewMeta").innerHTML = meta.map(function(t, i){
+      return (i ? "<i></i>" : "") + "<span>" + t + "</span>";
+    }).join("");
+  }
+
+  function takeFile(path){
+    if (!/\.mrpack$/i.test(path)) {
+      $("dropHint").textContent = "eso no es un .mrpack";
+      return;
+    }
+    $("dropHint").textContent = "leyendo…";
+    call("inspect_mrpack", { path: path }).then(function(info){
+      $("dropHint").textContent = path.split("/").pop();
+      showPreview(path, info);
+    }).catch(function(e){
+      $("dropHint").textContent = "no pude leerlo: " + e;
+    });
+  }
+
+  var dz = $("dropZone");
+  if (dz && tauri) {
+    /* El resaltado va en la zona que se ve. Con el segmento de publicar abierto, marcar
+       la de importar —que está escondida— dejaba el arrastre sin ninguna respuesta. */
+    var zonaDrop = function(){
+      var pub = $("adminPublish");
+      return (pub && !pub.hidden && $("pubDrop")) ? $("pubDrop") : dz;
+    };
+    var apagarDrop = function(){
+      dz.classList.remove("over");
+      if ($("pubDrop")) $("pubDrop").classList.remove("over");
+    };
+    tauri.event.listen("tauri://drag-enter", function(){ zonaDrop().classList.add("over"); });
+    tauri.event.listen("tauri://drag-leave", apagarDrop);
+    tauri.event.listen("tauri://drag-drop", function(e){
+      apagarDrop();
+      var paths = (e.payload && e.payload.paths) || [];
+      if (!paths.length) return;
+      /* Importar y publicar viven en la misma pestaña, y hacen cosas distintas con el
+         mismo archivo. Manda el segmento abierto: ir siempre a importar haría
+         imposible soltar un .mrpack en el panel de publicar. */
+      var admin = $("navAdmin");
+      if (admin && admin.hidden) return;   // sin `gh` no hay dónde soltarlo
+      var enPublicar = $("adminPublish") && !$("adminPublish").hidden;
+      document.querySelector('[data-go="admin"]').click();
+      if (enPublicar) {
+        /* Desde la lista de publicados el editor está cerrado: se abre como pack nuevo
+           antes de leer, o el archivo rellenaría un formulario que no se ve. */
+        if ($("pubEditor").hidden) pubEditor("nuevo");
+        pubLeer(paths[0]);
+      } else {
+        takeFile(paths[0]);
+      }
+    });
+  }
+
+  var btnInstall = $("btnInstall");
+  if (btnInstall) {
+    btnInstall.addEventListener("click", function(){
+      if (!pending) return;
+      var info = pending.info;
+      var srv = ($("srvInput").value || "").trim();
+      var autoJoin = document.querySelector('#previewPanel, .field-switch .switch[data-toggle]');
+      var pack = {
+        id: slug(info.name),
+        name: info.name,
+        version: info.version,
+        mrpack: pending.path,
+        server: srv || null
+      };
+      btnInstall.disabled = true;
+      btnInstall.textContent = "Instalando…";
+      call("set_pack", { pack: pack })
+        .then(function(guardado){
+          /* Manda lo que devolvió el backend: puede haberle asignado otra carpeta si la
+             que pedía ya era de otro pack, y seguir con la nuestra instalaría encima. */
+          PACK = guardado || pack;
+          return runPlay({ installOnly: true });
+        })
+        .then(function(){
+          document.querySelector('[data-go="jugar"]').click();
+          return refreshAll();
+        })
+        .finally(function(){
+          btnInstall.disabled = false;
+          btnInstall.textContent = "Instalar este modpack";
+        });
+    });
+  }
+
+  /* ================= Jugar ================= */
+  var playBtn = document.querySelector(".play");
+  var playLabel = $("playLabel");
+
+  /* ================= los tres estados del panel de lanzamiento =================
+     Reposo (botón Jugar), preparando (barra) y jugando (detener). Cuál toca lo dice
+     el backend en `session_state`, que es la lectura de un atómico y no cuesta nada,
+     así que se puede preguntar seguido.
+
+     El ancho de la barra entra por la variable `--frac` y no por `style.width`: un
+     ancho en línea le ganaría a cualquier selector y dejaría sin ancho al segmento del
+     modo indeterminado, con lo que la barra parecería congelada justo cuando más
+     importa que se vea viva. */
+  var bloqueLaunch  = $("launch");
+  var bloqueSession = $("session");
+  var launchPhase   = $("launchPhase");
+  var launchAmt     = $("launchAmt");
+  var launchBar     = $("launchBar");
+  var launchCancel  = $("launchCancel");
+  var sessionStop   = $("sessionStop");
+  var sessionName   = $("sessionName");
+
+  function mostrarEstado(cual){
+    if (playBtn)      playBtn.hidden      = (cual !== "reposo");
+    if (bloqueLaunch) bloqueLaunch.hidden = (cual !== "preparando");
+    if (bloqueSession)bloqueSession.hidden= (cual !== "jugando");
+    if (cual !== "jugando") desarmarStop();
+    /* Una partida nueva vuelve a poder detenerse aunque la anterior se cerrara con él. */
+    if (cual === "jugando" && sessionStop) sessionStop.disabled = false;
+    marcarSesionEnBiblioteca(cual === "jugando");
+  }
+
+  function setProgress(paso, frac, bajado, total){
+    if (paso) launchPhase.textContent = paso;
+    /* Los megas cuando se sepan: en una descarga de cientos, un porcentaje a secas no
+       dice si quedan dos minutos o veinte. Los pasos que no bajan nada lo dejan vacío. */
+    if (launchAmt) {
+      launchAmt.textContent = total
+        ? humanBytes(bajado || 0) + " / " + humanBytes(total)
+        : "";
+    }
+    if (typeof frac === "number" && frac >= 0) {
+      launchBar.removeAttribute("data-indeterminate");
+      launchBar.style.setProperty("--frac", Math.round(frac * 100) + "%");
+    } else {
+      /* Sin dato no se finge uno: el motor no publica porcentaje por ninguna vía. */
+      launchBar.setAttribute("data-indeterminate", "");
+    }
+  }
+
+  if (tauri) {
+    tauri.event.listen("install", function(e){
+      var p = e.payload || {};
+      setProgress(p.paso, p.frac, p.bajado, p.total);
+      progresoInvitacion(p.paso, p.frac);
+    });
+  }
+
+  /* ---- cancelar la preparación ----
+     Sustituye al botón Abort del motor, que desapareció al esconderle la ventana.
+     Sin esto no habría forma de parar una descarga de cientos de megas. */
+  if (launchCancel) {
+    launchCancel.addEventListener("click", function(){
+      launchCancel.disabled = true;
+      launchPhase.textContent = "Cancelando";
+      call("abort_launch").catch(function(e){ console.error(e); }).then(function(){
+        launchCancel.disabled = false;
+        mostrarEstado("reposo");
+      });
+    });
+  }
+
+  /* ---- detener la partida, con confirmación ----
+     El botón cae justo donde estaba Jugar, así que quien vuelve del juego y pulsa por
+     costumbre mataría su propia sesión. Por eso el primer clic solo arma. Y se desarma
+     solo: un botón que se queda armado indefinidamente es la misma trampa más tarde. */
+  var stopTimer = null;
+  function desarmarStop(){
+    clearTimeout(stopTimer); stopTimer = null;
+    if (sessionStop) sessionStop.removeAttribute("data-armed");
+  }
+  if (sessionStop) {
+    sessionStop.addEventListener("click", function(){
+      if (!sessionStop.hasAttribute("data-armed")) {
+        sessionStop.setAttribute("data-armed", "");
+        stopTimer = setTimeout(desarmarStop, 4000);
+        return;
+      }
+      desarmarStop();
+      /* Se le pide a Minecraft que se cierre como con su X: guarda y sale, y solo si no
+         responde se corta. Puede tardar lo que tarde en guardar, así que el botón se
+         bloquea hasta que cambie la sesión: un segundo clic volvería a pedirlo. */
+      sessionStop.disabled = true;
+      call("stop_game").catch(function(e){
+        console.error(e);
+        sessionStop.disabled = false;
+      });
+    });
+  }
+  document.addEventListener("keydown", function(e){
+    if (e.key !== "Escape") return;
+    desarmarStop();
+    /* Uno por pulsación, y el de quitar primero: es el que puede estar tapando al
+       otro, y el que conviene poder abandonar sin pensárselo. */
+    if (removeOverlay && !removeOverlay.hidden) { cerrarQuitar(); return; }
+    if (joinOverlay && !joinOverlay.hidden) cerrarJoin();
+  });
+
+  /* ---- seguir al backend ----
+     Se sondea siempre, no solo tras pulsar Jugar: la partida puede seguir viva de una
+     sesión anterior del launcher, y al abrirlo hay que encontrarla ya en marcha. */
+  var estadoPrevio = null;
+  var preguntaPrevia = null;
+
+  /* Una ventana del motor que espera respuesta no se esconde: taparla dejaría la
+     preparación colgada para siempre, que es justo lo que le pasó a un amigo con el
+     diálogo de migración. Si aparece una, aquí se explica por qué hay una ventana ajena
+     delante, en vez de dejar la barra girando sin decir nada. */
+  function vigilarPregunta(){
+    call("engine_question").then(function(t){
+      if (t === preguntaPrevia) return;
+      preguntaPrevia = t;
+      if (t) setProgress("El motor te está preguntando algo: respóndele en su ventana", -1);
+    }).catch(function(){});
+  }
+
+  function seguirSesion(){
+    call("session_state").then(function(st){
+      /* Se consulta aunque el estado no cambie: la pregunta asoma en mitad de la
+         preparación, no al pasar de un estado a otro. */
+      if (st === "preparando") vigilarPregunta();
+      else preguntaPrevia = null;
+      if (st === estadoPrevio) return;
+      estadoPrevio = st;
+      if (st === "jugando") {
+        if (sessionName) sessionName.textContent = PACK ? PACK.name : "";
+        mostrarEstado("jugando");
+      } else if (st === "preparando") {
+        /* Aquí manda el motor y no publica porcentaje, así que barra indeterminada. */
+        setProgress("Descargando Minecraft", -1);
+        mostrarEstado("preparando");
+      } else {
+        mostrarEstado("reposo");
+      }
+    }).catch(function(){});
+  }
+  setInterval(seguirSesion, 1000);
+  seguirSesion();
+
+  /* Un segundo Jugar mientras el primero sigue en marcha lanzaría el motor dos veces.
+     El botón ya se esconde al empezar, pero el teclado y un doble clic rápido llegan
+     igual, así que el cerrojo va aquí y no en el estado visual. */
+  var lanzando = false;
+
+  function runPlay(opts){
+    opts = opts || {};
+    if (!PACK || lanzando) return Promise.resolve();
+    lanzando = true;
+    showAlert(null);
+    /* El botón desaparece y su sitio lo ocupa la barra. `estadoPrevio` se limpia para
+       que el sondeo vuelva a aplicar lo que diga el backend en cuanto cambie. */
+    estadoPrevio = null;
+    setProgress("Preparando", 0);
+    mostrarEstado("preparando");
+    setSync(opts.installOnly ? "instalando…" : "preparando…", false);
+
+    return call("play", { args: {
+      mrpack: PACK.mrpack,
+      instance_id: PACK.id,
+      /* Con código, el backend mira si hay versión nueva antes de lanzar. Sin él
+         —un pack importado a mano— no hay contra qué comparar y se juega tal cual. */
+      code: PACK.code || null,
+      name: PACK.name,
+      version: PACK.version || "1.0.0",
+      server: PACK.server || null,
+      /* 0 es «decídelo tú según la máquina»; solo va un número si se eligió a mano. */
+      max_mem: PACK.max_mem || 0,
+      jvm_args: "",
+      install_only: !!opts.installOnly
+    }}).then(function(r){
+      /* Llegar aquí es que la instalación ya terminó, así que lo que escribió —el icono
+         que traiga el pack, la instancia montada— ya está en disco. Sin repintar, la
+         primera partida entera se veía con el dino genérico y la tarjeta seguía
+         diciendo «sin instalar». */
+      renderInstance();
+      renderBiblioteca();
+      if (r === "login") {
+        /* Ya no se deja al usuario frente a la ventana del motor sin contexto:
+           el setup pregunta primero qué cuenta tiene y guía la que elija. */
+        call("close_engine").catch(function(){});
+        estadoPrevio = null; mostrarEstado("reposo");
+        spAbrir();
+      } else if (opts.installOnly) {
+        estadoPrevio = null; mostrarEstado("reposo");
+      } else {
+        /* A partir de aquí manda el motor, que no publica porcentaje. El sondeo de
+           `session_state` es quien pasará a «jugando» cuando el juego arranque. */
+        setProgress("Descargando Minecraft", -1);
+      }
+      return r;
+    }).catch(function(err){
+      showError("No se pudo.", err);
+      estadoPrevio = null; mostrarEstado("reposo");
+      throw err;
+    }).finally(function(){
+      lanzando = false;
+      setSync(PACK ? "listo para jugar" : "sin modpack", !!PACK);
+    });
+  }
+
+  if (playBtn) {
+    playBtn.addEventListener("click", function(){ runPlay().catch(function(){}); });
+  }
+
+  /* ================= botones de Ajustes ================= */
+  var btnFolder = $("btnFolder");
+  if (btnFolder) {
+    btnFolder.addEventListener("click", function(){
+      if (!PACK) return;
+      call("instance_info", { id: PACK.id }).then(function(i){
+        if (i && i.path) return call("open_folder", { path: i.path });
+      }).catch(function(e){ showError("No pude abrir la carpeta.", e); });
+    });
+  }
+  var btnVerify = $("btnVerify");
+  if (btnVerify) {
+    btnVerify.addEventListener("click", function(){
+      if (!PACK) return;
+      btnVerify.disabled = true;
+      var antes = btnVerify.textContent;
+      btnVerify.textContent = "Verificando…";
+      /* La instalación ya es idempotente: revalida hashes y repara lo que falte. */
+      runPlay({ installOnly: true })
+        .then(refreshAll)
+        .finally(function(){ btnVerify.disabled = false; btnVerify.textContent = antes; });
+    });
+  }
+
+  /* ================= setup real de primera vez =================
+     La rama de Microsoft no se puede resolver aquí dentro: su flujo necesita un
+     client_id de Azure con acceso a la API de Minecraft aprobado por Mojang. Así que
+     abre el motor, pero vigila accounts.json y lo cierra sola en cuanto entra la
+     cuenta — antes te dejaba con una ventana ajena abierta y sin instrucciones.
+     La de Ely.by sí es nativa: código de dispositivo, sin ventana del motor y sin
+     que nadie escriba una contraseña aquí dentro. */
+  function dlog(m){ try{ window.__TAURI__.core.invoke("boot_ping", { msg: m }); }catch(e){} }
+  var setup   = document.getElementById("setup");
+  var spPasos = Array.prototype.slice.call(setup.querySelectorAll("[data-sp]"));
+  var spDots  = Array.prototype.slice.call(setup.querySelectorAll(".ob-dots i"));
+  var spAtras = document.getElementById("sp-atras");
+  var spJugar = document.getElementById("sp-jugar");
+  var spTimer = null;   /* sondeo en curso: hay que pararlo al salir o se queda vivo */
+
+  function spIr(paso, punto){
+    spPasos.forEach(function(e){ e.classList.toggle("on", e.dataset.sp === paso); });
+    spDots.forEach(function(d, i){ d.classList.toggle("done", i < punto); });
+    spAtras.hidden = (paso === "1" || paso === "3");
+    spJugar.hidden = (paso !== "3");
+  }
+  function spParar(){ if (spTimer) { clearTimeout(spTimer); spTimer = null; } }
+  function spCerrar(){ spParar(); setup.hidden = true; }
+  function spAbrir(){ spParar(); setup.hidden = false; spIr("1", 1); }
+
+  function mmss(seg){
+    var m = Math.floor(seg / 60), s2 = seg % 60;
+    return m + ":" + (s2 < 10 ? "0" : "") + s2;
+  }
+  /* El código va carácter por carácter, como en la vista de invitación. */
+  function pintarCodigo(el, texto){
+    el.innerHTML = "";
+    String(texto).split("").forEach(function(ch){
+      var sp = document.createElement("span");
+      if (ch === "-" || ch === " ") { sp.className = "sep"; sp.textContent = "–"; }
+      else sp.textContent = ch;
+      el.appendChild(sp);
+    });
+  }
+
+  function spListo(yaJugando){
+    spParar();
+    renderAccount().then(function(){
+      var a = document.querySelector(".account-name");
+      var nombre = a ? a.textContent : "";
+      var quien = (nombre && nombre !== "Sin cuenta") ? "Tu cuenta " + nombre : "Tu cuenta";
+      document.getElementById("sp-listo").textContent = yaJugando
+        ? quien + " quedó conectada. Minecraft está abriendo."
+        : quien + " quedó conectada.";
+    }).catch(function(){});
+    spIr("3", 3);
+    /* Si el motor ya está lanzando el juego, ofrecer "Jugar" lanzaría una segunda vez. */
+    spJugar.hidden = !!yaJugando;
+  }
+
+  /* ---- rama Microsoft ----
+     Con instancia instalada el motor va directo a su página de Cuentas y no enseña su
+     ventana principal (modo "direct"). Ahí, tras iniciar sesión, el propio motor sigue
+     y abre Minecraft: por eso en ese modo NO lo matamos, sería abortarle el lanzamiento.
+
+     Si alguien cierra el login sin entrar, el motor pregunta «Play demo?» y se va si le
+     dicen que no. No se intenta adivinar ese momento contando ventanas —al cerrar un
+     diálogo abre el otro, así que el conteo no baja—: lo que se detecta es que el motor
+     terminó, para dejar de esperar. Para cortar antes está el botón de cancelar. */
+  document.getElementById("sp-msa").addEventListener("click", function(){
+    spIr("2-msa", 2);
+    var estado = document.getElementById("sp-msa-estado");
+    var texto  = document.getElementById("sp-msa-texto");
+    estado.textContent = "abriendo el motor…";
+    texto.textContent  = "Abriendo…";
+
+    call("open_engine_login", { instance: PACK ? PACK.id : null }).then(function(modo){
+      var directo = (modo === "direct");
+      texto.innerHTML = directo
+        ? 'Se abrió la página de <span class="mono-i">Cuentas</span> del motor. ' +
+          'Añade ahí tu cuenta de Microsoft.'
+        : 'Se abrió la ventana del motor. Ve a <span class="mono-i">Cuentas</span> ' +
+          'y añade tu cuenta de Microsoft.';
+      estado.textContent = "esperando a que inicies sesión…";
+
+      var vistas = false;   /* ¿llegamos a ver alguna ventana suya? */
+      (function vigilar(){
+        spTimer = setTimeout(function(){
+          call("active_account").then(function(a){
+            if (a && a.name) {
+              if (directo) {
+                /* El motor sigue solo y abre el juego. Matarlo aquí lo abortaría. */
+                estado.textContent = "sesión iniciada; Minecraft está abriendo…";
+              } else {
+                estado.textContent = "cuenta detectada, cerrando el motor…";
+                call("close_engine").catch(function(){});
+              }
+              spListo(directo);
+              return;
+            }
+            /* Sin cuenta todavía: ¿el motor sigue ahí? */
+            return call("engine_windows").then(function(n){
+              if (n === null || n === undefined) return vigilar();  /* no se puede saber */
+              if (n > 0) { vistas = true; return vigilar(); }
+              if (!vistas) return vigilar();   /* aún no había abierto: no es cancelar */
+              estado.textContent = "se cerró el motor sin iniciar sesión. Puedes reintentarlo.";
+              spAtras.hidden = false;
+            });
+          }).catch(function(){ vigilar(); });
+        }, 2000);
+      })();
+    }).catch(function(e){ estado.textContent = "no se pudo abrir el motor: " + String(e); });
+  });
+
+  /* ---- rama sin conexión: la cuenta se crea aquí, el motor ni se abre ----
+     No autentica contra nadie: el nombre y el UUID que se deriva de él son toda la
+     identidad. Se asume a sabiendas que cualquiera puede escribir el nombre de otro;
+     es un launcher entre amigos y esa cuenta se paga si algún día hace falta. */
+  var nick       = document.getElementById("sp-nick");
+  var nickEstado = document.getElementById("sp-nick-estado");
+  var nickBtn    = document.getElementById("sp-nick-crear");
+  var nickTimer  = null;
+  var NICK_AYUDA = "de 3 a 16 caracteres: letras, números y guion bajo";
+
+  document.getElementById("sp-offline").addEventListener("click", function(){
+    spIr("2-offline", 2);
+    nick.value = "";
+    nickBtn.disabled = true;
+    nickEstado.textContent = NICK_AYUDA;
+    setTimeout(function(){ nick.focus(); }, 50);
+  });
+
+  /* La validación vive en Rust y se consulta según se escribe: así la regla existe
+     en un solo sitio y nadie llega a pulsar Crear con un nombre que el servidor
+     rechazaría después. */
+  nick.addEventListener("input", function(){
+    clearTimeout(nickTimer);
+    nickTimer = setTimeout(function(){
+      var valor = nick.value;
+      if (!valor.trim()) { nickBtn.disabled = true; nickEstado.textContent = NICK_AYUDA; return; }
+      call("offline_check", { name: valor }).then(function(motivo){
+        nickBtn.disabled = !!motivo;
+        nickEstado.textContent = motivo || "se ve bien";
+      }).catch(function(){});
+    }, 150);
+  });
+  nick.addEventListener("keydown", function(e){
+    if (e.key === "Enter" && !nickBtn.disabled) nickBtn.click();
+  });
+
+  nickBtn.addEventListener("click", function(){
+    nickBtn.disabled = true;
+    nickEstado.textContent = "creando la cuenta…";
+    call("offline_create", { name: nick.value }).then(function(){
+      spListo(false);
+    }).catch(function(e){
+      nickEstado.textContent = String(e);
+      nickBtn.disabled = false;
+    });
+  });
+
+  document.getElementById("sp-cerrar").addEventListener("click", spCerrar);
+  spAtras.addEventListener("click", function(){ spParar(); spIr("1", 1); });
+
+  var spAyuda = document.getElementById("sp-ayuda");
+  if (spAyuda) {
+    spAyuda.addEventListener("click", function(){
+      var t = document.getElementById("sp-ayuda-txt");
+      t.hidden = !t.hidden;
+      spAyuda.textContent = t.hidden ? "¿Cuál me toca?" : "Entendido";
+    });
+  }
+
+  /* Volver al setup desde la cuenta del rail: para cambiarla, o para releer qué es cada
+     una. Con una partida abierta no, que acabaría cambiando la cuenta por debajo. */
+  var accountBtn = document.getElementById("accountBtn");
+  if (accountBtn) {
+    var abrirCuentas = function(){
+      if (estadoPrevio === "jugando") return;
+      spAbrir();
+    };
+    accountBtn.addEventListener("click", abrirCuentas);
+    accountBtn.addEventListener("keydown", function(e){
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); abrirCuentas(); }
+    });
+  }
+
+  /* Cortar la espera del login: se deja de sondear, se cierra el motor y se vuelve a
+     elegir. Sin esto la única salida era cerrar a mano la ventana del motor, que es
+     justo lo que el setup existe para ahorrarle a nadie. */
+  document.getElementById("sp-msa-cancelar").addEventListener("click", function(){
+    spParar();
+    call("close_engine").catch(function(){});
+    spIr("1", 1);
+  });
+  spJugar.addEventListener("click", function(){ spCerrar(); runPlay().catch(function(){}); });
+  document.addEventListener("keydown", function(e){
+    if (e.key === "Escape" && !setup.hidden) spCerrar();
+  });
+
+  /* Primera vez: si no hay cuenta, el setup sale solo. Es justo el momento en que
+     antes te aparecía el launcher del motor sin que lo hubieras pedido. */
+  /* Salvo que se haya abierto con una invitación: entonces manda ella, y la cuenta se
+     pide al darle a Jugar, que es cuando hace falta. Si no, un amigo recién instalado
+     que abre el link se encontraría el setup tapando la invitación. */
+  call("invitacion_pendiente").then(function(codigo){
+    if (codigo) {
+      dlog("invitación al arrancar: " + codigo);
+      abrirInvitacion(codigo);
+      return;
+    }
+    return call("active_account").then(function(a){
+      var hay = !!(a && a.name);
+      dlog("setup: cuenta=" + (hay ? a.name : "ninguna"));
+      if (!hay) { spAbrir(); dlog("setup: visible=" + (!setup.hidden)); }
+    });
+  }).catch(function(e){ dlog("setup: fallo al consultar cuenta: " + String(e)); });
+
+  /* ================= publicar modpacks (solo admin) =================
+     La pestaña está escondida tras una clave (ver más abajo). Publicar se apoya además
+     en el `gh` autenticado: la clave decide quién ve el panel; el `gh`, quién puede
+     publicar de verdad. */
+  var pubDraft = null;   /* lo leído del .mrpack */
+  var pubPath  = null;   /* ruta del archivo elegido */
+  var pubModo  = "nuevo";
+  var pubFijado = null;  /* al actualizar: el pack que ya estaba publicado */
+
+  function pubVista(cual){
+    $("pubHome").hidden   = (cual !== "home");
+    $("pubEditor").hidden = (cual !== "editor");
+  }
+  function pubEstado(cual){
+    $("pubPreview").hidden = (cual !== "ficha");
+    $("pubBusy").hidden    = (cual !== "publicando");
+    $("pubDone").hidden    = (cual !== "hecho");
+    $("pubError").hidden   = (cual !== "error");
+  }
+
+  function pubCargarLista(){
+    call("admin_published").then(function(packs){
+      var lista = $("pubList");
+      lista.innerHTML = "";
+      $("pubEmpty").hidden = packs.length > 0;
+      packs.forEach(function(p){
+        var fila = document.createElement("div"); fila.className = "pub-row";
+        var cuerpo = document.createElement("div"); cuerpo.className = "pub-row-body";
+        var n = document.createElement("div"); n.className = "pub-row-name";
+        /* `textContent` y no `innerHTML`: estos nombres vienen de un archivo remoto,
+           y pintarlos como HTML sería dejar que el catálogo inyecte marcado. */
+        n.textContent = p.name;
+        var m = document.createElement("div"); m.className = "pub-row-meta";
+        m.textContent = "v" + p.version + (p.mods ? " · " + p.mods + " mods" : "");
+        cuerpo.appendChild(n); cuerpo.appendChild(m);
+
+        var cod = document.createElement("span"); cod.className = "pub-code";
+        cod.textContent = p.code;
+
+        /* El link de invitación de cualquier pack ya publicado. Antes solo salía justo
+           después de publicar: para volver a pasarlo había que publicar otra vez. */
+        var link = document.createElement("button");
+        link.type = "button"; link.className = "btn"; link.textContent = "Copiar link";
+        var reponer;
+        link.addEventListener("click", function(){
+          copiarTexto(INVITE_URL + p.code).then(function(hecho){
+            if (!hecho) return;
+            link.textContent = "Copiado"; link.classList.add("copied");
+            clearTimeout(reponer);
+            reponer = setTimeout(function(){
+              link.textContent = "Copiar link"; link.classList.remove("copied");
+            }, 1600);
+          });
+        });
+
+        var btn = document.createElement("button");
+        btn.type = "button"; btn.className = "btn"; btn.textContent = "Actualizar";
+        btn.addEventListener("click", function(){ pubEditor("actualizar", p); });
+
+        fila.appendChild(cuerpo); fila.appendChild(cod); fila.appendChild(link); fila.appendChild(btn);
+        lista.appendChild(fila);
+      });
+    }).catch(function(){ $("pubEmpty").hidden = false; });
+  }
+
+  function pubEditor(modo, pack){
+    pubModo = modo; pubFijado = pack || null;
+    pubDraft = null; pubPath = null;
+    $("pubEditorTitle").textContent = (modo === "actualizar")
+      ? "Actualizar " + pack.name : "Publicar un modpack";
+    $("pubEditorSub").textContent = (modo === "actualizar")
+      ? "Sube la versión nueva. El código no cambia, así que a nadie se le queda uno viejo."
+      : "Elige el .mrpack que quieres compartir.";
+    $("pubDropHint").textContent = "solo archivos .mrpack";
+    $("pubFields").hidden = true;
+    $("pubPreviewSub").hidden = false;
+    pubEstado(null);
+    pubVista("editor");
+  }
+
+  function pubPintar(){
+    if (!pubDraft) return;
+    $("pubPreviewName").textContent = ($("pubName").value || pubDraft.name);
+    var partes = [];
+    if (pubDraft.minecraft) partes.push("Minecraft " + pubDraft.minecraft);
+    if (pubDraft.loader)    partes.push(pubDraft.loader);
+    if (pubDraft.mods)      partes.push(pubDraft.mods + " mods");
+    partes.push("v" + pubDraft.version);
+    $("pubPreviewMeta").textContent = partes.join(" · ");
+    var url = pubDraft.icon_b64 ? "data:image/png;base64," + pubDraft.icon_b64 : null;
+    setIcon($("pubPreviewIcon"), url);
+    setIcon($("pubIcon"), url);
+  }
+
+  function pubLeer(ruta){
+    pubPath = ruta;
+    $("pubDropHint").textContent = "leyendo…";
+    call("admin_read", { path: ruta }).then(function(b){
+      pubDraft = b;
+      /* Al actualizar mandan el código y el id de lo ya publicado: cambiarlos daría
+         de alta un pack distinto y dejaría a los amigos con el viejo para siempre. */
+      if (pubModo === "actualizar" && pubFijado) {
+        b.code = pubFijado.code;
+        b.id   = pubFijado.id;
+        if (!b.server) b.server = pubFijado.server || null;
+      }
+      $("pubCode").value = b.code || "";
+      $("pubCode").disabled = (pubModo === "actualizar");
+      $("pubCodeNote").hidden = (pubModo !== "actualizar");
+      $("pubName").value = b.name || "";
+      $("pubServer").value = b.server || "";
+      $("pubDropHint").textContent = ruta.split(/[\\/]/).pop();
+      $("pubFields").hidden = false;
+      $("pubPreviewSub").hidden = true;
+      pubPintar();
+      pubEstado("ficha");
+    }).catch(function(e){
+      $("pubDropHint").textContent = "solo archivos .mrpack";
+      $("pubError").textContent = String(e);
+      pubEstado("error");
+    });
+  }
+
+  if ($("pubHome")) {
+    $("pubNew").addEventListener("click", function(){ pubEditor("nuevo"); });
+    $("pubBack").addEventListener("click", function(){ pubVista("home"); pubCargarLista(); });
+    $("pubDoneBack").addEventListener("click", function(){ pubVista("home"); pubCargarLista(); });
+    $("pubName").addEventListener("input", pubPintar);
+
+    /* El icono entra por un input de archivo y no por un diálogo del sistema: así no
+       hace falta añadir un plugin solo para esto. */
+    $("pubIconPick").addEventListener("click", function(){
+      var inp = document.createElement("input");
+      inp.type = "file"; inp.accept = "image/png,image/jpeg,image/webp";
+      inp.addEventListener("change", function(){
+        var f = inp.files && inp.files[0];
+        if (!f || !pubDraft) return;
+        var fr = new FileReader();
+        fr.onload = function(){
+          pubDraft.icon_b64 = String(fr.result).split(",")[1] || null;
+          pubPintar();
+        };
+        fr.readAsDataURL(f);
+      });
+      inp.click();
+    });
+    $("pubIconClear").addEventListener("click", function(){
+      if (!pubDraft || !pubPath) return;
+      /* Volver a leer el archivo es lo único que devuelve el icono original. */
+      call("admin_read", { path: pubPath }).then(function(b){
+        pubDraft.icon_b64 = b.icon_b64 || null;
+        pubPintar();
+      }).catch(function(){});
+    });
+
+    $("pubGo").addEventListener("click", function(){
+      if (!pubDraft || !pubPath) return;
+      var directo = $("pubDirect").getAttribute("aria-checked") === "true";
+      var d = {
+        code: $("pubCode").value,
+        id: pubDraft.id,
+        name: $("pubName").value,
+        version: pubDraft.version,
+        /* Sin «entrar directo» el pack se publica sin servidor: el interruptor no es
+           cosmético, decide si la instancia lleva JoinServerOnLaunch. */
+        server: directo ? ($("pubServer").value || null) : null,
+        minecraft: pubDraft.minecraft,
+        loader: pubDraft.loader,
+        mods: pubDraft.mods,
+        bytes: pubDraft.bytes,
+        sha512: pubDraft.sha512,
+        icon_b64: pubDraft.icon_b64 || null
+      };
+      $("pubBusyCode").textContent = d.code;
+      pubEstado("publicando");
+      call("admin_publish", { draft: d, path: pubPath }).then(function(p){
+        $("pubDoneCode").textContent = p.code;
+        /* El link es la página de invitación, que abre el launcher con un clic: los
+           chats no hacen pulsable un `dinolauncher://`, y una página https sí. Lleva el
+           código detrás de la almohadilla, así que pegarlo entero en el + también
+           funciona: el backend lo extrae. */
+        $("pubDoneLink").textContent = INVITE_URL + p.code;
+        pubEstado("hecho");
+      }).catch(function(e){
+        $("pubError").textContent = String(e);
+        pubEstado("error");
+      });
+    });
+
+    document.querySelectorAll("[data-copy]").forEach(function(b){
+      b.addEventListener("click", function(){
+        var el = $(b.dataset.copy);
+        if (!el) return;
+        copiarTexto(el.textContent).then(function(hecho){
+          if (!hecho) return;
+          b.classList.add("copied");
+          setTimeout(function(){ b.classList.remove("copied"); }, 1400);
+        });
+      });
+    });
+
+    /* Importar y publicar son dos caminos para la misma tarea, y los dos solo de
+       admin: un segmentado dentro de una pestaña, no dos entradas en el rail. */
+    var adminSeg = $("adminSeg");
+    function mostrarSeg(cual){
+      adminSeg.querySelectorAll("[data-seg]").forEach(function(b){
+        b.setAttribute("aria-selected", String(b.dataset.seg === cual));
+      });
+      $("adminImport").hidden  = (cual !== "importar");
+      $("adminPublish").hidden = (cual !== "publicar");
+    }
+    if (adminSeg) {
+      adminSeg.querySelectorAll("[data-seg]").forEach(function(b){
+        b.addEventListener("click", function(){ mostrarSeg(b.dataset.seg); });
+      });
+    }
+
+    /* La pestaña de admin está escondida hasta que se teclea la clave en cualquier parte
+       de la ventana que no sea un campo de texto. No hay botón ni pista: quien no la
+       sabe no ve que exista. La comprueba Rust contra un hash, así que la clave no viaja
+       escrita en el launcher que se reparte. Basta con escribirla una vez por máquina. */
+    var abrirAdmin = function(){
+      var nav = $("navAdmin");
+      if (nav) nav.hidden = false;
+      pubVista("home"); pubCargarLista();
+    };
+    call("admin_unlocked").then(function(ya){
+      if (ya) { abrirAdmin(); return; }
+      var tecleado = "", espera = null;
+      var escuchar = function(e){
+        var t = e.target;
+        if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+        if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
+        tecleado = (tecleado + e.key).slice(-32);
+        clearTimeout(espera);
+        /* Se pregunta al dejar de teclear, no a cada tecla. */
+        espera = setTimeout(function(){
+          call("admin_unlock", { texto: tecleado }).then(function(ok){
+            if (!ok) return;
+            document.removeEventListener("keydown", escuchar);
+            tecleado = "";
+            abrirAdmin();
+            document.querySelector('[data-go="admin"]').click();
+          }).catch(function(){});
+        }, 350);
+      };
+      document.addEventListener("keydown", escuchar);
+    }).catch(function(){});
+  }
+
+  /* ================= la biblioteca =================
+     La cuadrícula se repinta entera en cada refresco: son unas pocas tarjetas y
+     conciliar nodo a nodo costaría más de mantener de lo que ahorraría. El `+` no se
+     toca —es parte de la retícula, no una tarjeta generada—, así que las tarjetas se
+     insertan antes de él en vez de reescribir el `innerHTML` de la cuadrícula. */
+  var libGrid  = $("libGrid");
+  var libEmpty = $("libEmpty");
+  var libAdd   = $("libAdd");
+
+  function tarjetaPack(p, elegido){
+    var t = document.createElement("div");
+    t.className = "packtile";
+    t.dataset.id = p.id;
+    /* Un solo estado visual. «Elegido» manda; «solo descargada» avisa de que está en
+       la lista pero no en el disco, que es lo que explica la espera al darle a jugar. */
+    t.dataset.state = elegido ? "selected" : (p.installed ? "installed" : "downloaded");
+
+    var main = document.createElement("button");
+    main.type = "button";
+    main.className = "tile-main";
+    main.setAttribute("aria-label", "Jugar con " + p.name);
+    main.addEventListener("click", function(){ elegirPack(p.id); });
+
+    var quitar = document.createElement("button");
+    quitar.type = "button";
+    quitar.className = "tile-remove";
+    quitar.title = "Quitar " + p.name;
+    quitar.setAttribute("aria-label", "Quitar " + p.name);
+    quitar.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+    quitar.addEventListener("click", function(e){
+      /* Sin esto el clic sigue hasta `.tile-main`, que cubre la tarjeta entera, y
+         quitar un pack lo seleccionaría de paso. */
+      e.stopPropagation();
+      abrirQuitar(p);
+    });
+
+    var head = document.createElement("div"); head.className = "tile-head";
+    var ico  = document.createElement("span"); ico.className = "app-icon";
+    ico.style.setProperty("--s", "40px");
+    setIcon(ico, p.icon);
+    var ident = document.createElement("div"); ident.className = "tile-id";
+    var nom   = document.createElement("div"); nom.className = "tile-name";
+    /* `textContent`: estos nombres vienen de un archivo remoto y pintarlos como HTML
+       sería dejar que el catálogo inyecte marcado. */
+    nom.textContent = p.name;
+    var meta = document.createElement("div"); meta.className = "tile-meta";
+    meta.textContent = [p.code, p.version ? "v" + p.version : null]
+      .filter(Boolean).join(" · ");
+    ident.appendChild(nom); ident.appendChild(meta);
+    head.appendChild(ico); head.appendChild(ident);
+
+    var foot  = document.createElement("div"); foot.className = "tile-foot";
+    var chapa = document.createElement("span"); chapa.className = "tile-badge";
+    chapa.textContent = !p.installed ? "sin instalar" : (elegido ? "elegido" : "instalado");
+    var vivo = document.createElement("span"); vivo.className = "tile-live";
+    vivo.innerHTML = '<span class="dot-live"></span><span>jugando</span>';
+    foot.appendChild(chapa); foot.appendChild(vivo);
+    if (p.server) {
+      var srv = document.createElement("span"); srv.className = "tile-server";
+      srv.textContent = p.server;
+      foot.appendChild(srv);
+    }
+
+    t.appendChild(main); t.appendChild(quitar);
+    t.appendChild(head); t.appendChild(foot);
+    return t;
+  }
+
+  function renderBiblioteca(){
+    if (!libGrid) return Promise.resolve();
+    return call("list_packs").then(function(r){
+      var packs = (r && r.packs) || [];
+      libGrid.querySelectorAll(".packtile").forEach(function(n){ n.remove(); });
+      packs.forEach(function(p){
+        libGrid.insertBefore(tarjetaPack(p, p.id === r.selected), libAdd);
+      });
+      libEmpty.hidden = packs.length > 0;
+      marcarSesionEnBiblioteca(estadoPrevio === "jugando");
+      /* Al log, como el resto del arranque: la app no se abre desde una terminal, así
+         que sin esto una biblioteca vacía y una que falló al leerse se ven igual. */
+      dlog("biblioteca: " + packs.length + " packs, elegido=" + (r.selected || "ninguno"));
+    }).catch(function(e){ dlog("biblioteca: no pude leerla: " + e); });
+  }
+
+  /* Con una partida abierta, el resto de tarjetas dejan de responder: solo hay una
+     sesión a la vez, y una tarjeta que acepta el clic estaría prometiendo lo que no
+     puede cumplir. La que juega se queda entera y con el punto vivo. */
+  function marcarSesionEnBiblioteca(jugando){
+    if (!libGrid) return;
+    if (jugando) libGrid.dataset.session = ""; else delete libGrid.dataset.session;
+    libGrid.querySelectorAll(".packtile").forEach(function(t){
+      if (jugando && PACK && t.dataset.id === PACK.id) t.dataset.playing = "";
+      else delete t.dataset.playing;
+    });
+  }
+
+  function elegirPack(id){
+    /* Pulsar el que ya está elegido no es un cambio: es «quiero jugar a este». */
+    if (PACK && PACK.id === id) { document.querySelector('[data-go="jugar"]').click(); return; }
+    call("select_pack", { id: id }).then(refreshAll).then(function(){
+      document.querySelector('[data-go="jugar"]').click();
+    }).catch(function(e){
+      showError("No pude cambiar de modpack.", e);
+    });
+  }
+
+  /* ---- quitar un pack ----
+     Dos botones, no una casilla y un aceptar: quitar de la lista se deshace y borrar
+     los archivos no. El de borrar se arma antes, como el de detener la partida. */
+  var removeOverlay = $("removeOverlay");
+  var quitando = null;
+  var borrarTimer = null;
+
+  function desarmarBorrado(){
+    clearTimeout(borrarTimer); borrarTimer = null;
+    var b = $("removeDelete");
+    if (b) b.removeAttribute("data-armed");
+  }
+
+  function abrirQuitar(p){
+    if (!removeOverlay) return;
+    quitando = p;
+    $("removeTitle").textContent = "Quitar " + p.name;
+    $("removeDetail").hidden = true;
+    $("removeDetail").textContent = "";
+    desarmarBorrado();
+    removeOverlay.hidden = false;
+    /* Qué se va exactamente, con números: «tus mundos» en abstracto no frena a nadie. */
+    call("instance_info", { id: p.id }).then(function(i){
+      if (!i || !i.installed) return;
+      $("removeDetail").textContent = humanBytes(i.bytes) + " en disco · " +
+        i.worlds + (i.worlds === 1 ? " mundo" : " mundos");
+      $("removeDetail").hidden = false;
+    }).catch(function(){});
+  }
+
+  function cerrarQuitar(){
+    if (!removeOverlay) return;
+    removeOverlay.hidden = true;
+    quitando = null;
+    desarmarBorrado();
+  }
+
+  function quitarPack(borrar){
+    if (!quitando) return;
+    var id = quitando.id, nombre = quitando.name;
+    cerrarQuitar();
+    call("remove_pack", { id: id, deleteFiles: borrar })
+      .then(refreshAll)
+      .catch(function(e){
+        showError("No pude quitar " + nombre + ".", e);
+        refreshAll();
+      });
+  }
+
+  if (removeOverlay) {
+    $("removeClose").addEventListener("click", cerrarQuitar);
+    /* Clic en el fondo, no en la tarjeta: cerrar al pulsar dentro sería perder el
+       diálogo a mitad de decidir. */
+    removeOverlay.addEventListener("click", function(e){
+      if (e.target === removeOverlay) cerrarQuitar();
+    });
+    $("removeKeep").addEventListener("click", function(){ quitarPack(false); });
+    $("removeDelete").addEventListener("click", function(){
+      var b = $("removeDelete");
+      if (!b.hasAttribute("data-armed")) {
+        b.setAttribute("data-armed", "");
+        borrarTimer = setTimeout(desarmarBorrado, 4000);
+        return;
+      }
+      desarmarBorrado();
+      quitarPack(true);
+    });
+  }
+
+  /* ================= unirse con un código =================
+     Cuatro estados excluyentes: pedir, buscando, encontrado y aviso. El código se
+     manda tal cual se escribió; normalizarlo es cosa de Rust, que también acepta que
+     peguen el link entero. Aquí no se toca para no tener la regla en dos sitios. */
+  var joinOverlay = $("joinOverlay");
+  var joinAsk   = $("joinAsk");
+  var joinBusy  = $("joinBusy");
+  var joinFound = $("joinFound");
+  var joinMsg   = $("joinMsg");
+  var joinCode  = $("joinCode");
+  var ultimoCodigo = "";
+
+  function joinEstado(cual){
+    if (!joinOverlay) return;
+    joinAsk.hidden   = (cual !== "pedir");
+    joinBusy.hidden  = (cual !== "buscando");
+    joinFound.hidden = (cual !== "encontrado");
+    joinMsg.hidden   = (cual !== "aviso");
+  }
+
+  function joinBuscar(){
+    var texto = (joinCode.value || "").trim();
+    if (!texto) { joinCode.focus(); return; }
+    ultimoCodigo = texto;
+    $("joinBusyCode").textContent = texto;
+    joinEstado("buscando");
+
+    call("catalog_lookup", { code: texto }).then(function(p){
+      $("joinName").textContent = p.name;
+      /* Sin icono publicado vuelve el dino: `setIcon` repone el canvas si la búsqueda
+         anterior había dejado una imagen. */
+      setIcon($("joinIcon"), p.icon || null);
+      /* Solo se enseña lo que el catálogo trae: inventar un dato que falta sería
+         prometer algo que luego no se cumple. */
+      var partes = [];
+      if (p.minecraft) partes.push("Minecraft " + p.minecraft);
+      if (p.loader)    partes.push(p.loader);
+      if (p.mods)      partes.push(p.mods + " mods");
+      $("joinMeta").textContent = partes.join(" · ");
+
+      var srv = $("joinServer");
+      if (p.server) { $("joinServerName").textContent = p.server; srv.hidden = false; }
+      else srv.hidden = true;
+
+      joinEstado("encontrado");
+    }).catch(function(e){
+      /* «No existe» y «no hay internet» piden cosas distintas de quien lee: uno
+         revisa el código, el otro revisa su wifi. Por eso son dos avisos. */
+      var noExiste = /no encontr/i.test(String(e));
+      joinMsg.setAttribute("data-kind", noExiste ? "notfound" : "offline");
+      $("joinMsgTitle").textContent = noExiste ? "Ese código no existe" : "No pude conectar";
+      $("joinMsgSub").textContent = noExiste
+        ? "Revisa cómo está escrito, o pídeselo otra vez a quien te lo pasó."
+        : "Comprueba tu conexión y vuelve a intentarlo.";
+      joinEstado("aviso");
+    });
+  }
+
+  /* El `+` está siempre disponible, y es además la única forma de cambiar de modpack
+     teniendo uno puesto: antes el panel se escondía en cuanto había algo instalado. */
+  function abrirJoin(){
+    if (!joinOverlay) return;
+    joinCode.value = "";
+    joinEstado("pedir");
+    joinOverlay.hidden = false;
+    joinCode.focus();
+  }
+  function cerrarJoin(){
+    if (joinOverlay) joinOverlay.hidden = true;
+  }
+
+  if (joinOverlay) {
+    if ($("navAdd")) $("navAdd").addEventListener("click", abrirJoin);
+    if (libAdd) libAdd.addEventListener("click", abrirJoin);
+    $("joinClose").addEventListener("click", cerrarJoin);
+    joinOverlay.addEventListener("click", function(e){
+      if (e.target === joinOverlay) cerrarJoin();
+    });
+    $("joinGo").addEventListener("click", joinBuscar);
+    $("joinRetry").addEventListener("click", joinBuscar);
+    joinCode.addEventListener("keydown", function(e){
+      if (e.key === "Enter") joinBuscar();
+    });
+    $("joinBack").addEventListener("click", function(){
+      joinEstado("pedir"); joinCode.focus(); joinCode.select();
+    });
+
+    $("joinInstall").addEventListener("click", function(){
+      var btn = $("joinInstall");
+      btn.disabled = true;
+      /* La descarga del `.mrpack` emite eventos `install`, así que el panel de
+         lanzamiento ya la enseña; este pasa a un segundo plano. */
+      estadoPrevio = null;
+      setProgress("Descargando el modpack", -1);
+      mostrarEstado("preparando");
+
+      call("catalog_install", { code: ultimoCodigo }).then(function(){
+        cerrarJoin();
+        joinEstado("pedir");
+        /* `refreshAll` relee pack.json, que `catalog_install` acaba de escribir
+           apuntando a nuestra carpeta y no al disco de quien lo publicó. */
+        return refreshAll().then(function(){ return runPlay(); });
+      }).catch(function(e){
+        showError("No se pudo instalar.", e);
+        estadoPrevio = null; mostrarEstado("reposo");
+        joinEstado("encontrado");
+      }).finally(function(){ btn.disabled = false; });
+    });
+
+    joinEstado("pedir");
+  }
+
+  /* ================= actualizaciones del launcher =================
+     Se comprueba al abrir y se ofrece con un botón, no se instala sola: reemplazar el
+     ejecutable cierra la app, y hacer eso sin avisar en mitad de algo sería peor que
+     la molestia que esto evita.
+
+     Si el updater no está configurado —falta `pubkey` o `endpoints`— `update_check`
+     devuelve null igual que si no hubiera nada nuevo, y aquí no aparece nada. */
+  var upbar = $("upbar"), upTxt = $("upbar-txt"), upBtn = $("upbar-btn");
+
+  if (tauri && tauri.event && tauri.event.listen) {
+    tauri.event.listen("update", function(e){
+      var p = (e && e.payload) || {};
+      /* frac < 0 significa que el servidor no dijo el tamaño: se informa sin
+         porcentaje en vez de inventar uno que se quede clavado. */
+      upTxt.textContent = (p.frac >= 0)
+        ? p.paso + " · " + Math.round(p.frac * 100) + " %"
+        : p.paso + "…";
+    });
+  }
+
+  call("update_check").then(function(u){
+    if (!u || !u.version) return;
+    upTxt.innerHTML = "Hay una versión nueva: <b>" + u.version +
+                      "</b> — tienes la " + (u.actual || "actual") + ".";
+    upbar.hidden = false;
+  }).catch(function(){});
+
+  upBtn.addEventListener("click", function(){
+    upBtn.disabled = true;
+    upTxt.textContent = "Preparando la descarga…";
+    /* En Windows el instalador cierra la app, así que esta promesa normalmente
+       no se resuelve nunca: lo último que se ve es el progreso. */
+    call("update_install").catch(function(e){
+      upTxt.textContent = "No se pudo actualizar: " + String(e);
+      upBtn.disabled = false;
+    });
+  });
+
+  refreshAll();
+
+  /* diagnóstico de cableado: dice exactamente qué pieza falta si algo no responde */
+  try {
+    window.__TAURI__ && window.__TAURI__.core.invoke("boot_ping", { msg:
+      "cableado: play=" + !!playBtn +
+      " tauri=" + !!tauri +
+      " invoke=" + !!(tauri && tauri.core && tauri.core.invoke) +
+      " event=" + !!(tauri && tauri.event && tauri.event.listen) +
+      " overlay=" + !!ob });
+  } catch (e) {}
+
+  /* ================= specular highlight follows the cursor ================= */
+  if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches){
+    var hero = document.querySelector(".hero");
+    var BASE = "linear-gradient(118deg, rgba(115,191,105,.13), rgba(11,70,35,.10) 54%, transparent 80%)";
+    hero.addEventListener("pointermove", function(e){
+      var r = hero.getBoundingClientRect();
+      var x = ((e.clientX - r.left) / r.width * 100).toFixed(1);
+      var y = ((e.clientY - r.top) / r.height * 100).toFixed(1);
+      hero.style.backgroundImage =
+        "radial-gradient(36% 58% at " + x + "% " + y + "%, rgba(255,255,255,.09), transparent 70%)," + BASE;
+    });
+    hero.addEventListener("pointerleave", function(){ hero.style.backgroundImage = BASE; });
+  }
+})();
+</script>

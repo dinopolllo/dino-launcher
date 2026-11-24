@@ -3,6 +3,7 @@
 //!
 //! `dino-app` (Tauri) solo envuelve [`Core`]: así todo esto se prueba sin interfaz.
 
+pub mod admin;
 pub mod catalog;
 pub mod status;
 
@@ -125,7 +126,11 @@ impl Core {
         let manifest: Option<InstanceManifest> = schema::load(&self.paths.instance_manifest(&entry.id)).ok().flatten();
         let installed = manifest.as_ref().is_some_and(|m| m.state == InstallState::Ready);
         let mods = match (&manifest, remote) {
-            (Some(m), _) if installed => m.managed_files.iter().filter(|f| f.starts_with("mods/")).count() as u32,
+            (Some(m), _) if installed && !m.managed_files.is_empty() => {
+                m.managed_files.iter().filter(|f| f.starts_with("mods/")).count() as u32
+            }
+            // Instalada antes de anotar sus archivos: lo que haya en `mods/`.
+            (Some(_), _) if installed => count_jars(&self.paths.game_dir(&entry.id).join("mods")),
             (_, Some(r)) => r.mods,
             _ => 0,
         };
@@ -530,8 +535,11 @@ impl Core {
     fn watch(&self, s: dino_session::Session) {
         let id = s.record.instance.clone();
         let emit = self.emit.clone();
+        // `preparing` ya lo anunció `play` al empezar; aquí solo lo que viene después.
         let out = dino_session::wait(&self.paths, s, &|st| {
-            emit(Event::Session(Session { state: st, instance: Some(id.clone()) }))
+            if st != SessionState::Preparing {
+                emit(Event::Session(Session { state: st, instance: Some(id.clone()) }))
+            }
         });
         tracing::info!(?out, "partida terminada");
         (self.emit)(Event::LibraryChanged);
@@ -611,6 +619,11 @@ impl Core {
             ping_ms: s.ping_ms,
         }
     }
+}
+
+/// ¿Hay una partida abierta? (Para que la app no se cierre con la interfaz cerrada.)
+pub fn is_playing(paths: &Paths) -> bool {
+    dino_session::running(paths).is_some()
 }
 
 // ------------------------------------------------------------ progreso de una tarea
@@ -803,6 +816,12 @@ fn extract_icon(mrpack: &Path, dest: &Path) {
     if icon.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
         let _ = std::fs::write(dest, buf);
     }
+}
+
+fn count_jars(dir: &Path) -> u32 {
+    std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().filter(|x| x.file_name().to_string_lossy().ends_with(".jar")).count() as u32)
+        .unwrap_or(0)
 }
 
 fn dir_size(p: &Path) -> u64 {
