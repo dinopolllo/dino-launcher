@@ -1,7 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Dino Launcher",
-  "version": "0.0.1",
+  "mainBinaryName": "dino-launcher",
+  "version": "2.0.0-beta.1",
   "identifier": "gg.dinolab.launcher.v2dev",
   "build": {
     "frontendDist": "../../ui"
@@ -21,21 +22,51 @@
         "resizable": true
       }
     ],
-    "security": { "csp": null },
+    "security": {
+      "csp": null
+    },
     "withGlobalTauri": true,
     "macOSPrivateApi": true
   },
   "plugins": {
-    "deep-link": { "desktop": { "schemes": ["dinolauncher"] } }
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "dinolauncher"
+        ]
+      }
+    }
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "targets": [
+      "nsis",
+      "app",
+      "dmg"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "Spanish",
+          "English"
+        ],
+        "displayLanguageSelector": false
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      }
+    },
     "icon": [
       "../../../src-tauri/icons/32x32.png",
       "../../../src-tauri/icons/128x128.png",
       "../../../src-tauri/icons/256x256.png",
       "../../../src-tauri/icons/icon.icns",
       "../../../src-tauri/icons/icon.ico"
-    ]
+    ],
+    "category": "Game",
+    "shortDescription": "Modpacks y servidor, listos de una vez.",
+    "license": "GPL-3.0-only"
   }
 }

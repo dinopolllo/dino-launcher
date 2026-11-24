@@ -1,0 +1,39 @@
+name: pagina
+
+# Publica la página de invitación (`web/invitar/`) en el repo de descargas, que la sirve
+# con GitHub Pages en https://dinopolllo.github.io/dino-launcher-releases/invitar/.
+# Antes se copiaba a mano. Solo se sube si cambió algo.
+
+on:
+  push:
+    branches: [main]
+    paths: ["web/invitar/**"]
+  workflow_dispatch:
+
+env:
+  RELEASES_REPO: dinopolllo/dino-launcher-releases
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Copiar y subir
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${RELEASES_REPO}.git" descargas
+          mkdir -p descargas/invitar
+          cp -r web/invitar/. descargas/invitar/
+          cd descargas
+          if git diff --quiet && [ -z "$(git status --porcelain)" ]; then
+            echo "la página publicada ya es esta"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add invitar
+          git commit -m "Página de invitación: ${GITHUB_SHA::7}"
+          git push

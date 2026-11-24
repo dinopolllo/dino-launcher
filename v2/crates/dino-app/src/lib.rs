@@ -11,7 +11,7 @@ use dino_core::api::{
     ServerStatus,
 };
 use dino_core::events::{Event, SessionState, CHANNEL};
-use dino_core::schema::{JavaChoice, Memory, Paths};
+use dino_core::schema::{JavaChoice, Memory, Paths, UpdateChannel};
 use dino_core::{DinoError, ErrorCode};
 use dino_instances::{admin, catalog, Core};
 use std::path::PathBuf;
@@ -254,17 +254,52 @@ fn diagnostics_export(core: State<'_, Arc<Core>>) -> R<String> {
     Ok(out.to_string_lossy().into_owned())
 }
 
-// ------------------------------------------------------------ actualizaciones (igual que 1.x)
+// ------------------------------------------------------------ actualizaciones
+
+/// Manifiesto del canal beta. No puede ir como asset de `releases/latest`, que GitHub
+/// reserva a la última versión estable: vive en la rama del repo de descargas.
+#[cfg(desktop)]
+const BETA_FEED: &str = "https://raw.githubusercontent.com/dinopolllo/dino-launcher-releases/main/latest-beta.json";
+
+/// Canal efectivo. Una beta sigue siempre el canal beta aunque la configuración diga
+/// estable (la recién migrada de 1.x lo dice): si no, nunca vería la beta siguiente.
+fn effective_channel(chosen: UpdateChannel, version: &str) -> UpdateChannel {
+    if version.contains('-') {
+        UpdateChannel::Beta
+    } else {
+        chosen
+    }
+}
+
+/// El updater con el manifiesto de su canal, o `None` si esta compilación no trae
+/// actualizaciones (desarrollo, o una release sin firmar). `DINO_UPDATE_FEED` cambia el
+/// manifiesto para pruebas; la firma se sigue comprobando con la clave compilada.
+#[cfg(desktop)]
+fn updater(app: &tauri::AppHandle) -> Result<Option<tauri_plugin_updater::Updater>, DinoError> {
+    use tauri_plugin_updater::UpdaterExt;
+    if app.try_state::<UpdaterReady>().is_none() {
+        return Ok(None);
+    }
+    let fail = |x: &dyn std::fmt::Display| DinoError::new(ErrorCode::UpdateFailed, x.to_string());
+    let chosen = app.state::<Arc<Core>>().store.config().map(|c| c.update_channel).unwrap_or_default();
+    let feed = match std::env::var("DINO_UPDATE_FEED") {
+        Ok(f) => Some(f),
+        Err(_) => (effective_channel(chosen, &app.package_info().version.to_string()) == UpdateChannel::Beta)
+            .then(|| BETA_FEED.to_string()),
+    };
+    let mut b = app.updater_builder();
+    if let Some(f) = feed {
+        let url = tauri::Url::parse(&f).map_err(|x| fail(&x))?;
+        b = b.endpoints(vec![url]).map_err(|x| fail(&x))?;
+    }
+    b.build().map(Some).map_err(|x| fail(&x))
+}
 
 #[tauri::command]
 async fn update_check(app: tauri::AppHandle) -> R<Option<serde_json::Value>> {
     #[cfg(desktop)]
     {
-        use tauri_plugin_updater::UpdaterExt;
-        if app.try_state::<UpdaterReady>().is_none() {
-            return Ok(None);
-        }
-        let Ok(updater) = app.updater() else { return Ok(None) };
+        let Ok(Some(updater)) = updater(&app) else { return Ok(None) };
         return Ok(match updater.check().await {
             Ok(Some(u)) => {
                 let _ = app.emit(CHANNEL, Event::UpdateAvailable { version: u.version.clone(), notes: u.body.clone() });
@@ -284,11 +319,9 @@ async fn update_check(app: tauri::AppHandle) -> R<Option<serde_json::Value>> {
 async fn update_install(app: tauri::AppHandle) -> R<()> {
     #[cfg(desktop)]
     {
-        use tauri_plugin_updater::UpdaterExt;
-        if app.try_state::<UpdaterReady>().is_none() {
+        let Some(up) = updater(&app)? else {
             return Err(DinoError::new(ErrorCode::UpdateFailed, "esta versión no trae actualizaciones automáticas"));
-        }
-        let up = app.updater().map_err(|x| DinoError::new(ErrorCode::UpdateFailed, x.to_string()))?;
+        };
         let Some(update) = up.check().await.map_err(|x| DinoError::new(ErrorCode::UpdateFailed, x.to_string()))? else {
             return Err(DinoError::new(ErrorCode::UpdateFailed, "ya no hay ninguna versión nueva"));
         };
@@ -541,5 +574,17 @@ fn mime_of(b: &[u8]) -> &'static str {
         "image/webp"
     } else {
         "application/octet-stream"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn una_beta_sigue_el_canal_beta() {
+        assert_eq!(effective_channel(UpdateChannel::Stable, "2.0.0-beta.1"), UpdateChannel::Beta);
+        assert_eq!(effective_channel(UpdateChannel::Stable, "2.0.0"), UpdateChannel::Stable);
+        assert_eq!(effective_channel(UpdateChannel::Beta, "2.0.0"), UpdateChannel::Beta);
     }
 }

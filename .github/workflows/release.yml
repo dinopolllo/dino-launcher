@@ -15,7 +15,8 @@ name: release
 
 on:
   push:
-    tags: ["v*"]
+    # Solo 1.x: las etiquetas `v2.*` las publica release-v2.yml.
+    tags: ["v0.*", "v1.*"]
   workflow_dispatch:
     inputs:
       tag:

@@ -1,0 +1,249 @@
+name: release-v2
+
+# Publica Dino 2.0 en el repo de descargas. Se dispara con una etiqueta `v2.*`
+# (`git tag v2.0.0-beta.1 && git push origin v2.0.0-beta.1`) o a mano.
+#
+# Canales:
+#   - Una beta (versión con guion) sale como *prerelease*: GitHub no la cuenta como
+#     `latest`, así que los 1.x instalados, que miran `releases/latest/.../latest.json`,
+#     no la ven. Solo actualiza `latest-beta.json` en la rama del repo de descargas, que
+#     es lo que leen las betas de 2.0.
+#   - `ofrecer_a_1x` (solo a mano) la publica además como release normal con su
+#     `latest.json`: entonces todo 1.x instalado la ofrece al abrirse. Es el paso de la
+#     etapa 12; no se da sin decidirlo.
+#   - Una estable siempre lleva `latest.json` y también avanza `latest-beta.json`, para
+#     que quien esté en beta no se quede atrás.
+#
+# Sin firma no hay publicación: una 2.0 que no se puede actualizar no sirve de nada, y
+# antes de subir nada se comprueba que la firma la acepta la clave pública que llevan
+# compilada los 1.x instalados.
+
+on:
+  push:
+    tags: ["v2.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Etiqueta a publicar, p. ej. v2.0.0-beta.1"
+        required: true
+      ofrecer_a_1x:
+        description: "Ofrecerla a los 1.x instalados (publicar latest.json)"
+        type: boolean
+        default: false
+
+env:
+  RELEASES_REPO: dinopolllo/dino-launcher-releases
+  APP: v2/crates/dino-app
+
+jobs:
+  construir:
+    name: ${{ matrix.nombre }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            nombre: Windows
+            plataforma: windows-x86_64
+            args: ""
+          - os: macos-latest
+            nombre: macOS
+            plataforma: darwin-universal
+            args: "--target universal-apple-darwin"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Añadir los targets de macOS
+        if: matrix.os == 'macos-latest'
+        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: v2
+          key: release-${{ matrix.plataforma }}
+
+      - name: Comprobar etiqueta, versión y clave
+        shell: bash
+        env:
+          CLAVE: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VER=$(node -p "require('./$APP/tauri.conf.json').version")
+          if [ "$TAG" != "v$VER" ]; then
+            echo "::error::La etiqueta $TAG no coincide con la versión $VER de $APP/tauri.conf.json."
+            exit 1
+          fi
+          if [ -z "$CLAVE" ]; then
+            echo "::error::Falta TAURI_SIGNING_PRIVATE_KEY: sin firma la 2.0 no se puede actualizar."
+            exit 1
+          fi
+          echo "VERSION=$VER" >> "$GITHUB_ENV"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - run: npm ci
+
+      # La configuración de release pone el identificador de producción (el de 1.x, para
+      # instalarse encima y heredar sus datos), la clave pública y los artefactos del updater.
+      - name: Compilar
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: bash
+        working-directory: ${{ env.APP }}
+        run: npx tauri build --config tauri.release.conf.json ${{ matrix.args }}
+
+      # Nombres sin espacios: GitHub los cambia por puntos al subirlos y la URL del
+      # manifiesto dejaría de coincidir (igual que en 1.x).
+      - name: Recoger artefactos
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          RAIZ=v2/target
+          [ -n "${{ matrix.args }}" ] && RAIZ=v2/target/universal-apple-darwin
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            INSTALADOR=$(ls "$RAIZ"/release/bundle/nsis/*-setup.exe)
+            NOMBRE="dino-launcher_${VERSION}_x64-setup.exe"
+            cp "$INSTALADOR" "dist/$NOMBRE"
+            PAQUETE="$NOMBRE"; FIRMA_DE="$INSTALADOR.sig"
+          else
+            INSTALADOR=$(ls "$RAIZ"/release/bundle/dmg/*.dmg)
+            NOMBRE="dino-launcher_${VERSION}_universal.dmg"
+            cp "$INSTALADOR" "dist/$NOMBRE"
+            TGZ=$(ls "$RAIZ"/release/bundle/macos/*.app.tar.gz)
+            PAQUETE="dino-launcher_${VERSION}_universal.app.tar.gz"
+            cp "$TGZ" "dist/$PAQUETE"
+            FIRMA_DE="$TGZ.sig"
+          fi
+          cp "$FIRMA_DE" "dist/$PAQUETE.sig"
+          node -e '
+            const fs = require("fs");
+            const [plataforma, paquete, firma] = process.argv.slice(1);
+            const { RELEASES_REPO, TAG } = process.env;
+            fs.writeFileSync("dist/frag-" + plataforma + ".json", JSON.stringify({
+              [plataforma]: { signature: firma, url: `https://github.com/${RELEASES_REPO}/releases/download/${TAG}/${paquete}` }
+            }));
+          ' "${{ matrix.plataforma }}" "$PAQUETE" "$(cat "$FIRMA_DE")"
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.plataforma }}
+          path: dist/*
+          if-no-files-found: error
+
+  publicar:
+    name: publicar
+    needs: construir
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: recogido
+      - name: Instalar minisign
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+
+      - name: Armar el release y verificar las firmas
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VER=$(node -p "require('./$APP/tauri.conf.json').version")
+          OFRECER="${{ github.event.inputs.ofrecer_a_1x || 'false' }}"
+          case "$VER" in *-*) BETA=si ;; *) BETA=no ;; esac
+          { echo "TAG=$TAG"; echo "VERSION=$VER"; echo "BETA=$BETA"; echo "OFRECER=$OFRECER"; } >> "$GITHUB_ENV"
+
+          mkdir -p dist
+          find recogido -type f ! -name 'frag-*.json' ! -name '*.sig' -exec cp {} dist/ \;
+
+          # La clave pública que llevan los instalados (1.x y 2.0): si la firma no pasa con
+          # ella, el updater la rechazaría en cada máquina. Mejor fallar aquí.
+          node -p "Buffer.from(require('./$APP/tauri.release.conf.json').plugins.updater.pubkey, 'base64').toString()" > clave.pub
+          for sig in $(find recogido -name '*.sig'); do
+            base64 -d "$sig" > firma.minisig
+            minisign -V -p clave.pub -m "dist/$(basename "${sig%.sig}")" -x firma.minisig
+          done
+
+          FRAGS=$(find recogido -name 'frag-*.json' | tr '\n' ' ')
+          VERSION="$VER" node -e '
+            const fs = require("fs");
+            const platforms = {};
+            for (const f of process.argv.slice(1)) Object.assign(platforms, JSON.parse(fs.readFileSync(f, "utf8")));
+            if (Object.keys(platforms).length < 2) { console.error("::error::faltan plataformas"); process.exit(1); }
+            fs.writeFileSync("manifiesto.json", JSON.stringify({
+              version: process.env.VERSION,
+              notes: "Dino Launcher " + process.env.VERSION,
+              pub_date: new Date().toISOString(),
+              platforms
+            }, null, 2) + "\n");
+          ' $FRAGS
+          cat manifiesto.json
+
+          # `latest.json` (lo que leen los 1.x y las estables) solo va en una estable o
+          # cuando se pide ofrecerla a 1.x. Con él van las copias de nombre fijo que
+          # enlaza la página de invitación.
+          if [ "$BETA" = no ] || [ "$OFRECER" = true ]; then
+            cp manifiesto.json dist/latest.json
+            for f in dist/dino-launcher_*_x64-setup.exe; do cp "$f" dist/DinoLauncher-Windows-setup.exe; done
+            for f in dist/dino-launcher_*_universal.dmg; do cp "$f" dist/DinoLauncher-macOS.dmg; done
+            echo "PRERELEASE=false" >> "$GITHUB_ENV"
+          else
+            echo "PRERELEASE=true" >> "$GITHUB_ENV"
+          fi
+          ls -la dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          repository: ${{ env.RELEASES_REPO }}
+          token: ${{ secrets.RELEASES_TOKEN }}
+          tag_name: ${{ env.TAG }}
+          name: Dino Launcher ${{ env.VERSION }}
+          prerelease: ${{ env.PRERELEASE }}
+          make_latest: ${{ env.PRERELEASE == 'false' }}
+          files: dist/*
+          fail_on_unmatched_files: true
+
+      # El manifiesto beta vive en la rama del repo de descargas, con URL fija. Solo
+      # avanza: volver a publicar una etiqueta vieja no lo hace retroceder.
+      - name: Avanzar latest-beta.json
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${RELEASES_REPO}.git" descargas
+          ACTUAL=$(node -p "try { require('./descargas/latest-beta.json').version } catch { '0.0.0' }")
+          if node -e '
+            const p = v => { const [n, pre] = v.split("-"); return [n.split(".").map(Number), pre]; };
+            const cmp = (a, b) => {
+              const [na, pa] = p(a), [nb, pb] = p(b);
+              for (let i = 0; i < 3; i++) if (na[i] !== nb[i]) return na[i] - nb[i];
+              if (!pa || !pb) return (pa ? -1 : 0) - (pb ? -1 : 0);
+              const sa = pa.split("."), sb = pb.split(".");
+              for (let i = 0; i < Math.max(sa.length, sb.length); i++) {
+                if (sa[i] === undefined) return -1; if (sb[i] === undefined) return 1;
+                const x = /^\d+$/.test(sa[i]) && /^\d+$/.test(sb[i]) ? sa[i] - sb[i] : sa[i].localeCompare(sb[i]);
+                if (x) return x;
+              }
+              return 0;
+            };
+            process.exit(cmp(process.argv[1], process.argv[2]) > 0 ? 0 : 1);
+          ' "$VERSION" "$ACTUAL"; then
+            cp manifiesto.json descargas/latest-beta.json
+            cd descargas
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add latest-beta.json
+            git commit -m "Canal beta: $VERSION"
+            git push
+          else
+            echo "latest-beta.json ya va por $ACTUAL; no retrocede a $VERSION"
+          fi
