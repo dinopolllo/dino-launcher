@@ -211,6 +211,9 @@ impl Downloader {
             ..Default::default()
         };
         let c = Arc::new(Counters::default());
+        // El total se anuncia antes de empezar: quien pinta una barra de varias fases lo
+        // necesita ya, no tras el primer archivo.
+        on_progress(total);
 
         let mut s = stream::iter(items.into_iter().map(|item| {
             let c = c.clone();

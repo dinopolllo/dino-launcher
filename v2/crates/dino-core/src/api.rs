@@ -185,11 +185,12 @@ pub struct PackPreview {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerStatus {
     pub online: bool,
-    pub motd: String,
-    pub players: u32,
-    pub max_players: u32,
+    /// `None` cuando no se sabe (servidor apagado o que no lo dice).
+    pub motd: Option<String>,
+    pub players: Option<u32>,
+    pub max_players: Option<u32>,
     pub version: Option<String>,
-    pub ping_ms: Option<u32>,
+    pub ping_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -243,9 +244,9 @@ mod tests {
     fn el_estado_del_servidor_usa_los_nombres_que_lee_la_interfaz() {
         let s = ServerStatus {
             online: true,
-            motd: "x".into(),
-            players: 3,
-            max_players: 20,
+            motd: Some("x".into()),
+            players: Some(3),
+            max_players: Some(20),
             version: None,
             ping_ms: Some(40),
         };

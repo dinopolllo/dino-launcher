@@ -54,7 +54,7 @@ pub struct Progress {
 
 /// Fases en el orden en que suelen ocurrir. Varias pueden ir a la vez (assets, librerías
 /// y Java se descargan en paralelo): la interfaz puede sumar o enseñar la más lenta.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
     CheckingUpdates,

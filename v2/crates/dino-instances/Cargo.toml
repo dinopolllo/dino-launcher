@@ -1,0 +1,24 @@
+[package]
+name = "dino-instances"
+description = "Lo que la app hace con los packs: biblioteca, catálogo, instalar, jugar. Cada comando del contrato."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+dino-core = { path = "../dino-core" }
+dino-config = { path = "../dino-config" }
+dino-download = { path = "../dino-download" }
+dino-minecraft = { path = "../dino-minecraft" }
+dino-auth = { path = "../dino-auth" }
+dino-session = { path = "../dino-session" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+zip.workspace = true
+futures-util.workspace = true
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "time"] }
+hickory-resolver = { version = "0.24", default-features = false, features = ["tokio-runtime", "system-config"] }
+tracing = "0.1.44"
