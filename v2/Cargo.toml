@@ -9,7 +9,7 @@ members = ["crates/dino-core", "crates/dino-config", "crates/dino-log", "crates/
 [workspace.package]
 edition = "2021"
 license = "GPL-3.0-only"
-version = "2.0.3"
+version = "2.0.4"
 rust-version = "1.82"
 
 [workspace.dependencies]
