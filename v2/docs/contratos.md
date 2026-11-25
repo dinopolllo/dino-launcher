@@ -144,3 +144,70 @@ a mover, sin avisos.
 | 2 | «No se sabe» escrito como `0` y como `None` | `PrimaryAction.bytes` pasa a `Option<u64>` |
 | 3 | `JavaOption.origin` era texto | `enum JavaOrigin { mojang, system }` |
 | 4 | `instance_details` sin instalar | Devuelve `not_installed` (código nuevo) |
+
+## Tweaks de UX (2026-11-24)
+
+Todo lo nuevo es **opcional y apagado por omisión**: un pack que no publica nada se comporta
+igual que antes.
+
+### Comandos nuevos o cambiados
+
+| 2.0 | Recibe | Devuelve | Nota |
+| --- | --- | --- | --- |
+| `instance_settings_set` | `id`, `patch: {memory?, jvm_args?, java?, window?}` | — | **Cambia**: ahora es un parche y se guarda en el **perfil del jugador activo** (`profiles.json`), no en la instancia. Sin cuenta, escribe la instancia como en 1.x |
+| `instance_settings_get` | `id` | `InstanceSettings` | Devuelve lo que **vale** para el jugador activo, más `*_from` (`profile` \| `pack`), `window` y `profile` (nombre) |
+| `instance_settings_reset` | `id` | — | Borra lo que el jugador activo eligió para esa instancia |
+| `profile_get` | — | `ProfileView` | `raw` (lo elegido, `null` = sin tocar), `prefs` (resuelto con valores de fábrica), `window` |
+| `profile_set` | `launcher: LauncherPrefs`, `window?` | `ProfileView` | Reemplaza; `account_required` si no hay cuenta |
+| `profile_reset` | — | `ProfileView` | Deja al jugador como uno nuevo |
+| `account_microsoft_cancel` | — | — | Cancela el login en curso y cierra su motor |
+
+`InstanceView` gana `theme`, `notes` y `notes_version` (ya saneados). `Config` gana
+`discord_client_id`.
+
+### Archivos nuevos
+
+| Archivo | Qué es |
+| --- | --- |
+| `profiles.json` | Por UUID de cuenta: `launcher` (cabeza, sonidos, volumen, temas, Discord), `window` y `instances/<id>` (memoria, JVM, Java, ventana). Todo `Option`: `None` = «no lo ha tocado» |
+| `packs/<id>.extras.json` | Copia saneada de lo que publicó el pack (Discord, notas, tema) y de qué versión, para usarlo sin red |
+
+Resolución al lanzar (`dino_core::profile::resolve`): lo que ese jugador eligió para esa
+instancia → lo que eligió para todas (solo ventana) → lo de `instance.json` → automático.
+Un jugador nuevo tiene un perfil vacío y juega con 3 y 4.
+
+### Catálogo: extras de un pack
+
+`PackRemoto` acepta, además de lo de siempre, tres bloques opcionales (`presence`, `theme`,
+`notes`; ver `dino_core::pack_meta`). El catálogo es un archivo remoto, así que todo pasa
+por `sanitized()`: colores solo `#hex`, enlaces solo `https`, textos acotados. Lo
+desactivado se descarta. En el editor, los archivos elegidos en el equipo (logo, imágenes de
+las notas, banner, sonidos) viajan como `data:` y `publicar` los sube a `packs/<id>-<hash>.<ext>`
+y los cambia por su enlace fijado a commit.
+
+- **Discord** (`presence`): `details`/`state` con `{pack} {server} {version} {minecraft} {player}`,
+  logo (`https` o clave de asset), botón de unirse (sin `url` apunta a la invitación del pack),
+  `client_id` propio. La aplicación sale de `presence.client_id`, `Config.discord_client_id` o
+  `DINO_DISCORD_CLIENT_ID` al compilar; **sin ninguna no se manda nada**. Se pone al abrirse la
+  ventana del juego y se quita al terminar. El jugador la puede apagar en su perfil.
+- **Notas** (`notes`): `title`, `summary`, `sections[{kind: feature|change|fix|note, title, items}]`,
+  `images[{url, caption}]`. La interfaz las enseña antes de actualizar (y desde la píldora de la ficha).
+- **Tema** (`theme`): `colors` (`primary accent deep ink surface border text`), `sounds`
+  (`click hover done play`: preset `soft|blip|chime|void` o `https`, más `volume`) y `decor`
+  (`banner badge frame tagline`).
+
+### Interfaz (`ui/modules/`)
+
+Cada pieza es un archivo sin dependencias de las demás: `perf.js` (qué corre y cuándo),
+`head.js` (cabeza que mira al cursor), `sfx.js`, `theme.js`, `notes.js` y `pubextras.js`
+(formulario del editor). `Dino.perf` pausa todo lo no esencial con la ventana sin foco,
+mientras se abre el juego (`launching`) y durante la partida (`playing`/`stopping`, donde además
+se congelan las animaciones CSS), y lo reanuda al volver a `idle`.
+
+### Login de Microsoft sin destellos
+
+El motor sigue siendo imprescindible (su `client_id` es el único aprobado), pero ya no se le ve
+pasar: `msa_window::Concealer` pone a cada ventana nueva del motor opacidad 0, estilo de
+herramienta (sin botón en la barra) y fuera de pantalla **antes** de que Qt la muestre; solo la de
+Microsoft se devuelve a la normalidad, ya centrada. Un solo intento a la vez: reintentar, cancelar
+(`account_microsoft_cancel`), pasar 10 minutos o salir de la app cierran el motor del intento.

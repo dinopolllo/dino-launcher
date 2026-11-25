@@ -17,11 +17,22 @@
 //!    Offline), se cierra y se para;
 //! 4. la ventana de Microsoft se centra en la pantalla y se trae al frente.
 //!
+//! **Sin destellos.** Apartar una ventana *después* de verla aparecer deja un parpadeo: el
+//! motor la crea, la muestra y recién entonces se le hace caso. Por eso, desde antes de que
+//! el motor cree su primera ventana corre un [`Concealer`] que a cada ventana nueva de su
+//! interfaz le pone, **mientras todavía no se ha mostrado**, opacidad 0 y el estilo de
+//! ventana de herramientas (sin botón en la barra de tareas), y la aparta de la pantalla.
+//! Cuando Qt la muestra ya es invisible. Solo la ventana de Microsoft se devuelve a la
+//! normalidad, ya centrada y vestida de Dino, justo antes de enseñarla.
+//!
 //! Si algo no sale, [`show_all`] devuelve las ventanas del motor a la vista: el jugador
 //! queda en la página de cuentas (o en la ventana principal) y puede seguir a mano.
 
 #![cfg(windows)]
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{Interface, BOOL};
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
@@ -33,9 +44,10 @@ use windows::Win32::UI::Accessibility::{
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC, VK_RETURN, VK_UP};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClientRect, GetSystemMetrics, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
-    IsWindowVisible, PostMessageW, SetForegroundWindow, SetWindowPos, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE,
-    SWP_NOSIZE, SWP_NOZORDER, WM_CLOSE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    EnumWindows, GetClassNameW, GetClientRect, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
+    GetWindowThreadProcessId, IsWindow, IsWindowVisible, PostMessageW, SetForegroundWindow, SetLayeredWindowAttributes,
+    SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, LWA_ALPHA, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_NOSIZE,
+    SWP_NOZORDER, WM_CLOSE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
 };
 
 const FAR: i32 = -32000;
@@ -66,6 +78,112 @@ fn windows_of(pid: u32) -> Vec<isize> {
     let mut s = S { pid, out: Vec::new() };
     let _ = unsafe { EnumWindows(Some(visit), LPARAM(&mut s as *mut S as isize)) };
     s.out
+}
+
+/// Ventanas de la interfaz del motor (Qt) del proceso, **visibles o no**: las que aún no se
+/// han mostrado son justo las que hay que alcanzar a tiempo. Se reconocen por su clase
+/// (`Qt6QWindowIcon`…); las ventanas internas de mensajes de Qt no se tocan.
+fn ui_windows_of(pid: u32) -> Vec<isize> {
+    struct S {
+        pid: u32,
+        out: Vec<isize>,
+    }
+    extern "system" fn visit(h: HWND, l: LPARAM) -> BOOL {
+        // SAFETY: `l` apunta a la `S` de abajo, viva durante la enumeración.
+        let s = unsafe { &mut *(l.0 as *mut S) };
+        let mut owner = 0u32;
+        unsafe { GetWindowThreadProcessId(h, Some(&mut owner)) };
+        if owner == s.pid {
+            let mut buf = [0u16; 64];
+            let n = unsafe { GetClassNameW(h, &mut buf) };
+            if String::from_utf16_lossy(&buf[..n.max(0) as usize]).contains("QWindow") {
+                s.out.push(h.0 as isize);
+            }
+        }
+        BOOL(1)
+    }
+    let mut s = S { pid, out: Vec::new() };
+    let _ = unsafe { EnumWindows(Some(visit), LPARAM(&mut s as *mut S as isize)) };
+    s.out
+}
+
+/// Esconde cada ventana nueva del motor antes de que se vea. Ver la documentación del módulo.
+struct Concealer {
+    stop: Arc<AtomicBool>,
+    /// Ventana → estilo extendido que tenía antes de esconderla.
+    seen: Arc<Mutex<HashMap<isize, isize>>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Concealer {
+    fn start(pid: u32) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let seen: Arc<Mutex<HashMap<isize, isize>>> = Arc::default();
+        let (st, sn) = (stop.clone(), seen.clone());
+        let thread = std::thread::Builder::new()
+            .name("dino-login-conceal".into())
+            .spawn(move || {
+                while !st.load(Ordering::SeqCst) {
+                    for h in ui_windows_of(pid) {
+                        let mut seen = sn.lock().unwrap_or_else(|p| p.into_inner());
+                        if seen.contains_key(&h) {
+                            continue;
+                        }
+                        // Lo mínimo y en este orden: sin estilo de capa no hay opacidad.
+                        let ex = unsafe { GetWindowLongPtrW(hwnd(h), GWL_EXSTYLE) };
+                        seen.insert(h, ex);
+                        drop(seen);
+                        unsafe {
+                            SetWindowLongPtrW(
+                                hwnd(h),
+                                GWL_EXSTYLE,
+                                ex | WS_EX_LAYERED.0 as isize | WS_EX_TOOLWINDOW.0 as isize,
+                            );
+                            let _ = SetLayeredWindowAttributes(hwnd(h), Default::default(), 0, LWA_ALPHA);
+                        }
+                        move_to(h, FAR, FAR);
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            })
+            .ok();
+        Self { stop, seen, thread }
+    }
+
+    fn stop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+
+    fn original(&self, h: isize) -> Option<isize> {
+        self.seen.lock().unwrap_or_else(|p| p.into_inner()).get(&h).copied()
+    }
+
+    /// Devuelve todas las ventanas escondidas a su estilo de antes (no las mueve).
+    fn restore_all(&self) {
+        for (&h, &ex) in self.seen.lock().unwrap_or_else(|p| p.into_inner()).iter() {
+            restore_style(h, ex);
+        }
+    }
+}
+
+impl Drop for Concealer {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// Opacidad completa y el estilo de antes.
+fn restore_style(h: isize, ex: isize) {
+    if !unsafe { IsWindow(Some(hwnd(h))) }.as_bool() {
+        return;
+    }
+    unsafe {
+        let _ = SetLayeredWindowAttributes(hwnd(h), Default::default(), 255, LWA_ALPHA);
+        SetWindowLongPtrW(hwnd(h), GWL_EXSTYLE, ex);
+    }
 }
 
 fn hwnd(h: isize) -> HWND {
@@ -148,6 +266,17 @@ fn press_accounts(main: isize) {
 
 /// Hace el camino entero. Devuelve la ventana de Microsoft, o por qué no se llegó.
 pub fn open(pid: u32, timeout: Duration) -> Result<isize, &'static str> {
+    let mut hide = Concealer::start(pid);
+    let r = open_hidden(pid, timeout, &mut hide);
+    hide.stop();
+    if r.is_err() {
+        // El motor va a quedar a la vista (ver `show_all`): que no sea transparente.
+        hide.restore_all();
+    }
+    r
+}
+
+fn open_hidden(pid: u32, timeout: Duration, hide: &mut Concealer) -> Result<isize, &'static str> {
     let deadline = Instant::now() + timeout;
     let main = wait_new(pid, &[], deadline).ok_or("el motor no abrió su ventana")?;
     move_to(main, FAR, FAR);
@@ -176,8 +305,9 @@ pub fn open(pid: u32, timeout: Duration) -> Result<isize, &'static str> {
         click(settings, x, y);
         if let Some(h) = wait_new(pid, &[main, menu, settings], Instant::now() + Duration::from_millis(250)) {
             if title(h).contains("Microsoft") {
-                dress(h, &[main, menu, settings]);
-                center(h);
+                // Desde aquí nada más se esconde: esta ventana es la que va a verse.
+                hide.stop();
+                dress(h, &[main, menu, settings], hide.original(h));
                 let _ = unsafe { SetForegroundWindow(hwnd(h)) };
                 return Ok(h);
             }
@@ -194,7 +324,7 @@ pub fn open(pid: u32, timeout: Duration) -> Result<isize, &'static str> {
 /// «Dino» del motor): título e icono de Dino, su propio botón en la barra de tareas, la
 /// barra de título oscura, y las ventanas del motor fuera también de la barra de tareas
 /// (llevaban el logo de PineconeMC).
-fn dress(msa: isize, engine: &[isize]) {
+fn dress(msa: isize, engine: &[isize], original_ex: Option<isize>) {
     use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE};
     use windows::Win32::UI::Shell::ExtractIconExW;
@@ -223,10 +353,16 @@ fn dress(msa: isize, engine: &[isize]) {
         }
         // Con dueño, una ventana no sale en la barra de tareas: WS_EX_APPWINDOW la obliga.
         // Se aplica al volver a mostrarla.
-        let ex = GetWindowLongPtrW(hwnd(msa), GWL_EXSTYLE);
         let _ = ShowWindow(hwnd(msa), SW_HIDE);
+        // Opaca y con su estilo de antes (el `Concealer` la había vuelto invisible).
+        if let Some(ex) = original_ex {
+            restore_style(msa, ex);
+        }
+        let ex = GetWindowLongPtrW(hwnd(msa), GWL_EXSTYLE);
         SetWindowLongPtrW(hwnd(msa), GWL_EXSTYLE, ex | WS_EX_APPWINDOW.0 as isize);
         taskbar_identity(msa);
+        // Centrada **antes** de mostrarse: aparece ya en su sitio y no salta desde una esquina.
+        center(msa);
         let _ = ShowWindow(hwnd(msa), SW_SHOWNA);
         // Barra de título oscura y del color del fondo de Dino (#161B18, en COLORREF 0x00BBGGRR).
         let dark = BOOL(1);

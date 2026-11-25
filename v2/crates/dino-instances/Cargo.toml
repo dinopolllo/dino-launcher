@@ -12,6 +12,7 @@ dino-download = { path = "../dino-download" }
 dino-minecraft = { path = "../dino-minecraft" }
 dino-auth = { path = "../dino-auth" }
 dino-session = { path = "../dino-session" }
+dino-presence = { path = "../dino-presence" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

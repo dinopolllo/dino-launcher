@@ -1,0 +1,11 @@
+[package]
+name = "dino-presence"
+description = "Discord Rich Presence por IPC local (tubería con nombre / socket Unix), sin dependencias de red."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+dino-core = { path = "../dino-core" }
+serde_json.workspace = true
+tracing = "0.1.44"

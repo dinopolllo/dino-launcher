@@ -9,6 +9,7 @@
 
 use dino_auth::{Accounts, AccountsError, AuthError};
 use dino_core::events::SessionState;
+use dino_core::profile::{self, Profile};
 use dino_core::schema::{self, InstallState, InstanceManifest, JavaChoice, Memory, Paths};
 use dino_core::{os, DinoError, ErrorCode};
 use dino_minecraft::launch::{Account, LaunchSpec};
@@ -35,6 +36,9 @@ pub struct LaunchOptions {
     pub max_mem_mb: Option<u32>,
     /// Cuenta por uuid; `None` = la activa.
     pub account: Option<String>,
+    /// El perfil de esa cuenta: lo que eligió para esta instancia manda sobre lo del pack.
+    /// `None` = sin perfil, que es lo mismo que uno vacío.
+    pub profile: Option<Profile>,
 }
 
 pub struct Session {
@@ -67,10 +71,14 @@ fn err(code: ErrorCode, detail: impl std::fmt::Display) -> DinoError {
 /// La memoria que le toca: la que diga quien lanza, la fijada en la instancia o la
 /// recomendada para esta máquina.
 pub fn memory_for(manifest: &InstanceManifest, override_mb: Option<u32>) -> (u32, u32) {
+    memory_for_choice(manifest.memory, override_mb)
+}
+
+fn memory_for_choice(memory: Memory, override_mb: Option<u32>) -> (u32, u32) {
     if let Some(m) = override_mb {
         return (1024.min(m), m);
     }
-    match manifest.memory {
+    match memory {
         Memory::Fixed { max_mb } => (1024.min(max_mb), max_mb),
         Memory::Auto => os::recommended_memory(os::total_memory_mb().unwrap_or(8192)),
     }
@@ -94,9 +102,11 @@ pub fn launch(
     if manifest.state != InstallState::Ready {
         return Err(err(ErrorCode::NotInstalled, format!("«{id}» quedó a medias: hay que repararla")));
     }
+    // Lo del pack y lo que este jugador eligió, mezclados (ver `dino_core::profile`).
+    let resolved = profile::resolve(opts.profile.as_ref(), id, &manifest).effective;
     let mut inst = dino_minecraft::install::installed(paths, &manifest.minecraft, &manifest.loader)
         .map_err(|e| err(ErrorCode::JavaUnavailable, e))?;
-    if let JavaChoice::Path { path } = &manifest.java {
+    if let JavaChoice::Path { path } = &resolved.java {
         if !path.exists() {
             return Err(err(ErrorCode::JavaUnavailable, format!("el Java elegido no está: {}", path.display())));
         }
@@ -107,7 +117,7 @@ pub fn launch(
         AccountsError::NotFound(n) => err(ErrorCode::AccountRequired, n),
         other => err(ErrorCode::Internal, other),
     })?;
-    let (min, max) = memory_for(&manifest, opts.max_mem_mb);
+    let (min, max) = memory_for_choice(resolved.memory, opts.max_mem_mb);
     let account = Account {
         name: identity.name,
         uuid: identity.uuid,
@@ -117,7 +127,8 @@ pub fn launch(
 
     // Los args del jugador van después de los nuestros: si repite uno, gana el suyo.
     let mut jvm = vec!["-XX:+UseG1GC".to_string(), "-XX:MaxGCPauseMillis=50".to_string()];
-    jvm.extend(manifest.jvm_args.iter().cloned());
+    jvm.extend(resolved.jvm_args.iter().cloned());
+    let window_args = resolved.window.game_args();
     let game_dir = paths.game_dir(id);
     let spec = LaunchSpec {
         account: &account,
@@ -126,6 +137,7 @@ pub fn launch(
         min_mem_mb: min,
         extra_jvm_args: &jvm,
         server: opts.server.as_deref(),
+        extra_game_args: &window_args,
     };
     let mut cmd = dino_minecraft::launch::command(paths, &inst, &spec).map_err(|e| err(ErrorCode::Internal, e))?;
     let logdir = paths.instance_dir(id).join("dino-logs");

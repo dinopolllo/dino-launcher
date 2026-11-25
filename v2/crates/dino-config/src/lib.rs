@@ -7,7 +7,9 @@
 //!   «leer → modificar → guardar de forma atómica» bajo un cerrojo, así que dos comandos de
 //!   la interfaz a la vez no se pisan el cambio el uno al otro.
 
-use dino_core::schema::{self, Config, Library, LibraryEntry, PackSource, Paths, StoreError};
+use dino_core::pack_meta::PackExtras;
+use dino_core::profile::{ProfilesFile, PROFILES_SCHEMA};
+use dino_core::schema::{self, Config, Library, LibraryEntry, PackSource, Paths, StoreError, StoredExtras};
 use std::sync::Mutex;
 
 // ---------------------------------------------------------------- reglas
@@ -121,6 +123,47 @@ impl Store {
         f(&mut c);
         schema::save(&self.paths.config(), &c, schema::CONFIG_SCHEMA)?;
         Ok(c)
+    }
+
+    /// Los perfiles por jugador; vacíos si todavía no hay archivo.
+    pub fn profiles(&self) -> Result<ProfilesFile, StoreError> {
+        Ok(schema::load(&self.paths.profiles())?.unwrap_or_default())
+    }
+
+    /// Cambia los perfiles y los guarda, bajo el mismo cerrojo que lo demás.
+    pub fn update_profiles<T>(&self, f: impl FnOnce(&mut ProfilesFile) -> T) -> Result<T, StoreError> {
+        let _g = self.lock.lock().unwrap_or_else(|p| p.into_inner());
+        let mut p = self.profiles()?;
+        let out = f(&mut p);
+        schema::save(&self.paths.profiles(), &p, PROFILES_SCHEMA)?;
+        Ok(out)
+    }
+
+    /// Lo opcional que publicó el pack la última vez que se vio el catálogo, y de qué
+    /// versión era. Es una copia: ilegible o ausente equivale a «nada», y la siguiente
+    /// lectura del catálogo la rehace.
+    pub fn pack_extras(&self, id: &str) -> (PackExtras, Option<String>) {
+        schema::load::<StoredExtras>(&self.paths.pack_extras(id))
+            .ok()
+            .flatten()
+            .map(|s| (s.extras, s.version))
+            .unwrap_or_default()
+    }
+
+    /// Guarda la copia (saneada) si cambió; si el pack ya no trae nada, la borra.
+    pub fn save_pack_extras(&self, id: &str, extras: &PackExtras, version: &str) {
+        let path = self.paths.pack_extras(id);
+        let extras = extras.sanitized();
+        if extras.is_empty() {
+            let _ = std::fs::remove_file(&path);
+            return;
+        }
+        let (previo, v) = self.pack_extras(id);
+        if previo == extras && v.as_deref() == Some(version) {
+            return;
+        }
+        let stored = StoredExtras { schema: schema::PACK_EXTRAS_SCHEMA, version: Some(version.into()), extras };
+        let _ = schema::save(&path, &stored, schema::PACK_EXTRAS_SCHEMA);
     }
 
     /// Cambia la biblioteca y la guarda. `f` devuelve lo que quiera el que llama.

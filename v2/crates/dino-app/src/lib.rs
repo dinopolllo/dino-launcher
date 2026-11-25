@@ -7,11 +7,12 @@
 //! - instancia única, links de invitación (`dinolauncher://join/CODIGO`) y actualizaciones.
 
 use dino_core::api::{
-    AccountView, AppInfo, InstanceDetails, InstanceSettings, InstanceView, PackPreview, PlayOutcome, PlayRequest,
-    ServerStatus,
+    AccountView, AppInfo, InstanceDetails, InstanceSettings, InstanceSettingsPatch, InstanceView, PackPreview,
+    PlayOutcome, PlayRequest, ProfileView, ServerStatus,
 };
 use dino_core::events::{Event, SessionState, CHANNEL};
-use dino_core::schema::{JavaChoice, Memory, Paths, UpdateChannel};
+use dino_core::profile::{LauncherPrefs, WindowPref};
+use dino_core::schema::{Paths, UpdateChannel};
 use dino_core::{DinoError, ErrorCode};
 use dino_instances::{admin, catalog, Core};
 use std::path::PathBuf;
@@ -99,14 +100,30 @@ fn instance_settings_get(core: State<'_, Arc<Core>>, id: String) -> R<InstanceSe
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn instance_settings_set(
-    core: State<'_, Arc<Core>>,
-    id: String,
-    memory: Memory,
-    jvm_args: Vec<String>,
-    java: JavaChoice,
-) -> R<()> {
-    core.instance_settings_set(&id, memory, jvm_args, java)
+fn instance_settings_set(core: State<'_, Arc<Core>>, id: String, patch: InstanceSettingsPatch) -> R<()> {
+    core.instance_settings_set(&id, patch)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+fn instance_settings_reset(core: State<'_, Arc<Core>>, id: String) -> R<()> {
+    core.instance_settings_reset(&id)
+}
+
+// ------------------------------------------------------------ perfil del jugador
+
+#[tauri::command]
+fn profile_get(core: State<'_, Arc<Core>>) -> ProfileView {
+    core.profile_get()
+}
+
+#[tauri::command]
+fn profile_set(core: State<'_, Arc<Core>>, launcher: LauncherPrefs, window: Option<WindowPref>) -> R<ProfileView> {
+    core.profile_set(launcher, window)
+}
+
+#[tauri::command]
+fn profile_reset(core: State<'_, Arc<Core>>) -> R<ProfileView> {
+    core.profile_reset()
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -201,6 +218,12 @@ fn account_offline_check(core: State<'_, Arc<Core>>, name: String) -> Option<Str
 #[tauri::command(rename_all = "snake_case")]
 fn account_offline_create(core: State<'_, Arc<Core>>, name: String) -> R<AccountView> {
     core.account_offline_create(&name)
+}
+
+/// Cancela el login de Microsoft en curso (cerrar el modal, o volver atrás) y cierra el motor.
+#[tauri::command]
+fn account_microsoft_cancel(core: State<'_, Arc<Core>>) {
+    core.account_microsoft_cancel()
 }
 
 #[tauri::command]
@@ -541,6 +564,10 @@ pub fn run() {
             instance_details,
             instance_settings_get,
             instance_settings_set,
+            instance_settings_reset,
+            profile_get,
+            profile_set,
+            profile_reset,
             instance_verify,
             catalog_lookup,
             catalog_add,
@@ -557,6 +584,7 @@ pub fn run() {
             account_offline_check,
             account_offline_create,
             account_microsoft_add,
+            account_microsoft_cancel,
             invite_pending,
             admin_unlocked,
             admin_unlock,
@@ -571,6 +599,12 @@ pub fn run() {
         .expect("Dino Launcher no pudo arrancar");
 
     app.run(|handle, event| {
+        // Salir de verdad: que no quede el motor del login ni la presencia de Discord.
+        if let tauri::RunEvent::Exit = event {
+            if let Some(c) = handle.try_state::<Arc<Core>>() {
+                c.shutdown();
+            }
+        }
         // Con la interfaz cerrada para jugar, que la app no se vaya: sigue la partida.
         if let tauri::RunEvent::ExitRequested { api, code: None, .. } = event {
             if handle.try_state::<Arc<Core>>().is_some_and(|c| dino_session_running(&c)) {

@@ -8,7 +8,8 @@
 //!   cache/{libraries,assets,versions}/   compartido entre instancias, por hash
 //!   java/<componente>/
 //!   instances/<id>/instance.json + minecraft/
-//!   packs/<id>.mrpack, packs/<id>.png
+//!   packs/<id>.mrpack, packs/<id>.png, packs/<id>.extras.json
+//!   profiles.json               preferencias por jugador (UUID de cuenta)
 //!   logs/
 //! ```
 //!
@@ -27,6 +28,7 @@ pub const CONFIG_SCHEMA: u32 = 1;
 pub const LIBRARY_SCHEMA: u32 = 1;
 pub const INSTANCE_SCHEMA: u32 = 1;
 pub const ACCOUNTS_SCHEMA: u32 = 1;
+pub const PACK_EXTRAS_SCHEMA: u32 = 1;
 
 // ---------------------------------------------------------------- rutas
 
@@ -48,6 +50,9 @@ impl Paths {
     pub fn accounts(&self) -> PathBuf {
         self.root.join("accounts.json")
     }
+    pub fn profiles(&self) -> PathBuf {
+        self.root.join("profiles.json")
+    }
     pub fn instance_dir(&self, id: &str) -> PathBuf {
         self.root.join("instances").join(id)
     }
@@ -62,6 +67,10 @@ impl Paths {
     }
     pub fn pack_icon(&self, id: &str) -> PathBuf {
         self.root.join("packs").join(format!("{id}.png"))
+    }
+    /// Lo opcional que publicó el pack (Discord, notas, tema), copiado para cuando no hay red.
+    pub fn pack_extras(&self, id: &str) -> PathBuf {
+        self.root.join("packs").join(format!("{id}.extras.json"))
     }
     pub fn logs(&self) -> PathBuf {
         self.root.join("logs")
@@ -111,6 +120,10 @@ pub struct Config {
     /// Marca del panel de admin desbloqueado (antes, el archivo `admin`).
     #[serde(default)]
     pub admin_unlocked: bool,
+    /// Aplicación de Discord con la que se cuenta a qué se juega. Sin ella (ni la del
+    /// pack, ni `DINO_DISCORD_CLIENT_ID` al compilar) Dino no habla con Discord.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discord_client_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -137,6 +150,7 @@ impl Default for Config {
             download_limit: None,
             update_channel: UpdateChannel::Stable,
             admin_unlocked: false,
+            discord_client_id: None,
         }
     }
 }
@@ -297,6 +311,19 @@ pub enum AccountKind {
     Offline,
     /// Microsoft a través del motor: la sesión vive en el `accounts.json` del motor.
     MicrosoftBridge,
+}
+
+// ---------------------------------------------------------------- packs/<id>.extras.json
+
+/// Copia local de lo opcional que publicó el pack (ver [`crate::pack_meta`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StoredExtras {
+    pub schema: u32,
+    /// Versión del pack a la que pertenecen estas notas, tal como la anunciaba el catálogo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(flatten)]
+    pub extras: crate::pack_meta::PackExtras,
 }
 
 // ---------------------------------------------------------------- lectura y escritura

@@ -954,6 +954,7 @@ dependencies = [
  "dino-core",
  "dino-download",
  "dino-minecraft",
+ "dino-presence",
  "dino-session",
  "futures-util",
  "hickory-resolver",
@@ -990,6 +991,15 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "zip 2.6.1",
+]
+
+[[package]]
+name = "dino-presence"
+version = "2.0.3"
+dependencies = [
+ "dino-core",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

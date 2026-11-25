@@ -69,7 +69,10 @@
   --green:#73BF69;
   --green-hot:#4A9A44;
   --green-deep:#0B4623;
-  --green-glow:rgba(115,191,105,.50);
+  --green-glow:rgba(var(--green-rgb),.50);
+  /* Los mismos verdes como `r,g,b`, para poder darles alfa: el tema de un pack los cambia. */
+  --green-rgb:115,191,105;
+  --deep-rgb:11,70,35;
 
   /* dino sprite tones */
   --dino-dark:#053C1E;
@@ -112,9 +115,9 @@ body{
 .mesh{
   position:absolute;inset:-20%;z-index:0;pointer-events:none;
   background:
-    radial-gradient(46% 40% at 22% 24%, rgba(115,191,105,.24), transparent 62%),
-    radial-gradient(42% 44% at 80% 20%, rgba(11,70,35,.34), transparent 64%),
-    radial-gradient(50% 46% at 70% 82%, rgba(115,191,105,.14), transparent 62%),
+    radial-gradient(46% 40% at 22% 24%, rgba(var(--green-rgb),.24), transparent 62%),
+    radial-gradient(42% 44% at 80% 20%, rgba(var(--deep-rgb),.34), transparent 64%),
+    radial-gradient(50% 46% at 70% 82%, rgba(var(--green-rgb),.14), transparent 62%),
     radial-gradient(58% 52% at 28% 80%, rgba(12,58,40,.55), transparent 66%);
   filter:blur(34px);
   animation:drift 42s ease-in-out infinite alternate;
@@ -143,11 +146,11 @@ body{
   display:flex;align-items:center;justify-content:center;
   overflow:hidden;
   background:
-    linear-gradient(155deg, rgba(255,255,255,.17), rgba(115,191,105,.07) 48%, rgba(115,191,105,.20));
+    linear-gradient(155deg, rgba(255,255,255,.17), rgba(var(--green-rgb),.07) 48%, rgba(var(--green-rgb),.20));
   box-shadow:
     inset 0 1px 0 rgba(255,255,255,.55),
     inset 0 0 0 1px rgba(153,217,132,.34),
-    inset 0 calc(var(--s) * -.16) calc(var(--s) * .30) calc(var(--s) * -.18) rgba(115,191,105,.65),
+    inset 0 calc(var(--s) * -.16) calc(var(--s) * .30) calc(var(--s) * -.18) rgba(var(--green-rgb),.65),
     0 0 calc(var(--s) * .42) calc(var(--s) * -.10) var(--green-glow),
     0 calc(var(--s) * .16) calc(var(--s) * .36) calc(var(--s) * -.20) rgba(0,0,0,.9);
 }
@@ -160,7 +163,7 @@ body{
 .app-icon canvas{
   position:relative;z-index:1;
   width:70%;height:auto;image-rendering:pixelated;
-  filter:drop-shadow(0 0 calc(var(--s) * .10) rgba(115,191,105,.8));
+  filter:drop-shadow(0 0 calc(var(--s) * .10) rgba(var(--green-rgb),.8));
 }
 
 /* ---------- app window ---------- */
@@ -353,7 +356,7 @@ html.win{--r-window:10px}
   background:var(--glass-1);
   box-shadow:
     inset 0 1px 0 var(--specular),
-    inset 0 0 0 1px rgba(115,191,105,.45),
+    inset 0 0 0 1px rgba(var(--green-rgb),.45),
     0 10px 26px -14px var(--green-glow);
 }
 /* Toda la tarjeta selecciona. Va como un botón estirado por encima y no como un
@@ -424,7 +427,7 @@ html.win{--r-window:10px}
   transition:color .16s ease,border-color .16s ease,background .16s ease;
 }
 .packtile-add svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round}
-.packtile-add:hover{color:var(--text);border-color:rgba(115,191,105,.5);background:rgba(115,191,105,.05)}
+.packtile-add:hover{color:var(--text);border-color:rgba(var(--green-rgb),.5);background:rgba(var(--green-rgb),.05)}
 .packtile-add:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 
 .lib-empty{
@@ -561,7 +564,7 @@ h2{font-family:var(--font-display);font-weight:700;font-size:16px;letter-spacing
   display:grid;grid-template-columns:1fr auto;gap:28px;align-items:center;
   position:relative;overflow:hidden;
   background:
-    linear-gradient(118deg, rgba(115,191,105,.13), rgba(11,70,35,.10) 54%, transparent 80%),
+    linear-gradient(118deg, rgba(var(--green-rgb),.13), rgba(var(--deep-rgb),.10) 54%, transparent 80%),
     var(--glass-1);
   backdrop-filter:blur(28px) saturate(175%);
   -webkit-backdrop-filter:blur(28px) saturate(175%);
@@ -622,7 +625,7 @@ h2{font-family:var(--font-display);font-weight:700;font-size:16px;letter-spacing
   font-family:var(--font-display);font-weight:700;font-size:16px;
   white-space:nowrap;
   color:#04170A;
-  background:linear-gradient(165deg,#99D984,var(--green) 48%,var(--green-hot) 78%,var(--green-deep));
+  background:linear-gradient(165deg,var(--dino-light),var(--green) 48%,var(--green-hot) 78%,var(--green-deep));
   box-shadow:
     inset 0 1px 0 rgba(255,255,255,.5),
     inset 0 -1px 0 rgba(0,0,0,.2),
@@ -632,7 +635,7 @@ h2{font-family:var(--font-display);font-weight:700;font-size:16px;letter-spacing
   display:flex;align-items:center;justify-content:center;gap:9px;
 }
 .play:hover{transform:translateY(-1.5px);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 18px 40px -10px rgba(115,191,105,.6),0 2px 6px rgba(0,0,0,.4)}
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 18px 40px -10px rgba(var(--green-rgb),.6),0 2px 6px rgba(0,0,0,.4)}
 .play:active{transform:translateY(0)}
 .play:focus-visible{outline:2px solid #fff;outline-offset:3px}
 .play svg{width:15px;height:15px;fill:currentColor}
@@ -740,7 +743,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   display:flex;flex-direction:column;align-items:center;gap:7px;
   transition:border-color .2s ease,background .2s ease;cursor:pointer;
 }
-.drop:hover{border-color:rgba(115,191,105,.5);background:rgba(115,191,105,.045)}
+.drop:hover{border-color:rgba(var(--green-rgb),.5);background:rgba(var(--green-rgb),.045)}
 .drop svg{width:22px;height:22px;color:var(--green);stroke-width:1.6}
 .drop .t{font-size:13px;font-weight:600}
 .drop .h{font-family:var(--font-mono);font-size:10px;color:var(--text-faint)}
@@ -748,8 +751,8 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 
 .note{
   margin-top:15px;border-radius:var(--r-card);padding:11px 13px;
-  background:rgba(115,191,105,.055);
-  box-shadow:inset 0 0 0 1px rgba(115,191,105,.18);
+  background:rgba(var(--green-rgb),.055);
+  box-shadow:inset 0 0 0 1px rgba(var(--green-rgb),.18);
   font-size:12.5px;color:#CDE6C2;line-height:1.5;
 }
 .note b{color:var(--green);font-weight:600}
@@ -762,19 +765,19 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   position:relative;z-index:2;flex:none;
   display:flex;align-items:center;gap:12px;
   padding:9px 16px;
-  background:rgba(115,191,105,.10);
-  box-shadow:inset 0 -1px 0 rgba(115,191,105,.22);
+  background:rgba(var(--green-rgb),.10);
+  box-shadow:inset 0 -1px 0 rgba(var(--green-rgb),.22);
   font-size:12.5px;color:var(--text);
 }
 .upbar-txt{flex:1;line-height:1.4}
 .upbar-txt b{color:var(--green);font-weight:600}
 .upbar-btn{
   flex:none;padding:6px 14px;border-radius:var(--r-chip);
-  border:1px solid rgba(115,191,105,.35);background:rgba(115,191,105,.16);
+  border:1px solid rgba(var(--green-rgb),.35);background:rgba(var(--green-rgb),.16);
   color:var(--text);font-family:var(--font-body);font-size:12px;font-weight:600;
   cursor:pointer;transition:background .15s ease;
 }
-.upbar-btn:hover{background:rgba(115,191,105,.26)}
+.upbar-btn:hover{background:rgba(var(--green-rgb),.26)}
 .upbar-btn:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 .upbar-btn[disabled]{opacity:.55;cursor:default}
 
@@ -818,7 +821,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 .play > *{position:relative;z-index:1}
 .play[disabled]{cursor:progress;filter:saturate(.75)}
 
-.drop.over{border-color:var(--green);background:rgba(115,191,105,.10)}
+.drop.over{border-color:var(--green);background:rgba(var(--green-rgb),.10)}
 
 /* ---------- primer arranque ---------- */
 /* `.overlay` y `.overlay-card` son los nombres genéricos; `.onboard` y `.ob-card`
@@ -837,7 +840,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 .ob-card,.overlay-card{
   width:100%;max-width:450px;
   border-radius:var(--r-panel);padding:28px;
-  background:linear-gradient(165deg,rgba(115,191,105,.10),transparent 58%),var(--glass-2);
+  background:linear-gradient(165deg,rgba(var(--green-rgb),.10),transparent 58%),var(--glass-2);
   backdrop-filter:blur(30px) saturate(180%);
   -webkit-backdrop-filter:blur(30px) saturate(180%);
   box-shadow:
@@ -882,7 +885,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   transition:background .15s ease,border-color .15s ease}
 .acc-row:hover{background:var(--glass-2);border-color:var(--hairline-strong)}
 .acc-row:focus-visible{outline:2px solid var(--green);outline-offset:2px}
-.acc-row.on{border-color:var(--green);background:linear-gradient(90deg,rgba(115,191,105,.14),transparent 70%),var(--glass-1)}
+.acc-row.on{border-color:var(--green);background:linear-gradient(90deg,rgba(var(--green-rgb),.14),transparent 70%),var(--glass-1)}
 .acc-row canvas{width:34px;height:34px;border-radius:7px;image-rendering:pixelated;flex:none}
 .acc-row .acc-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .acc-row .acc-name{font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1149,7 +1152,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 .btn[disabled]{opacity:.5;cursor:default;transform:none}
 .btn.green{
   color:#04170A;
-  background:linear-gradient(165deg,#99D984,var(--green) 48%,var(--green-hot) 78%,var(--green-deep));
+  background:linear-gradient(165deg,var(--dino-light),var(--green) 48%,var(--green-hot) 78%,var(--green-deep));
   box-shadow:
     inset 0 1px 0 rgba(255,255,255,.5),
     inset 0 -1px 0 rgba(0,0,0,.2),
@@ -1158,7 +1161,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
 }
 .btn.green:hover{
   color:#04170A;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 12px 28px -10px rgba(115,191,105,.6),
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 12px 28px -10px rgba(var(--green-rgb),.6),
              0 1px 4px rgba(0,0,0,.35);
 }
 
@@ -1321,7 +1324,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
    a publicar para verlo. */
 .pub-row .btn.copied{color:var(--green)}
 
-.spin{width:13px;height:13px;border-radius:50%;border:2px solid rgba(115,191,105,.22);
+.spin{width:13px;height:13px;border-radius:50%;border:2px solid rgba(var(--green-rgb),.22);
   border-top-color:var(--green);animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 
@@ -1335,6 +1338,135 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   .hero{grid-template-columns:1fr}
   .hero-left{flex-direction:column;align-items:flex-start}
 }
+
+/* ============================================================================
+   Módulos (ui/modules/*.js): rendimiento, cabeza 3D, tema, notas, sonidos y extras
+   del editor de publicación.
+   ============================================================================ */
+
+/* ---- Dino.perf: con la ventana sin foco, al abrir el juego o durante la partida, las
+   animaciones continuas se paran. En «game» se paran todas (los avisos que aún se vean
+   no necesitan moverse). */
+html[data-quiet] .mesh{animation-play-state:paused}
+html[data-quiet="game"] *,html[data-quiet="game"] *::before,html[data-quiet="game"] *::after{
+  animation-play-state:paused!important}
+
+/* ---- Dino.head: cubo de seis caras con la skin ---- */
+.head3d{display:block;width:30px;height:30px;flex:none;perspective:150px}
+.head3d .cube{position:relative;width:30px;height:30px;transform-style:preserve-3d;will-change:transform}
+.head3d .face{position:absolute;left:0;top:0;width:30px;height:30px;border-radius:0;
+  image-rendering:pixelated;backface-visibility:hidden}
+.head3d .face.front{border-radius:3px}
+
+/* ---- tema del pack: adornos que no tocan la disposición ---- */
+.hero-deco{position:absolute;inset:0;z-index:0;pointer-events:none;border-radius:inherit;
+  background-size:cover;background-position:center;opacity:.26;
+  -webkit-mask-image:linear-gradient(90deg,#000 0,rgba(0,0,0,.55) 45%,transparent 92%);
+  mask-image:linear-gradient(90deg,#000 0,rgba(0,0,0,.55) 45%,transparent 92%)}
+.pack-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:0 0 9px}
+.pack-head .pack-title{margin:0}
+.pack-badge{display:inline-block;padding:3px 10px;border-radius:99px;
+  font-family:var(--font-mono);font-weight:600;font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--dino-light);background:rgba(var(--green-rgb),.14);
+  box-shadow:inset 0 0 0 1px rgba(var(--green-rgb),.38)}
+.pack-tagline{margin:-3px 0 10px;font-size:12.5px;color:var(--text-dim)}
+.hero[data-frame="glow"]{box-shadow:inset 0 1px 0 var(--specular),inset 0 0 0 1px rgba(var(--green-rgb),.45),
+  0 0 40px -8px rgba(var(--green-rgb),.5),0 18px 42px -24px rgba(0,0,0,.85)}
+.hero[data-frame="double"]{outline:1px solid rgba(var(--green-rgb),.4);outline-offset:4px}
+.hero[data-frame="pixel"]{border-radius:6px;
+  box-shadow:0 0 0 2px var(--green),5px 5px 0 2px rgba(var(--deep-rgb),.95)}
+.notes-pill{display:inline-flex;align-items:center;gap:7px;margin-top:11px;padding:6px 12px;border:0;cursor:pointer;
+  border-radius:99px;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.03em;color:var(--text);
+  background:rgba(var(--green-rgb),.12);box-shadow:inset 0 0 0 1px rgba(var(--green-rgb),.32);
+  transition:background .16s ease}
+.notes-pill:hover{background:rgba(var(--green-rgb),.22)}
+.notes-pill:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.notes-pill[data-update]{box-shadow:inset 0 0 0 1px var(--green)}
+.notes-pill::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 8px var(--green-glow)}
+
+/* ---- Dino.notes ---- */
+.notes-card{max-width:640px;max-height:min(84vh,760px);gap:0}
+.notes-head{display:flex;align-items:center;gap:14px;margin-bottom:16px}
+.notes-head-body{min-width:0}
+.notes-head h2{font-size:21px;letter-spacing:-.02em;margin-top:2px}
+.notes-body{overflow:auto;min-height:0;padding-right:6px;margin-right:-6px;
+  display:flex;flex-direction:column;gap:16px}
+.notes-title{font-family:var(--font-display);font-size:17px;margin:0}
+.notes-summary{margin:0;color:var(--text-dim);font-size:13.5px;line-height:1.55}
+.notes-summary strong,.notes-list strong{color:var(--text);font-weight:600}
+.notes-list code,.notes-summary code{font-family:var(--font-mono);font-size:11.5px;padding:1px 5px;
+  border-radius:5px;background:rgba(0,0,0,.35);color:var(--dino-light)}
+.notes-sec{display:flex;flex-direction:column;gap:8px}
+.notes-sec-head{display:flex;align-items:center;gap:9px}
+.notes-tag{padding:3px 9px;border-radius:99px;font-family:var(--font-mono);font-size:9.5px;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--text);background:var(--glass-2);
+  box-shadow:inset 0 0 0 1px var(--hairline-strong)}
+.k-feature .notes-tag{color:var(--dino-light);background:rgba(var(--green-rgb),.14);
+  box-shadow:inset 0 0 0 1px rgba(var(--green-rgb),.4)}
+.k-fix .notes-tag{color:#9CC8FF;background:rgba(80,140,255,.12);box-shadow:inset 0 0 0 1px rgba(120,170,255,.35)}
+.k-note .notes-tag{color:#FFD28A;background:rgba(255,190,90,.12);box-shadow:inset 0 0 0 1px rgba(255,200,120,.35)}
+.notes-sec-title{font-weight:600;font-size:13px}
+.notes-list{margin:0;padding:0 0 0 18px;display:flex;flex-direction:column;gap:5px;
+  font-size:13px;line-height:1.5;color:var(--text-dim)}
+.notes-list li::marker{color:var(--text-faint)}
+.notes-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+.notes-fig{margin:0;display:flex;flex-direction:column;gap:5px}
+.notes-fig img{width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:var(--r-card);cursor:zoom-in;
+  background:var(--glass-1);box-shadow:inset 0 0 0 1px var(--hairline)}
+.notes-fig figcaption{font-size:11.5px;color:var(--text-faint)}
+.notes-foot{display:flex;align-items:center;gap:14px;margin-top:18px}
+.notes-foot .btn{flex:1}
+.lightbox{position:fixed;inset:0;z-index:99;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:10px;padding:28px;background:rgba(0,0,0,.82);cursor:zoom-out}
+.lightbox img{max-width:100%;max-height:calc(100% - 40px);border-radius:12px;object-fit:contain}
+.lightbox-cap{font-size:12.5px;color:var(--text-dim)}
+
+/* ---- Ajustes: perfil del jugador ---- */
+.set-profile{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin-top:10px;
+  font-family:var(--font-mono);font-size:10.5px;color:var(--text-dim)}
+.set-profile b{color:var(--text);font-weight:500}
+.set-profile .link-min{margin:0}
+.profile-panel{margin-top:14px}
+.profile-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0 14px}
+.prof-vol{margin-top:2px}
+.profile-panel[data-locked] .field-switch,.profile-panel[data-locked] .field{opacity:.5;pointer-events:none}
+
+/* ---- editor de publicación: extras ---- */
+.pub-extra{margin-top:14px;border-radius:var(--r-card);background:var(--glass-0);
+  box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline)}
+.pub-extra>summary{display:flex;align-items:baseline;gap:10px;padding:12px 14px;cursor:pointer;list-style:none}
+.pub-extra>summary::-webkit-details-marker{display:none}
+.pub-extra>summary::after{content:"+";margin-left:auto;color:var(--text-faint);font-family:var(--font-mono)}
+.pub-extra[open]>summary::after{content:"–"}
+.pub-extra-t{font-weight:600;font-size:13px}
+.pub-extra-h{font-family:var(--font-mono);font-size:9.5px;color:var(--text-faint)}
+.pub-extra-body{padding:0 14px 14px}
+.pub-extra-body .field:first-child,.pub-extra-body .field-switch:first-child{margin-top:2px}
+.pub-extra textarea,.pub-extra select,.pub-extra .field input{width:100%}
+.pub-extra textarea{border:0;border-radius:10px;padding:9px 11px;resize:vertical;background:var(--glass-1);color:var(--text);
+  font-family:var(--font-body);font-size:13px;box-shadow:inset 0 1px 0 var(--hairline-strong),inset 0 0 0 1px var(--hairline)}
+.pub-extra select{border:0;border-radius:10px;padding:8px 10px;background:var(--glass-1);color:var(--text);
+  font-family:var(--font-body);font-size:13px;box-shadow:inset 0 0 0 1px var(--hairline)}
+.pub-sub{margin:16px 0 4px;font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--text-faint)}
+.pub-media-row{display:flex;gap:8px}
+.pub-media-row input{flex:1;min-width:0}
+.pub-media-row .btn{flex:none;padding:6px 12px;font-size:11.5px}
+.pub-sec{display:flex;flex-direction:column;gap:7px;margin:8px 0;padding:10px;border-radius:12px;
+  background:rgba(0,0,0,.18);box-shadow:inset 0 0 0 1px var(--hairline)}
+.pub-sec-top{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center}
+.pub-sec .field{margin-top:0}
+.pub-color,.pub-snd-top{display:grid;grid-template-columns:104px 1fr auto;gap:8px;align-items:center;margin:6px 0}
+.pub-snd{margin:6px 0}
+.pub-color-k{font-size:12px;color:var(--text-dim)}
+.pub-swatch{width:34px;height:28px;padding:0;border:0;border-radius:8px;background:none;cursor:pointer}
+
+/* ---- login: sin saltos ---- */
+.msa-estado{display:flex;align-items:center;gap:9px}
+.msa-estado .spin{flex:none}
+#sp-msa-texto{transition:opacity .18s ease}
+#sp-msa-texto[data-swap]{opacity:0}
 </style>
 
 <div class="app">
@@ -1405,7 +1537,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       <div class="account" id="accountBtn" role="button" tabindex="0"
            title="Cambiar de cuenta o ver cómo funcionan">
         <div class="account-row">
-          <canvas data-head="?" width="8" height="8"></canvas>
+          <canvas data-head="?" width="8" height="8"></canvas><span class="head3d" id="head3d" hidden></span>
           <div>
             <div class="account-name">…</div>
             <div class="account-kind"></div>
@@ -1421,12 +1553,18 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
         <div class="eyebrow">Instancia activa</div>
 
         <div class="hero">
+          <div class="hero-deco" id="heroDeco" hidden></div>
           <div class="hero-left">
             <span class="app-icon" style="--s:76px" id="packIcon"><canvas data-dino width="22" height="21"></canvas></span>
             <div style="min-width:0">
-              <div class="pack-title" id="packName">Sin modpack</div>
+              <div class="pack-head">
+                <div class="pack-title" id="packName">Sin modpack</div>
+                <span class="pack-badge" id="packBadge" hidden></span>
+              </div>
+              <div class="pack-tagline" id="packTagline" hidden></div>
               <div class="metaline" id="packMeta"><span>nada instalado todavía</span></div>
               <div class="chips" id="packChips"></div>
+              <button type="button" class="notes-pill" id="notesBtn" hidden></button>
             </div>
           </div>
 
@@ -1498,7 +1636,12 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       <section class="view" data-view="ajustes">
         <div class="eyebrow" id="setEyebrow">Instancia</div>
         <h1>Ajustes</h1>
-        <p class="sub">Vienen configurados desde el pack. Puedes cambiarlos y se conservan entre actualizaciones.</p>
+        <p class="sub">Vienen configurados desde el pack. Lo que cambies es de tu perfil: se conserva entre actualizaciones y no lo hereda otro jugador.</p>
+        <div class="set-profile" id="setProfile" hidden>
+          <span>Ajustes de <b id="setProfileName"></b></span>
+          <span id="setProfileWhat"></span>
+          <button type="button" class="link-min" id="setReset" hidden>volver a lo del pack</button>
+        </div>
 
         <div class="two two-settings" style="margin-top:18px">
           <div class="panel">
@@ -1520,6 +1663,17 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
             <div class="field">
               <label>Argumentos de la JVM</label>
               <div class="args" id="jvmArgs">Los elige Dino según la versión de Minecraft.</div>
+            </div>
+
+            <div class="field">
+              <label for="windowSelect">Ventana del juego</label>
+              <select id="windowSelect">
+                <option value="default">Predeterminada</option>
+                <option value="fullscreen">Pantalla completa</option>
+                <option value="1280x720">1280 × 720</option>
+                <option value="1600x900">1600 × 900</option>
+                <option value="1920x1080">1920 × 1080</option>
+              </select>
             </div>
           </div>
 
@@ -1544,6 +1698,52 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
               <b>Tus controles están a salvo.</b> Los keybinds y las opciones de video se copian
               una sola vez al instalar. Después son tuyos — ninguna actualización los toca.
             </div>
+          </div>
+        </div>
+
+        <!-- Preferencias del propio launcher, también por jugador. Sin cuenta no hay perfil
+             donde guardarlas: los controles se ven (con los valores de fábrica) pero no editan. -->
+        <div class="panel profile-panel" id="profilePanel">
+          <h2>Perfil de <span id="profName">—</span></h2>
+          <p class="sub" id="profSub">Es solo tuyo: otro jugador de este equipo no lo hereda, y tú no pisas lo suyo.</p>
+          <div class="profile-grid">
+            <div class="field-switch">
+              <div><div class="fs-t">La cabeza sigue al cursor</div>
+                <div class="fs-s">como el muñeco del inventario de Minecraft</div></div>
+              <button class="switch" role="switch" aria-checked="true" aria-label="La cabeza sigue al cursor" id="profHead"><b></b></button>
+            </div>
+            <div class="field-switch">
+              <div><div class="fs-t">Tema del modpack</div>
+                <div class="fs-s">colores, adornos y sonidos que publique el pack</div></div>
+              <button class="switch" role="switch" aria-checked="true" aria-label="Tema del modpack" id="profTheme"><b></b></button>
+            </div>
+            <div class="field-switch">
+              <div><div class="fs-t">Sonidos de la interfaz</div>
+                <div class="fs-s">los que traiga el modpack elegido</div></div>
+              <button class="switch" role="switch" aria-checked="true" aria-label="Sonidos de la interfaz" id="profSounds"><b></b></button>
+            </div>
+            <div class="field-switch">
+              <div><div class="fs-t">Mostrar en Discord a qué juego</div>
+                <div class="fs-s">solo si el pack lo activa</div></div>
+              <button class="switch" role="switch" aria-checked="true" aria-label="Mostrar en Discord a qué juego" id="profDiscord"><b></b></button>
+            </div>
+            <div class="field prof-vol">
+              <label for="profVol">Volumen de los sonidos</label>
+              <input type="range" id="profVol" min="0" max="100" step="5" value="60" style="--fill:60%">
+            </div>
+            <div class="field">
+              <label for="profWindow">Ventana del juego (todos tus packs)</label>
+              <select id="profWindow">
+                <option value="default">Predeterminada</option>
+                <option value="fullscreen">Pantalla completa</option>
+                <option value="1280x720">1280 × 720</option>
+                <option value="1600x900">1600 × 900</option>
+                <option value="1920x1080">1920 × 1080</option>
+              </select>
+            </div>
+          </div>
+          <div class="skin-actions" style="margin-top:15px">
+            <button class="btn" id="profReset">Restablecer mi perfil</button>
           </div>
         </div>
       </section>
@@ -1671,6 +1871,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
                     </div>
                   </div>
                 </div>
+                <div id="pubExtras"></div>
               </div>
             </div>
 
@@ -1803,6 +2004,27 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     </div>
   </div>
 
+  <!-- ===== notas de parche =====
+       Se abren solas antes de actualizar un pack que las publicó (con «Actualizar ahora» y
+       «Más tarde»), y a mano desde la píldora «Novedades» de la ficha. Todo el contenido lo
+       pinta `Dino.notes` con textContent: viene de un catálogo remoto. -->
+  <div class="overlay" id="notesOverlay" hidden>
+    <div class="overlay-card notes-card" role="dialog" aria-modal="true" aria-labelledby="notesHead">
+      <div class="notes-head">
+        <span class="app-icon" style="--s:44px" id="notesIcon"><canvas data-dino width="22" height="21"></canvas></span>
+        <div class="notes-head-body">
+          <div class="invite-eyebrow" id="notesEyebrow">Novedades</div>
+          <h2 id="notesHead">Notas de parche</h2>
+        </div>
+      </div>
+      <div class="notes-body" id="notesBody"></div>
+      <div class="notes-foot">
+        <button type="button" class="btn green" id="notesGo">Actualizar ahora</button>
+        <button type="button" class="link-min" id="notesLater">Más tarde</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ===== invitación =====
        La abre un link `dinolauncher://join/CODIGO`; el que se comparte es la página de
        invitación, que es la que abre el launcher. Todo lo de dentro sale del catálogo y
@@ -1903,7 +2125,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
           <b>No cierres esta ventana.</b> En cuanto detecte tu cuenta cierro el motor
           y sigo yo solo.
         </div>
-        <div class="hint" id="sp-msa-estado">esperando…</div>
+        <div class="hint msa-estado" aria-live="polite"><span class="spin" id="sp-msa-spin"></span><span id="sp-msa-estado">esperando…</span></div>
         <button type="button" class="link-min" id="sp-msa-cancelar">Cancelar y volver</button>
       </div>
 
@@ -1940,6 +2162,12 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   </div>
 </div>
 
+<script src="modules/perf.js"></script>
+<script src="modules/sfx.js"></script>
+<script src="modules/theme.js"></script>
+<script src="modules/head.js"></script>
+<script src="modules/notes.js"></script>
+<script src="modules/pubextras.js"></script>
 <script>
 (function(){
   "use strict";
@@ -2231,6 +2459,98 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   var estadoPrevio = null; /* "preparando" | "jugando" | null */
   var cancelando = false;  /* se pidió cancelar la preparación en curso */
 
+  /* ================= módulos (ui/modules/*.js): perfil, tema y notas =================
+     Cada pieza vive en su archivo y no sabe nada de las demás. Aquí solo se cablean: el
+     perfil del jugador decide cuáles están activas, el pack elegido les da qué mostrar, y
+     `Dino.perf` las para cuando hace falta (ventana sin foco, abrir el juego, partida). */
+  var Dino = window.Dino;
+  var PROFILE = null;      /* `profile_get`: lo que eligió el jugador activo */
+  var FABRICA = { head_tracking: true, ui_sounds: true, ui_volume: 0.6, pack_themes: true, discord_presence: true };
+
+  function prefs(){ return (PROFILE && PROFILE.prefs) || FABRICA; }
+
+  function aplicarPerfil(p){
+    PROFILE = p || null;
+    var pr = prefs();
+    Dino.head.setEnabled(pr.head_tracking);
+    Dino.sfx.configure({ enabled: pr.ui_sounds, volume: pr.ui_volume });
+    renderTema();
+    renderPerfil();
+  }
+
+  /* El tema del pack elegido si el jugador lo permite; si no, el base. Es idempotente: no
+     repinta si nada cambió. */
+  function renderTema(){
+    var t = (prefs().pack_themes && PACK && PACK.theme) ? PACK.theme : null;
+    Dino.theme.apply(t, PACK ? PACK.id : null);
+  }
+  Dino.pubextras.afterPreview = renderTema;
+
+  /* ---- notas de parche ----
+     Antes de actualizar un pack que las publicó se enseñan dentro del launcher, con
+     «Actualizar ahora» y «Más tarde». Una vez aceptadas, no vuelven a interponerse (la
+     píldora «Novedades» de la ficha las abre cuando se quiera). */
+  var NOTAS_KEY = "dino.notes.seen.";
+  function notasVistas(p){
+    try { return localStorage.getItem(NOTAS_KEY + p.id) === (p.notes_version || ""); } catch (e) { return false; }
+  }
+  function marcarNotas(p){
+    try { localStorage.setItem(NOTAS_KEY + p.id, p.notes_version || ""); } catch (e) {}
+  }
+  var notasResolver = null;
+  function abrirNotas(p, actualizar){
+    return new Promise(function(ok){
+      $("notesEyebrow").textContent = p.name + (p.notes_version ? " · v" + p.notes_version : "");
+      $("notesHead").textContent = actualizar ? "Antes de actualizar" : "Qué hay de nuevo";
+      setIcon($("notesIcon"), p.icon);
+      Dino.notes.render($("notesBody"), p.notes);
+      $("notesGo").hidden = !actualizar;
+      $("notesLater").textContent = actualizar ? "Más tarde" : "Cerrar";
+      notasResolver = ok;
+      $("notesOverlay").hidden = false;
+      (actualizar ? $("notesGo") : $("notesLater")).focus();
+    });
+  }
+  function cerrarNotas(actualiza){
+    var ov = $("notesOverlay");
+    if (ov.hidden) return;
+    ov.hidden = true;
+    $("notesBody").textContent = "";
+    var r = notasResolver; notasResolver = null;
+    if (r) r(!!actualiza);
+  }
+  $("notesGo").addEventListener("click", function(){ cerrarNotas(true); });
+  $("notesLater").addEventListener("click", function(){ cerrarNotas(false); });
+  $("notesOverlay").addEventListener("click", function(e){ if (e.target === $("notesOverlay")) cerrarNotas(false); });
+  window.addEventListener("keydown", function(e){
+    if (e.key === "Escape" && !$("notesOverlay").hidden) { e.stopPropagation(); cerrarNotas(false); }
+  }, true);
+  $("notesBtn").addEventListener("click", function(){ if (PACK && PACK.notes) abrirNotas(PACK, false); });
+
+  function renderNotas(){
+    var b = $("notesBtn");
+    if (!PACK || !PACK.notes) { b.hidden = true; return; }
+    var upd = PACK.action && PACK.action.kind === "update";
+    b.textContent = (upd ? "Qué hay de nuevo en" : "Novedades de") + (PACK.notes_version ? " v" + PACK.notes_version : "");
+    if (upd) b.setAttribute("data-update", ""); else b.removeAttribute("data-update");
+    b.hidden = false;
+  }
+
+  /* ---- la cabeza del rail ---- */
+  var cabezaMontada = false;
+  function cabeza3d(a, cv){
+    var host = $("head3d");
+    if (!host || !cv || !a || !a.name) return;
+    if (!cabezaMontada) {
+      cabezaMontada = true;
+      cv.dataset.cube = "1";
+      Dino.head.mount(host, cv);
+      Dino.head.setEnabled(prefs().head_tracking);
+    }
+    var pal = palette(a.name);
+    Dino.head.paint({ skin: null, flat: cv, hair: pal.hair, tone: pal.skin });
+  }
+
   /* «Instalada» sale de la acción del botón: `install` es lo único que dice que no.
      Ojo: una actualización que falló a medias también da `install`, y su carpeta puede
      seguir teniendo mundos; por eso nada de lo que se deduce de aquí borra archivos. */
@@ -2458,6 +2778,8 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     $("packMeta").innerHTML = meta.map(function(t, i){
       return (i ? "<i></i>" : "") + "<span>" + escapar(t) + "</span>";
     }).join("");
+    renderTema();
+    renderNotas();
   }
 
   /* El botón principal dice lo que va a pasar al pulsarlo. Lo decide el núcleo en
@@ -2483,7 +2805,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     if (nameEl) nameEl.textContent = a.name || "—";
     if (kindEl) kindEl.textContent = TIPOS[a.kind] || a.kind || "";
     var head = document.querySelector(".account canvas[data-head]");
-    if (head && a.name) { head.dataset.head = a.name; paintHead(head); paintSkin(head, a); }
+    if (head && a.name) { head.dataset.head = a.name; paintHead(head); paintSkin(head, a); cabeza3d(a, head); }
   }
 
   /* La cabeza de la skin de verdad, si ese nombre la tiene: la cara (8×8 en 8,8) y encima
@@ -2501,6 +2823,11 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       ctx.clearRect(0, 0, cv.width, cv.height);
       ctx.drawImage(img, 8, 8, 8, 8, 0, 0, cv.width, cv.height);
       ctx.drawImage(img, 40, 8, 8, 8, 0, 0, cv.width, cv.height);
+      /* La cabeza que mira al cursor usa las seis caras de la misma skin. */
+      if (cv.dataset.cube) {
+        var pal = palette(acc.name);
+        Dino.head.paint({ skin: img, flat: cv, hair: pal.hair, tone: pal.skin });
+      }
     };
     img.src = acc.skin;
   }
@@ -2547,6 +2874,8 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     var sel = $("javaSelect");
     if (!PACK || !instalado(PACK)) {
       SETTINGS = null;
+      $("setProfile").hidden = true;
+      $("windowSelect").disabled = true;
       ["kvPath", "kvLoader", "kvSize", "kvWorlds"].forEach(function(k){ $(k).textContent = "—"; });
       $("kvPath").title = "";
       $("setEyebrow").textContent = PACK ? PACK.name : "Instancia";
@@ -2566,6 +2895,23 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       var s = r[0], d = r[1];
       SETTINGS = s;
 
+      /* De quién es cada valor: lo que cambió este jugador, o lo que trae el pack. */
+      var propios = [];
+      if (s.memory_from === "profile") propios.push("memoria");
+      if (s.java_from === "profile") propios.push("Java");
+      if (s.jvm_args_from === "profile") propios.push("argumentos");
+      if (s.window_from === "profile") propios.push("ventana");
+      var pf = $("setProfile");
+      pf.hidden = !s.profile;
+      if (s.profile) {
+        $("setProfileName").textContent = s.profile;
+        $("setProfileWhat").textContent = propios.length ? "personalizado: " + propios.join(", ") : "todo viene del pack";
+        $("setReset").hidden = !propios.length;
+      }
+      var ws = $("windowSelect");
+      ws.disabled = false;
+      ws.value = valorVentana(s.window, ws);
+
       var gb = Math.max(1, Math.round(s.machine_ram_mb / 1024));
       var rec = Math.max(1, Math.round(s.recommended_max_mb / 1024));
       RAM_REC = rec;
@@ -2579,7 +2925,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       var scale = document.querySelector(".ram-scale");
       if (scale) scale.lastElementChild.textContent = gb + " GB en esta máquina";
       $("ramHint").textContent = elegida
-        ? "Elegiste " + usar + " GB para este pack. Aquí se recomiendan " + rec +
+        ? (s.memory_from === "profile" ? "Elegiste " : "El pack trae ") + usar + " GB para este pack. Aquí se recomiendan " + rec +
           ": déjalo en " + rec + " para volver a automático."
         : "De " + gb + " GB, le tocan " + rec + " al juego; el resto es para el sistema.";
       $("packChips").innerHTML = '<span class="chip">RAM <b>' + usar + " GB</b></span>";
@@ -2612,19 +2958,97 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     }).catch(function(e){ dlog("ajustes: " + detalleDe(e)); });
   }
 
-  /* Guarda conservando lo demás: el contrato pide los tres campos a la vez, y mandar
-     solo el que cambió borraría los otros dos. */
+  /* Guarda solo lo que cambió, en el perfil del jugador activo: el núcleo aplica el parche y
+     deja intacto lo demás (y lo del pack). */
   function guardarAjustes(cambio){
     if (!PACK || !SETTINGS) return Promise.resolve();
-    var datos = {
-      id: PACK.id,
-      memory: SETTINGS.memory,
-      jvm_args: SETTINGS.jvm_args || [],
-      java: SETTINGS.java
-    };
-    for (var k in cambio) datos[k] = cambio[k];
-    return call("instance_settings_set", datos).then(renderAjustes);
+    return call("instance_settings_set", { id: PACK.id, patch: cambio }).then(renderAjustes);
   }
+
+  /* La ventana del juego: «default» | «fullscreen» | «AxB». Un tamaño que no esté en la
+     lista (puesto a mano en otro sitio) se añade para no mentir. */
+  function valorVentana(w, sel){
+    if (!w || w.mode === "default") return "default";
+    if (w.mode === "fullscreen") return "fullscreen";
+    var v = w.width + "x" + w.height;
+    if (![].some.call(sel.options, function(o){ return o.value === v; })) {
+      var o = document.createElement("option");
+      o.value = v; o.textContent = w.width + " × " + w.height;
+      sel.appendChild(o);
+    }
+    return v;
+  }
+  function ventanaDe(v){
+    if (v === "fullscreen") return { mode: "fullscreen" };
+    var m = /^(\d+)x(\d+)$/.exec(v);
+    return m ? { mode: "size", width: +m[1], height: +m[2] } : { mode: "default" };
+  }
+  $("windowSelect").addEventListener("change", function(){
+    guardarAjustes({ window: ventanaDe(this.value) })
+      .catch(function(e){ showError("No pude cambiar la ventana.", e); });
+  });
+  $("setReset").addEventListener("click", function(){
+    if (!PACK) return;
+    call("instance_settings_reset", { id: PACK.id }).then(renderAjustes)
+      .catch(function(e){ showError("No pude volver a lo del pack.", e); });
+  });
+
+  /* ---- perfil del jugador: las preferencias del launcher ---- */
+  function setSw(b, on){ b.setAttribute("aria-checked", on ? "true" : "false"); }
+  function renderPerfil(){
+    var pn = $("profilePanel");
+    if (!pn) return;
+    var pr = prefs();
+    var sinCuenta = !(PROFILE && PROFILE.uuid);
+    if (sinCuenta) pn.setAttribute("data-locked", ""); else pn.removeAttribute("data-locked");
+    $("profName").textContent = (PROFILE && PROFILE.name) || "—";
+    $("profSub").textContent = sinCuenta
+      ? "Elige o crea una cuenta para guardar tu perfil."
+      : "Es solo tuyo: otro jugador de este equipo no lo hereda, y tú no pisas lo suyo.";
+    setSw($("profHead"), pr.head_tracking);
+    setSw($("profTheme"), pr.pack_themes);
+    setSw($("profSounds"), pr.ui_sounds);
+    setSw($("profDiscord"), pr.discord_presence);
+    var vol = $("profVol");
+    vol.value = String(Math.round(pr.ui_volume * 100));
+    vol.style.setProperty("--fill", vol.value + "%");
+    $("profWindow").value = valorVentana(PROFILE && PROFILE.window, $("profWindow"));
+  }
+  /* `mut` cambia la copia de lo que el jugador tiene elegido; `win` es la ventana por
+     omisión (undefined: no tocarla, null: quitarla). */
+  function guardarPerfil(mut, win){
+    if (!PROFILE || !PROFILE.uuid) return Promise.resolve();
+    var launcher = JSON.parse(JSON.stringify(PROFILE.raw || {}));
+    mut(launcher);
+    var w = (win === undefined) ? (PROFILE.window || null) : win;
+    return call("profile_set", { launcher: launcher, window: w }).then(aplicarPerfil)
+      .catch(function(e){ showError("No pude guardar tu perfil.", e); renderPerfil(); });
+  }
+  [["profHead", "head_tracking"], ["profTheme", "pack_themes"],
+   ["profSounds", "ui_sounds"], ["profDiscord", "discord_presence"]].forEach(function(par){
+    $(par[0]).addEventListener("click", function(){
+      var on = this.getAttribute("aria-checked") !== "true";
+      setSw(this, on);
+      guardarPerfil(function(l){ l[par[1]] = on; });
+    });
+  });
+  $("profVol").addEventListener("input", function(){
+    this.style.setProperty("--fill", this.value + "%");
+    Dino.sfx.configure({ volume: Number(this.value) / 100 });   /* se oye mientras se arrastra */
+  });
+  $("profVol").addEventListener("change", function(){
+    var v = Number(this.value) / 100;
+    guardarPerfil(function(l){ l.ui_volume = v; });
+  });
+  $("profWindow").addEventListener("change", function(){
+    var v = this.value;
+    guardarPerfil(function(){}, v === "default" ? null : ventanaDe(v));
+  });
+  $("profReset").addEventListener("click", function(){
+    if (!PROFILE || !PROFILE.uuid) return;
+    call("profile_reset").then(aplicarPerfil).then(renderAjustes)
+      .catch(function(e){ showError("No pude restablecer tu perfil.", e); });
+  });
 
   /* `change` y no `input`: se guarda al soltar el control, no en cada paso del arrastre. */
   $("ram").addEventListener("change", function(){
@@ -2658,10 +3082,14 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   var refrescando = null, otraVez = false;
   function refreshAll(){
     if (refrescando) { otraVez = true; return refrescando; }
-    refrescando = Promise.all([call("library_list"), call("accounts_list")]).then(function(r){
+    refrescando = Promise.all([
+      call("library_list"), call("accounts_list"),
+      call("profile_get").catch(function(){ return null; })
+    ]).then(function(r){
       LIB = r[0] || [];
       CUENTAS = r[1] || [];
       PACK = LIB.filter(function(x){ return x.selected; })[0] || null;
+      aplicarPerfil(r[2]);
       setSync(PACK ? "listo para jugar" : "sin modpack", !!PACK);
       renderPack(); renderBoton(); renderAccount(); renderBiblioteca();
 
@@ -2832,6 +3260,12 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   var sessionName   = $("sessionName");
 
   function mostrarEstado(cual){
+    /* Con una partida, lo no esencial se queda quieto; al volver a reposo, se reanuda. */
+    if (cual === "jugando") Dino.perf.setGame(true);
+    else {
+      Dino.perf.setGame(false);
+      if (cual !== "preparando") Dino.perf.setLaunching(false);
+    }
     if (playBtn)      playBtn.hidden      = (cual !== "reposo");
     if (bloqueLaunch) bloqueLaunch.hidden = (cual !== "preparando");
     if (bloqueSession)bloqueSession.hidden= (cual !== "jugando");
@@ -2896,6 +3330,9 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     }
     var texto = FASES[faseVista] || "Preparando";
     if (cuentas[faseVista]) texto += " · " + cuentas[faseVista];
+
+    if (p.phase === "launching") Dino.perf.setLaunching(true);
+    if (p.phase === "done" && p.finished) Dino.sfx.play("done");
 
     var total = p.task_bytes_total || 0, hecho = p.task_bytes_done || 0;
     var frac = total > 0 ? Math.min(1, hecho / total) : -1;
@@ -3038,7 +3475,21 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   }
 
   if (playBtn) {
-    playBtn.addEventListener("click", function(){ runPlay().catch(function(){}); });
+    playBtn.addEventListener("click", function(){
+      Dino.sfx.play("play");
+      /* Una actualización con notas: primero se leen, dentro del launcher. Una vez aceptadas
+         no se interponen más (la píldora de la ficha las abre cuando se quiera). */
+      var p = PACK;
+      if (p && p.action && p.action.kind === "update" && p.notes && !notasVistas(p)) {
+        abrirNotas(p, true).then(function(ok){
+          if (!ok) return;
+          marcarNotas(p);
+          runPlay().catch(function(){});
+        });
+        return;
+      }
+      runPlay().catch(function(){});
+    });
   }
 
   /* ================= botones de Ajustes ================= */
@@ -3090,7 +3541,12 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     spAtras.hidden = (paso === "1" || paso === "3" || paso === "cuentas");
     spJugar.hidden = (paso !== "3");
   }
-  function spParar(){ esperandoMSA = false; }
+  /* Dejar de esperar el login (cerrar, volver, reintentar) también cierra el motor que se
+     abrió para él: si no, se quedaría vivo sin que nadie lo viera. */
+  function spParar(){
+    if (esperandoMSA) call("account_microsoft_cancel").catch(function(){});
+    esperandoMSA = false;
+  }
   function spCerrar(){ spParar(); setup.hidden = true; }
   function spAbrir(){ spParar(); setup.hidden = false; spIr("1", 1); }
 
@@ -3169,25 +3625,39 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   var msaEstado = $("sp-msa-estado");
   var msaTexto  = $("sp-msa-texto");
 
+  /* Cada pulsación es un intento; la respuesta de uno viejo no pisa al nuevo. */
+  var msaIntento = 0;
+  /* El texto cambia con un fundido corto: sin saltos entre «abriendo» y las instrucciones. */
+  function msaDecir(html){
+    msaTexto.setAttribute("data-swap", "");
+    setTimeout(function(){ msaTexto.innerHTML = html; msaTexto.removeAttribute("data-swap"); }, 180);
+  }
   $("sp-msa").addEventListener("click", function(){
+    var intento = ++msaIntento;
     spIr("2-msa", 2);
-    msaEstado.textContent = "preparando el motor…";
-    msaTexto.textContent = "Un momento: la primera vez se descarga el motor que hace de puente con Microsoft.";
+    spAtras.hidden = true;
+    $("sp-msa-spin").hidden = false;
+    msaEstado.textContent = "preparando…";
+    msaTexto.removeAttribute("data-swap");
+    msaTexto.textContent = "Abriendo la ventana de Microsoft…";
+    /* Reintentar con un intento aún abierto: el núcleo cierra el motor del anterior. */
     esperandoMSA = true;
     call("account_microsoft_add").then(function(r){
-      if (!esperandoMSA) return;
+      if (!esperandoMSA || intento !== msaIntento) return;
       /* En Windows el núcleo enseña solo la ventana de Microsoft del motor; si no pudo
          (u otra plataforma), el motor entero, y hay que ir a Cuentas a mano. */
       if (r && r.only_microsoft_window) {
-        msaTexto.innerHTML = 'Se abrió la ventana de Microsoft. Pulsa <span class="mono-i">Sign in with Microsoft</span> ' +
-                             'o escribe el código en microsoft.com/link: en cuanto entres, la cierro yo.';
+        msaDecir('Se abrió la ventana de Microsoft. Pulsa <span class="mono-i">Sign in with Microsoft</span> ' +
+                 'o escribe el código en microsoft.com/link: en cuanto entres, la cierro yo.');
       } else {
-        msaTexto.innerHTML = 'Se abrió la ventana del motor. Ve a <span class="mono-i">Cuentas</span> ' +
-                             'y añade tu cuenta de Microsoft: en cuanto la detecte, la cierro yo.';
+        msaDecir('Se abrió la ventana del motor. Ve a <span class="mono-i">Cuentas</span> ' +
+                 'y añade tu cuenta de Microsoft: en cuanto la detecte, la cierro yo.');
       }
       msaEstado.textContent = "esperando a que inicies sesión…";
     }).catch(function(e){
+      if (intento !== msaIntento) return;
       esperandoMSA = false;
+      $("sp-msa-spin").hidden = true;
       msaEstado.textContent = "no se pudo abrir el motor: " + mensajeError(e);
       spAtras.hidden = false;
     });
@@ -3201,6 +3671,8 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
       CUENTAS = accs || [];
       renderAccount();
       if (!setup.hidden && spPasoActual === "cuentas") renderCuentas();
+      /* Otro jugador activo = otro perfil: sus ajustes, su tema y sus preferencias. */
+      return call("profile_get").then(aplicarPerfil).then(renderAjustes);
     }).catch(function(){});
   }
 
@@ -3213,6 +3685,7 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
     if (ev.account) {
       spListo();
     } else {
+      $("sp-msa-spin").hidden = true;
       msaEstado.textContent = "se cerró la ventana sin iniciar sesión. Puedes reintentarlo.";
       spAtras.hidden = false;
     }
@@ -3321,6 +3794,8 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   var pubPath  = null;   /* ruta del archivo elegido */
   var pubModo  = "nuevo";
   var pubFijado = null;  /* al actualizar: el pack que ya estaba publicado */
+  /* Discord, notas de parche y tema: formulario propio (ui/modules/pubextras.js). */
+  Dino.pubextras.mount($("pubExtras"));
 
   function pubVista(cual){
     $("pubHome").hidden   = (cual !== "home");
@@ -3381,6 +3856,8 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   function pubEditor(modo, pack){
     pubModo = modo; pubFijado = pack || null;
     pubDraft = null; pubPath = null;
+    /* Al actualizar, lo ya publicado (Discord, notas, tema) llega rellenado. */
+    Dino.pubextras.write(pack || {});
     $("pubEditorTitle").textContent = (modo === "actualizar")
       ? "Actualizar " + pack.name : "Publicar un modpack";
     $("pubEditorSub").textContent = (modo === "actualizar")
@@ -3484,7 +3961,8 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
         mods: pubDraft.mods,
         bytes: pubDraft.bytes,
         sha512: pubDraft.sha512,
-        icon_b64: pubDraft.icon_b64 || null
+        icon_b64: pubDraft.icon_b64 || null,
+        extras: Dino.pubextras.read()
       };
       $("pubBusyCode").textContent = d.code;
       pubEstado("publicando");
@@ -3925,15 +4403,27 @@ input[type=range]:focus-visible{outline:2px solid var(--green);outline-offset:4p
   /* ================= specular highlight follows the cursor ================= */
   if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches){
     var hero = document.querySelector(".hero");
-    var BASE = "linear-gradient(118deg, rgba(115,191,105,.13), rgba(11,70,35,.10) 54%, transparent 80%)";
-    hero.addEventListener("pointermove", function(e){
+    var BASE = "linear-gradient(118deg, rgba(var(--green-rgb),.13), rgba(var(--deep-rgb),.10) 54%, transparent 80%)";
+    var heroMove = function(e){
       var r = hero.getBoundingClientRect();
       var x = ((e.clientX - r.left) / r.width * 100).toFixed(1);
       var y = ((e.clientY - r.top) / r.height * 100).toFixed(1);
       hero.style.backgroundImage =
         "radial-gradient(36% 58% at " + x + "% " + y + "%, rgba(255,255,255,.09), transparent 70%)," + BASE;
+    };
+    var heroLeave = function(){ hero.style.backgroundImage = BASE; };
+    /* El brillo solo existe mientras la interfaz está a pleno rendimiento. */
+    Dino.perf.register("hero-specular", {
+      resume: function(){
+        hero.addEventListener("pointermove", heroMove, { passive: true });
+        hero.addEventListener("pointerleave", heroLeave);
+      },
+      pause: function(){
+        hero.removeEventListener("pointermove", heroMove);
+        hero.removeEventListener("pointerleave", heroLeave);
+        hero.style.backgroundImage = "";
+      }
     });
-    hero.addEventListener("pointerleave", function(){ hero.style.backgroundImage = BASE; });
   }
 })();
 </script>

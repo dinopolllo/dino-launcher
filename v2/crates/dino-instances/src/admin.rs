@@ -59,6 +59,10 @@ pub struct Borrador {
     /// Icono del pack en base64, si el `.mrpack` lo traía.
     #[serde(default)]
     pub icon_b64: Option<String>,
+    /// Discord, notas de parche y tema. Los archivos que el editor eligió en el equipo
+    /// llegan como `data:` y se suben al publicar ([`subir_medios`]).
+    #[serde(default)]
+    pub extras: dino_core::pack_meta::PackExtras,
 }
 
 /// Convierte un nombre en algo que valga como identificador y como nombre de archivo.
@@ -175,6 +179,7 @@ pub fn leer_mrpack(ruta: &std::path::Path) -> Result<Borrador, AdminError> {
         bytes: datos.len() as u64,
         sha512: hex512(&datos),
         icon_b64,
+        extras: Default::default(),
     })
 }
 
@@ -568,6 +573,67 @@ pub fn url_fijada(commit: &str, ruta: &str) -> String {
     format!("https://raw.githubusercontent.com/{RELEASES_REPO}/{commit}/{ruta}")
 }
 
+/// Lo que se acepta subir como imagen o sonido del pack, y su tope.
+const MAX_IMAGEN: usize = 2_000_000;
+const MAX_SONIDO: usize = 400_000;
+
+/// `data:<mime>;base64,<datos>` → (extensión, base64, bytes decodificados). Solo los tipos
+/// que la interfaz sabe pintar o reproducir, y con tope de tamaño: esto acaba en un repo.
+fn partes_de_data(
+    uri: &str,
+    tipo: dino_core::pack_meta::MediaKind,
+) -> Result<(&'static str, String, usize), AdminError> {
+    use base64::Engine;
+    use dino_core::pack_meta::MediaKind::{Audio, Image};
+    let malo = |m: &str| AdminError::Campo(m.to_string());
+    let resto = uri.strip_prefix("data:").ok_or_else(|| malo("El archivo no llegó bien."))?;
+    let (mime, datos) = resto.split_once(";base64,").ok_or_else(|| malo("El archivo no llegó bien."))?;
+    let ext = match (tipo, mime) {
+        (Image, "image/png") => "png",
+        (Image, "image/jpeg") => "jpg",
+        (Image, "image/webp") => "webp",
+        (Image, "image/gif") => "gif",
+        (Audio, "audio/ogg") => "ogg",
+        (Audio, "audio/mpeg") => "mp3",
+        (Audio, "audio/wav" | "audio/x-wav") => "wav",
+        (Image, _) => return Err(malo("Las imágenes tienen que ser PNG, JPG, WebP o GIF.")),
+        (Audio, _) => return Err(malo("Los sonidos tienen que ser OGG, MP3 o WAV.")),
+    };
+    let limpio: String = datos.chars().filter(|c| !c.is_whitespace()).collect();
+    let bytes =
+        base64::engine::general_purpose::STANDARD.decode(&limpio).map_err(|_| malo("El archivo no llegó bien."))?;
+    let tope = if tipo == Image { MAX_IMAGEN } else { MAX_SONIDO };
+    if bytes.is_empty() || bytes.len() > tope {
+        return Err(AdminError::Campo(format!(
+            "El archivo pesa {} KB y el máximo es {} KB.",
+            bytes.len() / 1000,
+            tope / 1000
+        )));
+    }
+    Ok((ext, limpio, bytes.len()))
+}
+
+/// Sube al repo cada archivo que el editor mandó como `data:` y lo cambia por su enlace
+/// fijado. El nombre lleva el hash del contenido: el mismo archivo da siempre la misma
+/// ruta, y uno distinto no pisa al de otra versión que algún jugador aún lee.
+pub fn subir_medios(
+    extras: &mut dino_core::pack_meta::PackExtras,
+    id: &str,
+    subir_uno: &mut dyn FnMut(&str, &str, &str) -> Result<String, AdminError>,
+) -> Result<(), AdminError> {
+    for (tipo, campo) in extras.media_slots_mut() {
+        if !dino_core::pack_meta::is_data_uri(campo) {
+            continue;
+        }
+        let (ext, b64, _) = partes_de_data(campo, tipo)?;
+        let hash = sha256_hex(&b64);
+        let ruta = format!("packs/{id}-{}.{ext}", &hash[..10]);
+        let url = subir_uno(&ruta, &b64, &format!("Medios de {id}"))?;
+        *campo = url;
+    }
+    Ok(())
+}
+
 /// Publica el pack: sube el archivo y actualiza el catálogo.
 pub fn publicar(b: &Borrador, mrpack: &std::path::Path) -> Result<PackRemoto, AdminError> {
     use base64::Engine;
@@ -604,6 +670,15 @@ pub fn publicar(b: &Borrador, mrpack: &std::path::Path) -> Result<PackRemoto, Ad
         None => None,
     };
 
+    // Archivos elegidos en el equipo → enlaces; y solo entonces el saneado, que descarta
+    // lo que no sea https. Lo que quede desactivado no se publica.
+    let mut extras = b.extras.clone();
+    subir_medios(&mut extras, &id, &mut |ruta, b64, msg| {
+        let commit = subir(ruta, b64, msg)?;
+        Ok(url_fijada(&commit, ruta))
+    })?;
+    let extras = extras.sanitized();
+
     let entrada = PackRemoto {
         code: codigo,
         id,
@@ -617,6 +692,7 @@ pub fn publicar(b: &Borrador, mrpack: &std::path::Path) -> Result<PackRemoto, Ad
         loader: (!b.loader.is_empty()).then(|| b.loader.clone()),
         mods: b.mods,
         icon: icono,
+        extras,
     };
 
     // Releído justo antes de escribir: subir un pack grande tarda, y fusionar sobre el
@@ -660,6 +736,7 @@ mod tests {
             loader: None,
             mods: 0,
             icon: None,
+            extras: Default::default(),
         }
     }
 
@@ -905,5 +982,87 @@ mod tests {
         assert!(b.mods > 0);
         assert_eq!(b.sha512.len(), 128);
         assert_eq!(b.id, slug(&b.name));
+    }
+
+    #[test]
+    fn los_archivos_del_editor_se_suben_y_se_cambian_por_su_enlace() {
+        use dino_core::pack_meta::*;
+        let png = "data:image/png;base64,iVBORw0KGgo=";
+        let ogg = "data:audio/ogg;base64,T2dnUw==";
+        let mut x = PackExtras {
+            presence: Some(Presence { enabled: true, image: Some(png.into()), ..Default::default() }),
+            notes: Some(PatchNotes {
+                images: vec![
+                    NoteImage { url: png.into(), caption: None },
+                    NoteImage { url: "https://x.io/ya-estaba.png".into(), caption: None },
+                ],
+                ..Default::default()
+            }),
+            theme: Some(Theme {
+                enabled: true,
+                sounds: ThemeSounds { click: Some(ogg.into()), hover: Some("blip".into()), ..Default::default() },
+                ..Default::default()
+            }),
+        };
+        let mut subidos = Vec::new();
+        subir_medios(&mut x, "voidsafio", &mut |ruta, _b64, _m| {
+            subidos.push(ruta.to_string());
+            Ok(url_fijada("abc1234", ruta))
+        })
+        .unwrap();
+        assert_eq!(subidos.len(), 3, "dos imágenes y un sonido; lo que ya era enlace o preset no se sube");
+        assert!(subidos.iter().all(|r| r.starts_with("packs/voidsafio-")));
+        assert_eq!(subidos[0], subidos[1], "el mismo contenido va a la misma ruta");
+        let limpio = x.sanitized();
+        assert!(limpio.presence.unwrap().image.unwrap().starts_with("https://raw.githubusercontent.com/"));
+        assert_eq!(limpio.notes.unwrap().images.len(), 2);
+        let t = limpio.theme.unwrap();
+        assert!(t.sounds.click.unwrap().ends_with(".ogg"));
+        assert_eq!(t.sounds.hover.as_deref(), Some("blip"));
+    }
+
+    #[test]
+    fn un_sonido_no_puede_ser_una_imagen_ni_pasar_del_tope() {
+        use dino_core::pack_meta::*;
+        let mut mal = PackExtras {
+            theme: Some(Theme {
+                enabled: true,
+                sounds: ThemeSounds { click: Some("data:image/png;base64,AAAA".into()), ..Default::default() },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(subir_medios(&mut mal, "x", &mut |_, _, _| unreachable!()).is_err());
+
+        use base64::Engine;
+        let grande = base64::engine::general_purpose::STANDARD.encode(vec![0u8; MAX_SONIDO + 1]);
+        let mut pesado = PackExtras {
+            theme: Some(Theme {
+                enabled: true,
+                sounds: ThemeSounds { done: Some(format!("data:audio/ogg;base64,{grande}")), ..Default::default() },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let e = subir_medios(&mut pesado, "x", &mut |_, _, _| unreachable!()).unwrap_err();
+        assert!(e.to_string().contains("máximo"));
+    }
+
+    #[test]
+    fn las_extras_viajan_en_el_catalogo_y_un_pack_sin_ellas_no_las_inventa() {
+        use dino_core::pack_meta::*;
+        let mut con = pack("VOIDSAFIO", "3.16.0");
+        con.extras.presence =
+            Some(Presence { enabled: true, details: Some("Jugando {pack}".into()), ..Default::default() });
+        let json = merge_catalogo("", &con).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["packs"][0]["presence"]["details"], "Jugando {pack}");
+        let sin = pack("OTRO", "1.0.0");
+        let v2: serde_json::Value = serde_json::from_str(&merge_catalogo(&json, &sin).unwrap()).unwrap();
+        assert!(v2["packs"][1].get("presence").is_none() && v2["packs"][1].get("theme").is_none());
+        // y se vuelve a leer igual
+        let cat = crate::catalog::parse_catalog(&merge_catalogo(&json, &sin).unwrap()).unwrap();
+        assert!(cat.packs[0].extras.presence.as_ref().unwrap().enabled);
+        assert!(cat.packs[1].extras.is_empty());
     }
 }

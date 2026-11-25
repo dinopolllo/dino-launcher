@@ -11,12 +11,14 @@ pub mod status;
 use dino_auth::{Accounts, Engine};
 use dino_config::{LibraryExt, Store};
 use dino_core::api::{
-    icon_url, AccountView, InstanceDetails, InstanceSettings, InstanceView, JavaOption, JavaOrigin, MicrosoftLoginView,
-    PackPreview, PlayOutcome, PlayRequest, PrimaryAction, ServerStatus,
+    icon_url, AccountView, InstanceDetails, InstanceSettings, InstanceSettingsPatch, InstanceView, JavaOption,
+    JavaOrigin, MicrosoftLoginView, PackPreview, PlayOutcome, PlayRequest, PrimaryAction, ProfileView, ServerStatus,
 };
 use dino_core::events::{Event, Phase, Progress, Session, SessionState};
+use dino_core::pack_meta::PresenceVars;
+use dino_core::profile::{self, LauncherPrefs, Profile, WindowPref};
 use dino_core::schema::{
-    self, AccountKind, InstallState, InstanceManifest, JavaChoice, LibraryEntry, LoaderSpec, Memory, PackSource, Paths,
+    self, AccountKind, InstallState, InstanceManifest, LibraryEntry, LoaderSpec, PackSource, Paths,
 };
 use dino_core::{os, DinoError, ErrorCode};
 use dino_download::Downloader;
@@ -48,7 +50,30 @@ pub struct Core {
     busy: Mutex<Option<(String, Option<String>)>>,
     /// La comparte el descargador: «Cancelar» corta entre archivos y en cada trozo.
     cancel: Arc<AtomicBool>,
+    /// El login de Microsoft en curso, si lo hay. Uno solo: reintentar o cancelar cierra el
+    /// motor del intento anterior, que si no se quedaría colgado sin que nadie lo vea.
+    login: Mutex<Option<Arc<LoginSlot>>>,
 }
+
+/// Un intento de login de Microsoft: quien lo lanza lo puede cancelar y esperar a que acabe.
+#[derive(Default)]
+struct LoginSlot {
+    cancel: AtomicBool,
+    done: AtomicBool,
+}
+
+/// Marca el intento como terminado pase lo que pase (también si el hilo entra en pánico).
+struct LoginDone(Arc<LoginSlot>);
+impl Drop for LoginDone {
+    fn drop(&mut self) {
+        self.0.done.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Un intento de login que nadie completa no puede tener el motor abierto para siempre.
+const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// Página de invitación de un pack: su código se pega detrás (la misma que usa la interfaz).
+const INVITE_BASE: &str = "https://dinopolllo.github.io/dino-launcher-releases/invitar/#";
 
 /// Suelta el cerrojo de tarea al salir, pase lo que pase, y anuncia `idle`. Toda tarea
 /// larga (instalar, verificar, importar, añadir, jugar) dice `preparing` al empezar e `idle`
@@ -87,6 +112,7 @@ impl Core {
             emit,
             busy: Mutex::new(None),
             cancel: Arc::new(AtomicBool::new(false)),
+            login: Mutex::new(None),
         })
     }
 
@@ -154,6 +180,9 @@ impl Core {
                     (PackSource::Catalog { code }, Some(cat)) => catalog::buscar(cat, code).cloned(),
                     _ => None,
                 };
+                if let Some(r) = &remote {
+                    self.remember_extras(&entry.id, r);
+                }
                 self.view(entry, remote.as_ref(), playing.as_deref(), selected.as_deref())
             })
             .collect())
@@ -187,6 +216,15 @@ impl Core {
         } else {
             PrimaryAction::Play
         };
+        // Lo opcional del pack: del catálogo si se pudo leer, y si no, la copia de la última vez.
+        let (extras, extras_version) = match remote {
+            Some(r) => (r.extras.sanitized(), Some(r.version.clone())),
+            None => {
+                let (x, v) = self.store.pack_extras(&entry.id);
+                (x.sanitized(), v)
+            }
+        };
+        let notes_version = extras.notes.as_ref().and(extras_version.or_else(|| Some(entry.pack_version.clone())));
         InstanceView {
             id: entry.id.clone(),
             name: entry.name.clone(),
@@ -206,7 +244,15 @@ impl Core {
             disk_bytes: (installed || on_disk).then(|| dir_size(&self.paths.instance_dir(&entry.id))),
             selected: selected == Some(entry.id.as_str()),
             action,
+            theme: extras.theme,
+            notes: extras.notes,
+            notes_version,
         }
+    }
+
+    /// Guarda lo opcional que acaba de publicar el catálogo para tenerlo sin red.
+    fn remember_extras(&self, id: &str, r: &catalog::PackRemoto) {
+        self.store.save_pack_extras(id, &r.extras, &r.version);
     }
 
     pub fn library_select(&self, id: &str) -> R<()> {
@@ -234,6 +280,16 @@ impl Core {
             }
             let _ = std::fs::remove_file(self.paths.pack_file(id));
             let _ = std::fs::remove_file(self.paths.pack_icon(id));
+            let _ = std::fs::remove_file(self.paths.pack_extras(id));
+            // Lo que cada jugador eligió para una instancia que ya no existe no sirve de nada.
+            let _ = self.store.update_profiles(|f| {
+                let uuids: Vec<String> = f.profiles.keys().cloned().collect();
+                for u in uuids {
+                    f.update(&u, |p| {
+                        p.instances.remove(id);
+                    });
+                }
+            });
         }
         (self.emit)(Event::LibraryChanged);
         Ok(())
@@ -276,13 +332,33 @@ impl Core {
         Ok(m)
     }
 
+    /// La cuenta activa: su UUID y su nombre.
+    fn active_account(&self) -> Option<(String, String)> {
+        self.accounts.list(&self.engine.accounts()).ok()?.into_iter().find(|a| a.active).map(|a| (a.uuid, a.name))
+    }
+
+    /// El perfil de una cuenta (vacío si nunca lo tocó o si el archivo no se pudo leer: un
+    /// perfil ilegible no debe impedir jugar).
+    fn profile_of(&self, uuid: &str) -> Profile {
+        self.store.profiles().map(|f| f.of(uuid)).unwrap_or_default()
+    }
+
     pub fn instance_settings_get(&self, id: &str) -> R<InstanceSettings> {
         let m = self.manifest_any(id)?;
+        let active = self.active_account();
+        let profile = active.as_ref().map(|(u, _)| self.profile_of(u));
+        let r = profile::resolve(profile.as_ref(), id, &m);
         let ram = os::total_memory_mb().unwrap_or(8192);
         Ok(InstanceSettings {
-            memory: m.memory,
-            jvm_args: m.jvm_args.clone(),
-            java: m.java.clone(),
+            memory: r.effective.memory,
+            jvm_args: r.effective.jvm_args.clone(),
+            java: r.effective.java.clone(),
+            window: r.effective.window,
+            memory_from: r.memory_from,
+            jvm_args_from: r.jvm_args_from,
+            java_from: r.java_from,
+            window_from: r.window_from,
+            profile: active.map(|(_, n)| n),
             available_java: self.java_options(),
             machine_ram_mb: ram,
             recommended_max_mb: os::recommended_memory(ram).1,
@@ -306,12 +382,102 @@ impl Core {
         out
     }
 
-    pub fn instance_settings_set(&self, id: &str, memory: Memory, jvm_args: Vec<String>, java: JavaChoice) -> R<()> {
+    /// Guarda lo que el jugador activo elige para esta instancia, **en su perfil**: otro
+    /// jugador que abra el mismo pack no lo hereda, ni se pisa lo que trae el pack. Solo se
+    /// toca lo que el parche trae. Sin ninguna cuenta no hay perfil donde guardarlo y se
+    /// escribe en la propia instancia, como en 1.x.
+    pub fn instance_settings_set(&self, id: &str, patch: InstanceSettingsPatch) -> R<()> {
         let mut m = self.manifest_any(id)?;
-        m.memory = memory;
-        m.jvm_args = jvm_args;
-        m.java = java;
-        schema::save(&self.paths.instance_manifest(id), &m, schema::INSTANCE_SCHEMA).map_err(internal)
+        let Some((uuid, _)) = self.active_account() else {
+            if let Some(x) = patch.memory {
+                m.memory = x;
+            }
+            if let Some(x) = patch.jvm_args {
+                m.jvm_args = x;
+            }
+            if let Some(x) = patch.java {
+                m.java = x;
+            }
+            return schema::save(&self.paths.instance_manifest(id), &m, schema::INSTANCE_SCHEMA).map_err(internal);
+        };
+        self.store
+            .update_profiles(|f| {
+                f.update(&uuid, |p| {
+                    let o = p.instances.entry(id.to_string()).or_default();
+                    if let Some(x) = patch.memory {
+                        o.memory = Some(x);
+                    }
+                    if let Some(x) = patch.jvm_args {
+                        o.jvm_args = Some(x);
+                    }
+                    if let Some(x) = patch.java {
+                        o.java = Some(x);
+                    }
+                    if let Some(x) = patch.window {
+                        o.window = Some(x.sanitized());
+                    }
+                    if o.is_default() {
+                        p.instances.remove(id);
+                    }
+                })
+            })
+            .map_err(internal)
+    }
+
+    /// Vuelve a los valores del pack para esta instancia (borra lo que el jugador activo
+    /// había elegido para ella).
+    pub fn instance_settings_reset(&self, id: &str) -> R<()> {
+        self.manifest_any(id)?;
+        let Some((uuid, _)) = self.active_account() else { return Ok(()) };
+        self.store
+            .update_profiles(|f| {
+                f.update(&uuid, |p| {
+                    p.instances.remove(id);
+                })
+            })
+            .map_err(internal)
+    }
+
+    // ------------------------------------------------------------ perfil del jugador
+
+    fn profile_view(&self, active: Option<(String, String)>) -> ProfileView {
+        let p = active.as_ref().map(|(u, _)| self.profile_of(u)).unwrap_or_default();
+        ProfileView {
+            uuid: active.as_ref().map(|(u, _)| u.clone()),
+            name: active.map(|(_, n)| n),
+            prefs: p.launcher.resolved(),
+            raw: p.launcher,
+            window: p.window,
+        }
+    }
+
+    /// Las preferencias del jugador activo. Sin cuenta, las de fábrica.
+    pub fn profile_get(&self) -> ProfileView {
+        self.profile_view(self.active_account())
+    }
+
+    /// Reemplaza las preferencias del launcher y la ventana por omisión del jugador activo.
+    /// Un campo en `null` vuelve a la de fábrica.
+    pub fn profile_set(&self, launcher: LauncherPrefs, window: Option<WindowPref>) -> R<ProfileView> {
+        let active = self.active_account().ok_or_else(|| e(ErrorCode::AccountRequired, "no hay ninguna cuenta"))?;
+        let uuid = active.0.clone();
+        self.store
+            .update_profiles(|f| {
+                f.update(&uuid, |p| {
+                    p.launcher = launcher;
+                    p.window = window.map(WindowPref::sanitized);
+                })
+            })
+            .map_err(internal)?;
+        Ok(self.profile_view(Some(active)))
+    }
+
+    /// Borra todo lo que el jugador activo había elegido: queda como un jugador nuevo.
+    pub fn profile_reset(&self) -> R<ProfileView> {
+        let active = self.active_account().ok_or_else(|| e(ErrorCode::AccountRequired, "no hay ninguna cuenta"))?;
+        let uuid = active.0.clone();
+        self.store.update_profiles(|f| f.update(&uuid, |p| *p = Profile::default())).map_err(internal)?;
+        Ok(self.profile_view(Some(active)))
     }
 
     // ------------------------------------------------------------ catálogo e importar
@@ -330,6 +496,7 @@ impl Core {
         let lib = self.store.library().map_err(internal)?;
         let id = lib.free_id(&slug(&r.id), Some(&code));
         self.download_pack(&r, &id).await?;
+        self.remember_extras(&id, &r);
         let entry = LibraryEntry {
             id: id.clone(),
             name: r.name.clone(),
@@ -554,6 +721,7 @@ impl Core {
             match catalog::resolver(code).await {
                 Ok(r) => {
                     server = r.server.clone();
+                    self.remember_extras(id, &r);
                     if r.version != entry.pack_version || !self.paths.pack_file(id).exists() {
                         match self.download_pack(&r, id).await {
                             Ok(()) => need_install = true,
@@ -596,7 +764,13 @@ impl Core {
         }
         self.check_cancel()?;
         (self.emit)(Event::Progress(phase_only(id, Phase::Launching)));
-        let opts = dino_session::LaunchOptions { server, max_mem_mb: None, account: Some(active.uuid.clone()) };
+        let profile = self.profile_of(&active.uuid);
+        let opts = dino_session::LaunchOptions {
+            server,
+            max_mem_mb: None,
+            account: Some(active.uuid.clone()),
+            profile: Some(profile),
+        };
         let s = dino_session::launch(&self.paths, &self.accounts, &self.engine.accounts(), id, &opts)?;
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let _ = self.store.update_library(|l| {
@@ -610,12 +784,21 @@ impl Core {
     fn watch(&self, s: dino_session::Session) {
         let id = s.record.instance.clone();
         let emit = self.emit.clone();
+        // La presencia de Discord vive lo que dura la partida: se pone al abrirse la ventana
+        // y se quita al terminar, también si el juego se cierra mal.
+        let presence: Mutex<Option<dino_presence::Handle>> = Mutex::new(None);
         // `preparing` ya lo anunció `play` al empezar; aquí solo lo que viene después.
         let out = dino_session::wait(&self.paths, s, &|st| {
+            if st == SessionState::Playing {
+                *presence.lock().unwrap_or_else(|p| p.into_inner()) = self.presence_for(&id);
+            }
             if st != SessionState::Preparing {
                 emit(Event::Session(Session { state: st, instance: Some(id.clone()) }))
             }
         });
+        if let Some(h) = presence.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            h.stop();
+        }
         tracing::info!(?out, "partida terminada");
         (self.emit)(Event::LibraryChanged);
         // Tras un cierre limpio no queda nada que enseñar: lo que siga vivo del Java de Dino
@@ -625,6 +808,44 @@ impl Core {
             std::thread::sleep(Duration::from_secs(3));
             self.sweep_strays();
         }
+    }
+
+    /// La actividad de Discord de esta instancia, ya puesta, o `None` si no toca: el pack no
+    /// la activó, el jugador la apagó, o no hay aplicación de Discord con la que hablar.
+    /// Nunca se inventa una actividad por defecto: lo que el pack no dice, no se manda.
+    fn presence_for(&self, id: &str) -> Option<dino_presence::Handle> {
+        let (extras, _) = self.store.pack_extras(id);
+        let presence = extras.sanitized().presence?;
+        let (uuid, player) = self.active_account()?;
+        if !self.profile_of(&uuid).launcher.resolved().discord_presence {
+            tracing::info!("Discord: el jugador la tiene apagada");
+            return None;
+        }
+        let client_id = presence
+            .client_id
+            .clone()
+            .or_else(|| self.store.config().ok().and_then(|c| c.discord_client_id))
+            .or_else(|| option_env!("DINO_DISCORD_CLIENT_ID").map(String::from))
+            .filter(|c| dino_core::pack_meta::is_snowflake(c));
+        let Some(client_id) = client_id else {
+            tracing::info!("Discord: no hay aplicación de Discord configurada, no se manda presencia");
+            return None;
+        };
+        let lib = self.store.library().ok()?;
+        let entry = lib.find(id)?;
+        let minecraft = self.manifest_any(id).map(|m| m.minecraft).unwrap_or_default();
+        let code = match &entry.source {
+            PackSource::Catalog { code } => Some(code.as_str()),
+            PackSource::File => None,
+        };
+        let vars = PresenceVars {
+            pack: &entry.name,
+            server: entry.server.as_deref(),
+            version: &entry.pack_version,
+            minecraft: &minecraft,
+            player: &player,
+        };
+        Some(dino_presence::start(client_id, presence.render(&vars, code, INVITE_BASE)))
     }
 
     /// Cierra los procesos del Java de Dino que siguen vivos sin ventana y sin partida.
@@ -697,13 +918,33 @@ impl Core {
     }
 
     /// Abre el motor para iniciar sesión con Microsoft; al cerrarlo se sincronizan las cuentas.
+    ///
+    /// Un solo intento a la vez: si había otro abierto (el jugador reintenta), se cierra y se
+    /// espera a que acabe antes de abrir el nuevo; dos motores con la misma carpeta de datos
+    /// se estorban, y el viejo se quedaría colgado sin ventana que lo cierre.
     pub async fn account_microsoft_add(self: &Arc<Self>) -> R<MicrosoftLoginView> {
         self.engine.ensure(&self.downloader()).await.map_err(|x| e(ErrorCode::DownloadFailed, x))?;
+        let slot = Arc::new(LoginSlot::default());
+        let previous = self.login.lock().unwrap_or_else(|p| p.into_inner()).replace(slot.clone());
+        if let Some(old) = previous {
+            old.cancel.store(true, Ordering::SeqCst);
+            let t0 = Instant::now();
+            while !old.done.load(Ordering::SeqCst) && t0.elapsed() < Duration::from_secs(15) {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
         let engine = self.engine.clone();
-        let login = tokio::task::spawn_blocking(move || engine.open_microsoft_login())
+        let opened = tokio::task::spawn_blocking(move || engine.open_microsoft_login())
             .await
-            .map_err(internal)?
-            .map_err(internal)?;
+            .map_err(internal)
+            .and_then(|r| r.map_err(internal));
+        let login = match opened {
+            Ok(l) => l,
+            Err(x) => {
+                slot.done.store(true, Ordering::SeqCst);
+                return Err(x);
+            }
+        };
         let view = MicrosoftLoginView { only_microsoft_window: login.only_microsoft() };
         if let Some(why) = login.fallback {
             tracing::info!(why, "login de Microsoft con el motor entero a la vista");
@@ -714,13 +955,24 @@ impl Core {
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let core = self.clone();
         std::thread::spawn(move || {
+            let _done = LoginDone(slot.clone());
             // Se mira `accounts.json` mientras el jugador inicia sesión: en cuanto aparece
             // la cuenta, se avisa y se cierra el motor (como en 1.x), sin pedirle que lo cierre.
             let mut login = login;
             let pid = login.child.id();
+            let started = Instant::now();
             let mut closed_at: Option<Instant> = None;
+            let mut cancelled = false;
             loop {
                 if matches!(login.child.try_wait(), Ok(Some(_)) | Err(_)) {
+                    break;
+                }
+                // El jugador canceló o reintentó (otro intento ocupa su sitio), o nadie lo
+                // completó en mucho rato: el motor, que quizá ni se ve, no se queda abierto.
+                let timed_out = started.elapsed() > LOGIN_TIMEOUT;
+                if slot.cancel.load(Ordering::SeqCst) || timed_out {
+                    cancelled = !timed_out;
+                    close_engine(&mut login.child, pid);
                     break;
                 }
                 // Cerró la ventana de Microsoft: si en unos segundos no llega la cuenta, es
@@ -728,10 +980,7 @@ impl Core {
                 if !login.window_open() {
                     let t = *closed_at.get_or_insert_with(Instant::now);
                     if t.elapsed() > Duration::from_secs(5) {
-                        os::close_windows(pid, true);
-                        std::thread::sleep(Duration::from_secs(3));
-                        let _ = login.child.kill();
-                        let _ = login.child.wait();
+                        close_engine(&mut login.child, pid);
                         break;
                     }
                 }
@@ -770,9 +1019,34 @@ impl Core {
             }
             let _ = core.accounts.sync_bridge(&core.engine.accounts());
             (core.emit)(Event::AccountsChanged);
-            (core.emit)(Event::MicrosoftLogin { account: None });
+            // Cancelado a propósito: la interfaz ya sabe que lo dejó (o está esperando otro
+            // intento, al que este aviso tardío le diría que «se cerró sin entrar»).
+            if !cancelled {
+                (core.emit)(Event::MicrosoftLogin { account: None });
+            }
         });
         Ok(view)
+    }
+
+    /// Cancela el login de Microsoft en curso y cierra su motor. No espera: el cierre lo
+    /// hace el hilo que lo vigila. No pasa nada si no había ninguno.
+    pub fn account_microsoft_cancel(&self) {
+        if let Some(slot) = self.login.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+            slot.cancel.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Al salir de la app: que no quede ningún motor de login vivo. Espera un momento a que
+    /// el hilo lo cierre; pasado el plazo, la app sale igual.
+    pub fn shutdown(&self) {
+        let slot = self.login.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(slot) = slot {
+            slot.cancel.store(true, Ordering::SeqCst);
+            let t0 = Instant::now();
+            while !slot.done.load(Ordering::SeqCst) && t0.elapsed() < Duration::from_secs(6) {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
     }
 
     fn msa_uuids(&self) -> Vec<String> {
@@ -1000,6 +1274,18 @@ fn extract_icon(mrpack: &Path, dest: &Path) {
 
 /// Mods de una instancia: los que anotó el pack o, si es de antes de anotarlos, los `.jar`
 /// que haya en `mods/`. La ficha y el detalle usan esta misma cuenta.
+/// Cierra el motor como pulsando la X y, si no hace caso en unos segundos, a la fuerza.
+/// Solo el proceso que lanzó Dino.
+fn close_engine(child: &mut std::process::Child, pid: u32) {
+    os::close_windows(pid, true);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Iniciar sesión con una cuenta que el motor **ya tenía** no añade nada: el motor la
 /// reemplaza con una sesión nueva. Se reconoce por la hora de esa sesión (`iat`): posterior a
 /// cuando se enseñó la ventana. Pero el motor también renueva todas las cuentas al arrancar,
@@ -1097,6 +1383,7 @@ mod tests {
     }
 
     use super::*;
+    use dino_core::schema::{JavaChoice, Memory};
 
     #[test]
     fn sin_sitio_se_avisa_antes_de_empezar() {
@@ -1246,5 +1533,172 @@ mod tests {
         drop(_g);
         assert_eq!(c.session_snapshot().state, SessionState::Idle);
         assert!(c.begin("otra", None).is_ok());
+    }
+
+    /// Una instancia instalada a mano en disco, sin pasar por la red.
+    fn installed(c: &Core, id: &str, memory: Memory) {
+        let m = InstanceManifest {
+            schema: schema::INSTANCE_SCHEMA,
+            id: id.into(),
+            minecraft: "1.21.1".into(),
+            loader: LoaderSpec::Vanilla,
+            state: InstallState::Ready,
+            memory,
+            jvm_args: vec![],
+            java: JavaChoice::Auto,
+            managed_files: vec![],
+        };
+        schema::save(&c.paths.instance_manifest(id), &m, schema::INSTANCE_SCHEMA).unwrap();
+    }
+
+    fn uuid_de(c: &Core, name: &str) -> String {
+        c.accounts.list(&c.engine.accounts()).unwrap().iter().find(|a| a.name == name).unwrap().uuid.clone()
+    }
+
+    #[test]
+    fn los_ajustes_son_de_cada_jugador_y_no_se_pisan_al_alternar_cuentas() {
+        let (c, _) = core("perfiles");
+        installed(&c, "vs", Memory::Fixed { max_mb: 4096 });
+        c.accounts.add_offline("Ana_01").unwrap();
+        let ana = uuid_de(&c, "Ana_01");
+        // Ana sube la memoria de este pack...
+        c.instance_settings_set(
+            "vs",
+            InstanceSettingsPatch { memory: Some(Memory::Fixed { max_mb: 8192 }), ..Default::default() },
+        )
+        .unwrap();
+        let s = c.instance_settings_get("vs").unwrap();
+        assert_eq!(s.memory, Memory::Fixed { max_mb: 8192 });
+        assert_eq!(s.memory_from, profile::Source::Profile);
+        assert_eq!(s.profile.as_deref(), Some("Ana_01"));
+        // ...y un jugador nuevo, en la misma máquina, ve lo del pack y no lo de Ana.
+        c.accounts.add_offline("Beto_02").unwrap();
+        c.accounts.select(&uuid_de(&c, "Beto_02")).unwrap();
+        let s = c.instance_settings_get("vs").unwrap();
+        assert_eq!(s.memory, Memory::Fixed { max_mb: 4096 });
+        assert_eq!(s.memory_from, profile::Source::Pack);
+        // Volver a Ana le devuelve lo suyo.
+        c.accounts.select(&ana).unwrap();
+        assert_eq!(c.instance_settings_get("vs").unwrap().memory, Memory::Fixed { max_mb: 8192 });
+        // Lo del pack en disco no se tocó.
+        let m: InstanceManifest = schema::load(&c.paths.instance_manifest("vs")).unwrap().unwrap();
+        assert_eq!(m.memory, Memory::Fixed { max_mb: 4096 });
+        // Restablecer vuelve a los valores del pack, solo para ella.
+        c.instance_settings_reset("vs").unwrap();
+        assert_eq!(c.instance_settings_get("vs").unwrap().memory, Memory::Fixed { max_mb: 4096 });
+    }
+
+    #[test]
+    fn un_parche_solo_toca_lo_que_trae() {
+        let (c, _) = core("parche");
+        installed(&c, "vs", Memory::Auto);
+        c.accounts.add_offline("Ana_01").unwrap();
+        c.instance_settings_set(
+            "vs",
+            InstanceSettingsPatch { window: Some(WindowPref::Fullscreen), ..Default::default() },
+        )
+        .unwrap();
+        let s = c.instance_settings_get("vs").unwrap();
+        assert_eq!(s.window, WindowPref::Fullscreen);
+        assert_eq!(s.window_from, profile::Source::Profile);
+        assert_eq!(
+            (s.memory_from, s.java_from, s.jvm_args_from),
+            (profile::Source::Pack, profile::Source::Pack, profile::Source::Pack)
+        );
+    }
+
+    #[test]
+    fn sin_cuenta_los_ajustes_van_a_la_instancia_como_en_1x() {
+        let (c, _) = core("sincuenta");
+        installed(&c, "vs", Memory::Auto);
+        c.instance_settings_set(
+            "vs",
+            InstanceSettingsPatch { memory: Some(Memory::Fixed { max_mb: 3072 }), ..Default::default() },
+        )
+        .unwrap();
+        let m: InstanceManifest = schema::load(&c.paths.instance_manifest("vs")).unwrap().unwrap();
+        assert_eq!(m.memory, Memory::Fixed { max_mb: 3072 });
+        assert!(c.instance_settings_get("vs").unwrap().profile.is_none());
+    }
+
+    #[test]
+    fn las_preferencias_del_launcher_son_de_cada_jugador_y_con_fabrica_por_defecto() {
+        let (c, _) = core("prefs");
+        assert!(c.profile_get().prefs.head_tracking, "sin cuenta, valores de fabrica");
+        assert_eq!(c.profile_set(LauncherPrefs::default(), None).unwrap_err().code, ErrorCode::AccountRequired);
+        c.accounts.add_offline("Ana_01").unwrap();
+        let ana = uuid_de(&c, "Ana_01");
+        let v = c
+            .profile_set(LauncherPrefs { head_tracking: Some(false), ui_volume: Some(0.2), ..Default::default() }, None)
+            .unwrap();
+        assert!(!v.prefs.head_tracking && v.prefs.ui_sounds);
+        c.accounts.add_offline("Beto_02").unwrap();
+        c.accounts.select(&uuid_de(&c, "Beto_02")).unwrap();
+        assert!(c.profile_get().prefs.head_tracking, "Beto no hereda lo de Ana");
+        c.accounts.select(&ana).unwrap();
+        assert!(!c.profile_get().prefs.head_tracking);
+        c.profile_reset().unwrap();
+        assert!(c.profile_get().prefs.head_tracking);
+        assert!(c.store.profiles().unwrap().profiles.is_empty(), "un perfil de fabrica no deja rastro");
+    }
+
+    #[test]
+    fn las_extras_del_pack_llegan_a_la_vista_y_sin_ellas_no_hay_nada() {
+        use dino_core::pack_meta::*;
+        let (c, _) = core("extras");
+        let entry = LibraryEntry {
+            id: "vs".into(),
+            name: "Voidasio".into(),
+            source: PackSource::Catalog { code: "VOIDASIO".into() },
+            pack_version: "1.0.0".into(),
+            server: None,
+            last_played: None,
+        };
+        let sin = c.view(&entry, None, None, None);
+        assert!(sin.theme.is_none() && sin.notes.is_none() && sin.notes_version.is_none());
+        // lo que el catalogo publico se guarda y sirve sin red
+        let extras = PackExtras {
+            theme: Some(Theme {
+                enabled: true,
+                colors: ThemeColors { primary: Some("#7a3cff".into()), ..Default::default() },
+                ..Default::default()
+            }),
+            notes: Some(PatchNotes {
+                title: Some("Novedades".into()),
+                summary: Some("hola".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        c.store.save_pack_extras("vs", &extras, "1.1.0");
+        let v = c.view(&entry, None, None, None);
+        assert_eq!(v.theme.unwrap().colors.primary.as_deref(), Some("#7a3cff"));
+        assert_eq!(v.notes.unwrap().title.as_deref(), Some("Novedades"));
+        assert_eq!(v.notes_version.as_deref(), Some("1.1.0"));
+        // un pack que deja de publicar extras no arrastra los viejos
+        c.store.save_pack_extras("vs", &PackExtras::default(), "1.2.0");
+        assert!(c.view(&entry, None, None, None).theme.is_none());
+    }
+
+    #[test]
+    fn cancelar_un_login_que_no_existe_no_hace_nada_y_salir_no_espera() {
+        let (c, _) = core("login");
+        c.account_microsoft_cancel();
+        let t = Instant::now();
+        c.shutdown();
+        assert!(t.elapsed() < Duration::from_secs(1));
+        // con un intento registrado, `shutdown` lo cancela y espera a que acabe
+        let slot = Arc::new(LoginSlot::default());
+        *c.login.lock().unwrap() = Some(slot.clone());
+        let s2 = slot.clone();
+        let h = std::thread::spawn(move || {
+            let _d = LoginDone(s2.clone());
+            while !s2.cancel.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        c.shutdown();
+        assert!(slot.done.load(Ordering::SeqCst));
+        h.join().unwrap();
     }
 }

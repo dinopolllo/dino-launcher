@@ -87,6 +87,11 @@ pub struct PackRemoto {
     pub mods: u32,
     #[serde(default)]
     pub icon: Option<String>,
+    /// Lo opcional: actividad de Discord, notas de parche y tema. Un pack que no lo trae
+    /// se comporta como siempre. Va aplanado: `presence`, `theme` y `notes` cuelgan del
+    /// pack en el JSON del catálogo.
+    #[serde(flatten)]
+    pub extras: dino_core::pack_meta::PackExtras,
 }
 
 #[derive(Debug, Deserialize)]

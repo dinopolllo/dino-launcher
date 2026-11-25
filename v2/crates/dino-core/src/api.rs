@@ -13,6 +13,8 @@
 //!   La interfaz no llama a `convertFileSrc` ni depende del `scope` del protocolo de assets
 //!   (con un scope mal puesto la imagen fallaba sin error y salía el dino genérico).
 
+use crate::pack_meta::{PatchNotes, Theme};
+use crate::profile::{LauncherPrefs, ResolvedPrefs, Source, WindowPref};
 use crate::schema::{JavaChoice, LoaderSpec, Memory, PackSource};
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +36,17 @@ pub struct InstanceView {
     pub selected: bool,
     /// Qué hace el botón principal si se pulsa ahora.
     pub action: PrimaryAction,
+    /// El tema que publicó el pack (ya saneado), si lo activó. La interfaz decide si lo
+    /// aplica según la preferencia del jugador.
+    #[serde(default)]
+    pub theme: Option<Theme>,
+    /// Notas de parche: las de la versión nueva si hay actualización (`action.kind ==
+    /// "update"`) y, si no, las de la instalada. `None` si el pack no publicó ninguna.
+    #[serde(default)]
+    pub notes: Option<PatchNotes>,
+    /// A qué versión del pack pertenecen esas notas.
+    #[serde(default)]
+    pub notes_version: Option<String>,
 }
 
 /// Lo que dice el botón grande. Sustituye a `pack_state` de 1.x.
@@ -99,9 +112,20 @@ pub enum PlayOutcome {
 /// Ajustes de una instancia (pantalla Ajustes).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstanceSettings {
+    /// Lo que vale ahora para el jugador activo: lo suyo si lo eligió y, si no, lo del pack.
     pub memory: Memory,
     pub jvm_args: Vec<String>,
     pub java: JavaChoice,
+    /// Ventana del juego (`{mode: "default"}` si nadie pidió otra cosa).
+    pub window: WindowPref,
+    /// De quién es cada valor: del perfil del jugador o del pack.
+    pub memory_from: Source,
+    pub jvm_args_from: Source,
+    pub java_from: Source,
+    pub window_from: Source,
+    /// Nombre del jugador cuyo perfil se está editando; `None` si no hay cuenta (entonces
+    /// se edita el pack mismo, como en 1.x).
+    pub profile: Option<String>,
     /// Javas que el selector puede ofrecer además de «Automático» (sucesor de `java_runtimes`).
     pub available_java: Vec<JavaOption>,
     /// RAM física de la máquina y la recomendada, en MB, para el slider.
@@ -124,6 +148,35 @@ pub enum JavaOrigin {
     Mojang,
     /// Java instalado en la máquina.
     System,
+}
+
+/// Qué cambiar de una instancia para el jugador activo. Cada campo es un parche: `None` deja
+/// como está lo que había.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct InstanceSettingsPatch {
+    #[serde(default)]
+    pub memory: Option<Memory>,
+    #[serde(default)]
+    pub jvm_args: Option<Vec<String>>,
+    #[serde(default)]
+    pub java: Option<JavaChoice>,
+    #[serde(default)]
+    pub window: Option<WindowPref>,
+}
+
+/// El perfil del jugador activo: sus preferencias del launcher, tal como las eligió y ya
+/// resueltas con los valores de fábrica.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProfileView {
+    /// `None` si no hay ninguna cuenta: entonces todo son valores de fábrica.
+    pub uuid: Option<String>,
+    pub name: Option<String>,
+    /// Lo que eligió (`null` = no ha tocado ese ajuste).
+    pub raw: LauncherPrefs,
+    /// Lo que vale de verdad.
+    pub prefs: ResolvedPrefs,
+    /// Ventana del juego para todas sus instancias.
+    pub window: Option<WindowPref>,
 }
 
 /// Esquema del protocolo propio que sirve los iconos.

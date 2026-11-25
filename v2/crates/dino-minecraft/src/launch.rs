@@ -41,6 +41,8 @@ pub struct LaunchSpec<'a> {
     pub extra_jvm_args: &'a [String],
     /// `host[:puerto]` para entrar directo (Quick Play, ≥ 1.20).
     pub server: Option<&'a str>,
+    /// Argumentos del juego que añade Dino al final (ventana: `--width`, `--fullscreen`…).
+    pub extra_game_args: &'a [String],
 }
 
 pub fn command(dirs: &Paths, inst: &Installed, spec: &LaunchSpec) -> Result<std::process::Command> {
@@ -117,6 +119,7 @@ pub fn command(dirs: &Paths, inst: &Installed, spec: &LaunchSpec) -> Result<std:
     cmd.args(expand(&args.jvm));
     cmd.arg(&v.main_class);
     cmd.args(expand(&args.game));
+    cmd.args(spec.extra_game_args);
     cmd.current_dir(spec.game_dir);
     cmd.stdin(std::process::Stdio::null());
     Ok(cmd)
